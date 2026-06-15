@@ -6,6 +6,7 @@ import { readJson, writeJson } from "./json-store.mjs";
 
 const DUTIES_SCHEMA_VERSION = 1;
 const DEFAULT_DISPATCH_MODE = "dry-run";
+const SCHEDULED_WAKEUP_SKILL = "wakefield-scheduled-wakeup";
 
 export async function loadDuties({
   home = appHome()
@@ -243,18 +244,17 @@ export async function formatDutyPrompt(duty, {
   const skills = dutySkills(duty);
   return [
     `Scheduled Wakefield wakeup: ${duty.label || duty.id}`,
+    `Use $${SCHEDULED_WAKEUP_SKILL}.`,
+    "",
     `Wakeup ID: ${duty.id}`,
     `Wake time: ${normalizeWakeTime(now)}`,
-    `Dispatch mode: ${normalizeDispatchMode(duty.dispatchMode)}`,
     duty.wakeTimes?.length > 0 ? `Wake schedule: ${duty.wakeTimes.join(", ")} local` : null,
     duty.dueWakeTimes?.length > 0 ? `Due wake slot: ${duty.dueWakeTimes.join(", ")} local` : null,
     duty.dutyIds?.length > 0 ? `Duties: ${duty.dutyIds.join(", ")}` : null,
     skills.length > 0 ? `Duty skills: ${skills.map((skill) => `$${skill}`).join(", ")}` : null,
     duty.requiredTools?.length > 0 ? `Required tools: ${duty.requiredTools.join(", ")}` : null,
     "",
-    body,
-    "",
-    "Handle this through the selected Wakefield personality. If a required tool or connector is unavailable, report the duty as blocked instead of pretending it ran."
+    body
   ].filter((line) => line != null).join("\n");
 }
 
@@ -471,17 +471,13 @@ async function dutyPromptBody(duty, { cwd }) {
     : [];
   if (skills.length > 0) {
     return [
-      duty.dueWakeTimes?.length > 0
-        ? `It is time to run the ${duty.dueWakeTimes.join(", ")} local scheduled wakeup for:`
-        : "It is time to run this scheduled wakeup for:",
-      ...(dutyLines.length > 0 ? dutyLines : skills.map((skill) => `- $${skill}`)),
-      "",
-      "Load each duty skill, follow the selected agent's operating context, and keep the run scoped to these scheduled checks. Use each duty skill's output contract so the result is easy to summarize and remember."
+      "Run these scheduled duties in this turn:",
+      ...(dutyLines.length > 0 ? dutyLines : skills.map((skill) => `- $${skill}`))
     ].join("\n");
   }
   if (dutyLines.length > 0) {
     return [
-      "It is time to run this scheduled wakeup for:",
+      "Run these scheduled duties in this turn:",
       ...dutyLines
     ].join("\n");
   }

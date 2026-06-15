@@ -114,6 +114,7 @@ test("install creates an agent and idempotent Codex hook config", async () => {
     "wakefield-discord",
     "wakefield-external-source-replies",
     "wakefield-imessage",
+    "wakefield-scheduled-wakeup",
     "wakefield-shared-room-etiquette",
     "wakefield-subagent-continuity"
   ]);
@@ -406,8 +407,11 @@ test("agent packs install cwd, contacts, and duties without embedding app-specif
     home,
     now: morningRunAt
   });
+  assert.match(run.results[0].route.prompt, /Use \$wakefield-scheduled-wakeup\./);
   assert.match(run.results[0].route.prompt, /Duty skills: \$pack-duty-skill/);
-  assert.match(run.results[0].route.prompt, /It is time to run the 10:00 local scheduled wakeup for:\n- pack-duty: \$pack-duty-skill/);
+  assert.match(run.results[0].route.prompt, /Due wake slot: 10:00 local/);
+  assert.match(run.results[0].route.prompt, /Run these scheduled duties in this turn:\n- pack-duty: \$pack-duty-skill/);
+  assert.doesNotMatch(run.results[0].route.prompt, /Load each duty skill/);
   assert.doesNotMatch(run.results[0].route.prompt, /Run the pack duty\./);
 
   await installAgentPack(packFile, {
@@ -1778,6 +1782,7 @@ test("duties can be configured and run through dry-run routing", async () => {
   assert.equal(run.attempted, 1);
   assert.equal(run.results[0].status, "dry-run");
   assert.match(run.results[0].route.prompt, /Scheduled Wakefield wakeup: Morning Check/);
+  assert.match(run.results[0].route.prompt, /Use \$wakefield-scheduled-wakeup\./);
   assert.match(run.results[0].route.prompt, /Required tools: calendar/);
 
   const after = await dutyStatuses({
@@ -1842,6 +1847,7 @@ test("wakeups bundle multiple duties into one scheduled turn", async () => {
   assert.equal(run.attempted, 1);
   assert.match(run.results[0].route.prompt, /Wakeup ID: morning-ops/);
   assert.match(run.results[0].route.prompt, /Duties: inventory, shipping, support/);
+  assert.match(run.results[0].route.prompt, /Use \$wakefield-scheduled-wakeup\./);
   assert.match(run.results[0].route.prompt, /- inventory: \$inventory-skill/);
   assert.match(run.results[0].route.prompt, /- shipping: \$shipping-skill/);
   assert.match(run.results[0].route.prompt, /- support: \$support-skill/);

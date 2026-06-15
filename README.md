@@ -176,10 +176,16 @@ The generated Codex prompt stays compact:
 
 ```text
 Scheduled Wakefield wakeup: Morning Ops
+Use $wakefield-scheduled-wakeup.
+
 Wakeup ID: morning-ops
 Wake schedule: 08:00 local
 Duties: inbox-review, followups
 Duty skills: $inbox-review, $followup-check
+
+Run these scheduled duties in this turn:
+- inbox-review: $inbox-review
+- followups: $followup-check
 ```
 
 This keeps long-running agents easy to maintain: update the skill when the operating rules change, not every schedule entry.
