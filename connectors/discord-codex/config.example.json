@@ -1,0 +1,76 @@
+{
+  "bot": {
+    "tokenEnv": "DISCORD_BOT_TOKEN",
+    "tokenFile": "~/.codex/connectors/discord-codex/bot-token",
+    "commandPrefix": "!agent"
+  },
+  "codex": {
+    "requestTimeoutMs": 30000,
+    "connectTimeoutMs": 10000,
+    "lockTimeoutMs": 45000,
+    "lockStaleMs": 90000,
+    "deepLinkWake": {
+      "enabled": true,
+      "waitMs": 30000,
+      "pollMs": 1000,
+      "reopenMs": 6000
+    },
+    "appServer": {
+      "controlSocketPath": "~/.codex/app-server-control/app-server-control.sock",
+      "codexPath": "~/.codex/packages/standalone/current/codex",
+      "ensureDaemon": true,
+      "requireRemoteControlConnected": true
+    }
+  },
+  "discord": {
+    "allowedOutboundChannelIds": [
+      "1417315009716944997"
+    ],
+    "allowedDmUserIds": [
+      "1362496879681732688"
+    ],
+    "typing": {
+      "enabled": true,
+      "intervalMs": 6000,
+      "maxMs": 1800000,
+      "completionTimeoutMs": 1800000,
+      "completionPollMs": 1500
+    },
+    "presence": {
+      "enabled": true,
+      "pollMs": 1500,
+      "rolloutRefreshMs": 30000,
+      "compactionStartGraceMs": 2000,
+      "compactionHoldMs": 15000,
+      "presenceRefreshMs": 5000,
+      "onlineStatus": "online",
+      "compactingStatus": "idle",
+      "compactingActivityName": "Codex compact",
+      "compactingActivityType": "Watching"
+    }
+  },
+  "targets": [
+    {
+      "id": "agent",
+      "displayName": "Wakefield Agent",
+      "threadId": "019e51a5-5ad3-7991-87d4-4745494f7ae9",
+      "cwd": "~/WakefieldAgents/agent",
+      "allowedGuildIds": [
+        "1362544118865072261"
+      ],
+      "allowedChannelIds": [
+        "1417315009716944997"
+      ],
+      "allowedUserIds": [
+        "1362496879681732688"
+      ],
+      "requiredRoleIds": [
+        "1390026527206543360"
+      ],
+      "triggerUserIds": [
+        "1503585938196926585"
+      ],
+      "eventLogPath": "local/events.jsonl"
+    }
+  ]
+}

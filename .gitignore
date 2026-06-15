@@ -1,0 +1,21 @@
+node_modules/
+.DS_Store
+
+# Local runtime/config state
+.env
+.env.*
+*.local.json
+config.local.json
+logs/
+outputs/
+*.log
+*.sock
+
+# Package/build artifacts
+*.tgz
+coverage/
+dist/
+
+# Editor files
+.idea/
+.vscode/

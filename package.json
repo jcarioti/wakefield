@@ -1,0 +1,62 @@
+{
+  "name": "wakefield",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Local-first runtime for turning persistent Codex threads into reachable agents.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jcarioti/wakefield.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jcarioti/wakefield/issues"
+  },
+  "homepage": "https://github.com/jcarioti/wakefield#readme",
+  "keywords": [
+    "codex",
+    "agent",
+    "automation",
+    "imessage",
+    "discord",
+    "email"
+  ],
+  "bin": {
+    "wakefield": "src/cli.mjs"
+  },
+  "files": [
+    "AGENTS.md",
+    "LICENSE",
+    "README.md",
+    "connectors/*/config.example.json",
+    "connectors/*/package.json",
+    "connectors/*/README.md",
+    "connectors/*/scripts/**",
+    "connectors/*/src/**",
+    "connectors/shared",
+    "skills",
+    "src"
+  ],
+  "scripts": {
+    "check": "node --check src/*.mjs && node --test test/*.test.mjs",
+    "doctor": "node src/cli.mjs doctor",
+    "http:serve": "node src/cli.mjs http serve",
+    "install:wakefield": "node src/cli.mjs install",
+    "self-test": "node src/cli.mjs self-test",
+    "test": "node --test test/*.test.mjs",
+    "test:discord": "node --test connectors/discord-codex/test/*.test.mjs",
+    "test:imessage": "node --test connectors/imessage-codex/test/*.test.mjs",
+    "verify": "node src/cli.mjs verify"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.20.0",
+    "@photon-ai/advanced-imessage": "0.8.0",
+    "discord.js": "^14.19.3",
+    "imapflow": "^1.4.0",
+    "spectrum-ts": "^1.12.0",
+    "zod": "^3.25.76",
+    "ws": "^8.21.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

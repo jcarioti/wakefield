@@ -1,0 +1,30 @@
+{
+  "name": "@wakefield/imessage-codex-connector",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Photon/Spectrum and imsg iMessage inbound bridge plus iMessage MCP tools for live Codex app threads.",
+  "bin": {
+    "imessage-codex-bot": "src/imessage-bot.mjs",
+    "imessage-spectrum-bot": "src/spectrum-bot.mjs",
+    "imessage-codex-mcp": "src/mcp-server.mjs"
+  },
+  "scripts": {
+    "bot": "node src/imessage-bot.mjs",
+    "bot:spectrum": "node src/spectrum-bot.mjs",
+    "diag:spectrum": "node scripts/diagnose-spectrum-bridge.mjs",
+    "mcp": "node src/mcp-server.mjs",
+    "repro:photon-live": "node scripts/photon-live-repro.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check": "node --check src/*.mjs && node --check scripts/*.mjs && node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.20.0",
+    "@photon-ai/advanced-imessage": "0.8.0",
+    "spectrum-ts": "^1.12.0",
+    "zod": "^3.25.76"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

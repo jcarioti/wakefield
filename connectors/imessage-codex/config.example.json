@@ -1,0 +1,93 @@
+{
+  "bot": {
+    "processLockRoot": "~/.codex/connectors/imessage-codex/locks"
+  },
+  "codex": {
+    "requestTimeoutMs": 30000,
+    "connectTimeoutMs": 10000,
+    "lockTimeoutMs": 45000,
+    "lockStaleMs": 90000,
+    "deepLinkWake": {
+      "enabled": true,
+      "waitMs": 30000,
+      "pollMs": 1000,
+      "reopenMs": 6000
+    },
+    "appServer": {
+      "controlSocketPath": "~/.codex/app-server-control/app-server-control.sock",
+      "codexPath": "~/.codex/packages/standalone/current/codex",
+      "ensureDaemon": true,
+      "requireRemoteControlConnected": true
+    }
+  },
+  "imessage": {
+    "provider": "spectrum",
+    "spectrum": {
+      "projectId": null,
+      "projectSecret": null,
+      "cloudUrl": null,
+      "projectIdEnv": "PHOTON_PROJECT_ID",
+      "projectSecretEnv": "PHOTON_SECRET_KEY",
+      "ipcSocketPath": "~/.codex/connectors/imessage-codex/spectrum.sock",
+      "attachmentDir": "~/.codex/connectors/imessage-codex/attachments",
+      "statusPath": "~/.codex/connectors/imessage-codex/spectrum-status.json",
+      "allowOutboundToKnownSpaces": true,
+      "flattenGroups": true,
+      "telemetry": false
+    },
+    "imsgPath": "imsg",
+    "databasePath": "~/Library/Messages/chat.db",
+    "statePath": "~/.codex/connectors/imessage-codex/state.json",
+    "allowedOutboundAddresses": [
+      "+15551234567"
+    ],
+    "allowedOutboundChatIds": [],
+    "allowedOutboundChatGuids": [],
+    "allowedOutboundSpaceIds": [],
+    "advancedBridgeRequired": true,
+    "watch": {
+      "includeAttachments": true,
+      "convertAttachments": true,
+      "includeReactions": false,
+      "debounce": "500ms"
+    },
+    "sendReadReceipts": true,
+    "typing": {
+      "enabled": true,
+      "showWhileThinking": true,
+      "intervalMs": 6000,
+      "maxMs": 1800000,
+      "completionTimeoutMs": 1800000,
+      "completionPollMs": 1500
+    },
+    "focus": {
+      "enabled": false,
+      "pollMs": 1500,
+      "rolloutRefreshMs": 30000,
+      "compactionStartGraceMs": 2000,
+      "compactionHoldMs": 15000,
+      "compactingShortcutName": null,
+      "onlineShortcutName": null,
+      "offlineShortcutName": null
+    }
+  },
+  "identity": {
+    "contactsPath": ""
+  },
+  "targets": [
+    {
+      "id": "agent",
+      "displayName": "Wakefield Agent",
+      "threadId": "019e51a5-5ad3-7991-87d4-4745494f7ae9",
+      "cwd": "~/WakefieldAgents/agent",
+      "allowedAddresses": [
+        "+15551234567"
+      ],
+      "allowedChatIds": [],
+      "allowedChatGuids": [],
+      "allowedSpaceIds": [],
+      "allowGroupChats": false,
+      "eventLogPath": "local/events.jsonl"
+    }
+  ]
+}
