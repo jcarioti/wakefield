@@ -130,6 +130,7 @@ export function formatConnectors(connectors = CONNECTOR_SETUP_SLOTS) {
 export function setupActions({ report, agent, threads, connectors = [], managedConnectors = [], service = null }) {
   const check = (label) => report.checks.find((item) => item.label === label);
   const hookReady = Boolean(check("Codex hook config")?.ok && check("Codex hook command")?.ok);
+  const skillsReady = Boolean(check("Codex Wakefield skills")?.ok);
 
   return [
     {
@@ -152,6 +153,15 @@ export function setupActions({ report, agent, threads, connectors = [], managedC
       command: ["wakefield", "install"],
       fields: [],
       reason: !agent ? "Create an agent first." : hookReady ? "Hooks already installed." : null
+    },
+    {
+      id: "install-base-skills",
+      kind: "command",
+      label: "Install Wakefield base skills",
+      enabled: Boolean(agent && !skillsReady),
+      command: ["wakefield", "install"],
+      fields: [],
+      reason: !agent ? "Create an agent first." : skillsReady ? "Wakefield base skills already installed." : null
     },
     {
       id: "select-latest-thread",

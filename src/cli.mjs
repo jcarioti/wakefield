@@ -111,6 +111,10 @@ async function main(argv = process.argv.slice(2)) {
       console.log(`Codex hooks: ${result.hookResult.changed ? "installed" : "already installed"} at ${result.hookResult.hooksPath}`);
       console.log("Open Codex and run /hooks if it asks you to review and trust the Wakefield hook.");
     }
+    if (result.skillResult) {
+      const changed = result.skillResult.installed.filter((skill) => skill.changed).length;
+      console.log(`Wakefield base skills: ${changed > 0 ? "installed" : "already installed"} (${result.skillResult.installed.length}) at ${result.skillResult.skillsRoot}`);
+    }
     console.log("");
     console.log(formatDoctor(result.doctor));
     process.exitCode = result.doctor.ok ? 0 : 1;

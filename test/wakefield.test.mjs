@@ -32,7 +32,7 @@ import { configureService, installLaunchAgent, launchAgentPlist, launchAgentStat
 import { runSelfTest } from "../src/self-test.mjs";
 import { setupStatus } from "../src/setup.mjs";
 import { runSetup } from "../src/setup-runner.mjs";
-import { wakefieldSkillsStatus } from "../src/skills.mjs";
+import { bundledWakefieldSkillNames, wakefieldSkillsStatus } from "../src/skills.mjs";
 import { verifyWakefield } from "../src/verify.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -110,14 +110,7 @@ test("install creates an agent and idempotent Codex hook config", async () => {
   assert.equal(first.doctor.ok, true);
   assert.equal(second.createdAgent, false);
   assert.equal(second.doctor.ok, true);
-  assert.deepEqual(first.skillResult.installed.map((skill) => skill.name), [
-    "wakefield-discord",
-    "wakefield-external-source-replies",
-    "wakefield-imessage",
-    "wakefield-scheduled-wakeup",
-    "wakefield-shared-room-etiquette",
-    "wakefield-subagent-continuity"
-  ]);
+  assert.deepEqual(first.skillResult.installed.map((skill) => skill.name), await bundledWakefieldSkillNames());
   assert.equal(first.skillResult.configured, true);
   assert.equal(second.skillResult.installed.every((skill) => skill.changed === false), true);
 
@@ -175,6 +168,7 @@ test("setupStatus gives menu-bar friendly next steps and connector slots", async
   assert.match(empty.nextSteps[0], /pnpm wakefield install/);
   assert.equal(empty.actions.find((action) => action.id === "create-agent").enabled, true);
   assert.equal(empty.actions.find((action) => action.id === "install-hooks").enabled, false);
+  assert.equal(empty.actions.find((action) => action.id === "install-base-skills").enabled, false);
   assert.equal(empty.actions.find((action) => action.id === "enable-service").enabled, false);
   assert.equal(empty.actions.find((action) => action.id === "configure-service-env-file").enabled, false);
   assert.equal(empty.actions.find((action) => action.id === "enable-external-dispatch").enabled, false);
@@ -198,6 +192,7 @@ test("setupStatus gives menu-bar friendly next steps and connector slots", async
   assert.equal(ready.phase, "ready");
   assert.equal(ready.agent.name, "Menu");
   assert.equal(ready.actions.find((action) => action.id === "create-agent").enabled, false);
+  assert.equal(ready.actions.find((action) => action.id === "install-base-skills").enabled, false);
   assert.equal(ready.actions.find((action) => action.id === "review-hooks").enabled, true);
   assert.equal(ready.actions.find((action) => action.id === "enable-service").enabled, true);
   assert.equal(ready.actions.find((action) => action.id === "configure-service-env-file").enabled, true);
@@ -206,6 +201,10 @@ test("setupStatus gives menu-bar friendly next steps and connector slots", async
   assert.equal(ready.service.externalDispatch.enabled, false);
   assert.equal(ready.service.environment.configured, false);
   assert.match(ready.nextSteps.join("\n"), /\/hooks/);
+
+  await fs.rm(path.join(codexHomePath, "skills", "wakefield-discord"), { recursive: true, force: true });
+  const missingSkill = await setupStatus({ home, codexHomePath });
+  assert.equal(missingSkill.actions.find((action) => action.id === "install-base-skills").enabled, true);
 });
 
 test("menuSnapshot gives a bounded read-only menu bar payload", async () => {
@@ -284,6 +283,8 @@ test("runSetup gives clone installs a one-command idempotent setup path", async 
   assert.equal(first.actions.find((action) => action.id === "find-latest-thread").detail, threadId);
   assert.equal(first.actions.find((action) => action.id === "create-agent").status, "applied");
   assert.equal(first.actions.find((action) => action.id === "install-hooks").status, "applied");
+  assert.equal(first.actions.find((action) => action.id === "install-base-skills").status, "applied");
+  assert.match(first.actions.find((action) => action.id === "install-base-skills").detail, /Wakefield skill\(s\)/);
   assert.equal(first.actions.find((action) => action.id === "enable-service").detail, "9 minute interval");
   assert.equal(first.actions.find((action) => action.id === "enable-external-dispatch").detail, "ipc, limit 2");
 
@@ -294,6 +295,7 @@ test("runSetup gives clone installs a one-command idempotent setup path", async 
   assert.equal((await serviceStatus({ home })).externalDispatch.enabled, true);
   assert.equal((await serviceStatus({ home })).externalDispatch.limit, 2);
   assert.equal((await hooksStatus({ codexHomePath })).configured, true);
+  assert.equal((await wakefieldSkillsStatus({ codexHomePath })).configured, true);
 
   const second = await runSetup({
     home,
@@ -306,6 +308,7 @@ test("runSetup gives clone installs a one-command idempotent setup path", async 
   assert.equal(second.ok, true);
   assert.equal(second.actions.find((action) => action.id === "create-agent").status, "unchanged");
   assert.equal(second.actions.find((action) => action.id === "install-hooks").status, "unchanged");
+  assert.equal(second.actions.find((action) => action.id === "install-base-skills").status, "unchanged");
 });
 
 test("agent packs install cwd, contacts, and duties without embedding app-specific code", async () => {
@@ -396,6 +399,12 @@ test("agent packs install cwd, contacts, and duties without embedding app-specif
   assert.equal(installed.profile.cwd, packRoot);
   assert.equal(await fileExists(path.join(codexHomePath, "skills", "pack-duty-skill", "SKILL.md")), true);
   assert.equal(await fileExists(path.join(codexHomePath, "skills", "old-pack-skill", "SKILL.md")), false);
+  assert.deepEqual(
+    (await wakefieldSkillsStatus({ codexHomePath })).installed
+      .filter((skill) => skill.installed)
+      .map((skill) => skill.name),
+    await bundledWakefieldSkillNames()
+  );
   assert.equal((await loadContacts({ home })).contacts[0].id, "ada");
 
   const morningRunAt = new Date(2026, 5, 14, 10, 0, 0);

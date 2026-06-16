@@ -47,17 +47,17 @@ export async function runSetup({
       detail: `${profile.name} (${profile.id})`
     });
     actions.push(hookAction(result.hookResult, skipHooks));
+    actions.push(skillAction(result.skillResult));
   } else {
     profile = before;
-    const hookResult = skipHooks
-      ? null
-      : (await installWakefield({ home, codexHomePath })).hookResult;
+    const installResult = await installWakefield({ home, codexHomePath, skipHooks });
     actions.push({
       id: "create-agent",
       status: "unchanged",
       detail: `${profile.name} (${profile.id}) already exists`
     });
-    actions.push(hookAction(hookResult, skipHooks));
+    actions.push(hookAction(installResult.hookResult, skipHooks));
+    actions.push(skillAction(installResult.skillResult));
 
     if (resolvedThreadId || (cwd && profile.threadId)) {
       const previousThread = profile.threadId || null;
@@ -193,5 +193,15 @@ function hookAction(hookResult, skipped) {
     id: "install-hooks",
     status: hookResult?.changed ? "applied" : "unchanged",
     detail: hookResult?.hooksPath || "Codex hooks unchanged."
+  };
+}
+
+function skillAction(skillResult) {
+  const installed = skillResult?.installed || [];
+  const changedCount = installed.filter((skill) => skill.changed).length;
+  return {
+    id: "install-base-skills",
+    status: changedCount > 0 ? "applied" : "unchanged",
+    detail: `${installed.length} Wakefield skill(s) at ${skillResult?.skillsRoot || "Codex skills"}`
   };
 }
