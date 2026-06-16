@@ -343,11 +343,18 @@ pnpm exec wakefield email poll --json
 
 Wakefield installs Codex lifecycle hooks so manual and routed turns can produce local memory:
 
-- `UserPromptSubmit`: records user prompts and injects relevant local memory
-- `SessionStart`: injects the agent name, soul, and relevant local memory
+- `UserPromptSubmit`: records user prompts and injects only memory that matches the current request
+- `SessionStart`: injects the agent name, soul, and a compact memory primer at startup, resume, or compact boundaries
 - `PostToolUse`: records meaningful tool activity for change-based memory
-- `PreCompact` / `PostCompact`: records compaction boundaries
+- `PreCompact` / `PostCompact`: records compaction boundaries and folds matching start/finish events into one compact memory
 - `Stop`: records the latest assistant output and queues a dream
+
+Wakefield treats Codex as the owner of the active chat history. It does not rewrite transcripts, replay old messages, or try to fight Codex's compaction and token-caching behavior. Hooks write lightweight observations to Wakefield's local store, and hook output is only transient additional context. The default policy is:
+
+- inject the soul and a tiny memory primer at session boundaries
+- inject prompt-time memory only when local recall finds a relevant match
+- keep tool and stop events write-only
+- summarize compaction as lifecycle state, not as duplicate chat history
 
 Process queued memories:
 

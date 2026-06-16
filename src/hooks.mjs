@@ -15,12 +15,12 @@ export async function handleHookInput(input) {
       source: "codex-hook",
       data: hookData(input)
     });
-    const context = await agentContext(agent, input.prompt || "");
+    const context = await promptMemoryContext(agent, input.prompt || "");
     return context ? additionalContext(eventName, context) : null;
   }
 
   if (eventName === "SessionStart") {
-    const context = await agentContext(agent, agent.name);
+    const context = await sessionContext(agent, input);
     await recordMemory(agent, {
       channel: "journal",
       kind: "session-start",
@@ -115,20 +115,40 @@ function additionalContext(eventName, context) {
   };
 }
 
-async function agentContext(agent, query) {
-  const lines = [`Wakefield agent: ${agent.name}.`];
+async function sessionContext(agent, input) {
+  const source = input?.source || "session start";
+  const lines = [`Wakefield agent: ${agent.name}.`, `Codex session boundary: ${source}.`];
   const soul = await readSoul(agent);
   if (soul) lines.push("Wakefield soul:", soul);
-  const memory = await memoryContext(agent, query, { limit: 5 });
-  if (memory) lines.push("Relevant local memory:", memory);
-  lines.push("Use this as background only; the latest user request is authoritative.");
+  const memory = await memoryContext(agent, "", {
+    limit: 4,
+    maxChars: 1200,
+    includeIfNoTerms: true
+  });
+  if (memory) lines.push("Wakefield memory for this session boundary:", memory);
+  lines.push("Wakefield runtime note: this is transient hook context. Do not rewrite chat history; use it only when it helps the current turn.");
+  return lines.join("\n");
+}
+
+async function promptMemoryContext(agent, query) {
+  const memory = await memoryContext(agent, query, {
+    limit: 4,
+    maxChars: 1200,
+    includeIfNoTerms: false
+  });
+  if (!memory) return "";
+  const lines = [
+    `Wakefield memory relevant to this turn for ${agent.name}:`,
+    memory,
+    "Use this as background only; the latest user request is authoritative. Do not mention Wakefield memory unless it materially helps."
+  ];
   return lines.join("\n");
 }
 
 async function readSoul(agent) {
   if (!agent?.soulPath) return "";
   try {
-    return compact(await fs.readFile(agent.soulPath, "utf8"), 1800);
+    return compact(await fs.readFile(agent.soulPath, "utf8"), 1200);
   } catch (error) {
     if (error?.code === "ENOENT") return "";
     throw error;

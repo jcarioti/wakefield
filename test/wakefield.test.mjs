@@ -1705,11 +1705,40 @@ test("UserPromptSubmit hook records prompt and injects relevant memory", async (
     });
 
     assert.equal(output.hookSpecificOutput.hookEventName, "UserPromptSubmit");
-    assert.match(output.hookSpecificOutput.additionalContext, /Wakefield soul/);
+    assert.match(output.hookSpecificOutput.additionalContext, /Wakefield memory relevant to this turn/);
     assert.match(output.hookSpecificOutput.additionalContext, /weekly planning/);
+    assert.doesNotMatch(output.hookSpecificOutput.additionalContext, /Wakefield soul/);
 
     const inbox = await fs.readFile(profile.memory.inboxPath, "utf8");
     assert.match(inbox, /weekly plan/);
+  } finally {
+    delete process.env.WAKEFIELD_HOME;
+  }
+});
+
+test("SessionStart hook injects soul and a compact memory primer", async () => {
+  const home = await tempHome();
+  process.env.WAKEFIELD_HOME = home;
+  try {
+    const profile = await initAgent({ name: "Morrow", soul: "A careful planning companion.", home });
+    await recordMemory(profile, {
+      kind: "preference",
+      text: "Morrow prefers quiet session-start summaries.",
+      source: "test"
+    });
+
+    const output = await handleHookInput({
+      hook_event_name: "SessionStart",
+      session_id: "session-1",
+      cwd: profile.cwd,
+      source: "compact"
+    });
+
+    assert.equal(output.hookSpecificOutput.hookEventName, "SessionStart");
+    assert.match(output.hookSpecificOutput.additionalContext, /Codex session boundary: compact/);
+    assert.match(output.hookSpecificOutput.additionalContext, /Wakefield soul/);
+    assert.match(output.hookSpecificOutput.additionalContext, /quiet session-start summaries/);
+    assert.match(output.hookSpecificOutput.additionalContext, /transient hook context/);
   } finally {
     delete process.env.WAKEFIELD_HOME;
   }
@@ -1734,8 +1763,7 @@ test("hook matching follows the selected Codex session id outside the agent cwd"
       prompt: "Please remember this selected thread."
     });
 
-    assert.equal(output.hookSpecificOutput.hookEventName, "UserPromptSubmit");
-    assert.match(output.hookSpecificOutput.additionalContext, /Thread Soul/);
+    assert.equal(output, null);
     const inbox = await fs.readFile(profile.memory.inboxPath, "utf8");
     assert.match(inbox, /selected thread/);
   } finally {
@@ -1803,6 +1831,44 @@ test("dreamer processes queued hook events into durable state once", async () =>
     const second = await processDreams(profile);
     assert.equal(second.processed, 0);
     assert.equal(JSON.parse(await fs.readFile(profile.memory.statePath, "utf8")).recentTurns.length, 1);
+  } finally {
+    delete process.env.WAKEFIELD_HOME;
+  }
+});
+
+test("dreamer folds compact start and finish into one durable memory", async () => {
+  const home = await tempHome();
+  process.env.WAKEFIELD_HOME = home;
+  try {
+    const profile = await initAgent({ name: "Compact", soul: "", threadId: "session-1", home });
+    await handleHookInput({
+      hook_event_name: "PreCompact",
+      session_id: "session-1",
+      turn_id: "turn-compact",
+      cwd: profile.cwd,
+      trigger: "manual"
+    });
+    await handleHookInput({
+      hook_event_name: "PostCompact",
+      session_id: "session-1",
+      turn_id: "turn-compact",
+      cwd: profile.cwd,
+      trigger: "manual"
+    });
+
+    const first = await processDreams(profile);
+    assert.equal(first.processed, 1);
+    assert.equal(first.pending, 0);
+    assert.match(first.summaries[0].summary, /Manual compaction completed/);
+    assert.equal(first.summaries[0].sourceDreamIds.length, 2);
+
+    const state = JSON.parse(await fs.readFile(profile.memory.statePath, "utf8"));
+    assert.equal(state.recentTurns.length, 1);
+    assert.match(state.recentTurns[0].summary, /Manual compaction completed/);
+    assert.equal(state.dreamer.processedIds.length, 2);
+
+    const second = await processDreams(profile);
+    assert.equal(second.processed, 0);
   } finally {
     delete process.env.WAKEFIELD_HOME;
   }

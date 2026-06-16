@@ -64,7 +64,8 @@ export async function processDreams(agent, {
     .filter((entry) => isPendingDream(entry, processedIds))
     .slice(0, Number(limit || 10));
   const journal = pending.length > 0 ? await readJsonl(agent.memory.journalPath) : [];
-  const summaries = pending.map((entry) => summarizeDream(entry, journal, now));
+  const summaries = summarizePendingDreams(pending, journal, now);
+  const nextProcessedIds = mergeProcessedIds(processedIds, summaries);
 
   if (!dryRun && summaries.length > 0) {
     for (const summary of summaries) {
@@ -75,6 +76,7 @@ export async function processDreams(agent, {
         source: "wakefield-dreamer",
         data: {
           sourceDreamId: summary.sourceDreamId,
+          sourceDreamIds: summary.sourceDreamIds,
           sessionId: summary.sessionId,
           turnId: summary.turnId,
           toolCount: summary.toolCount,
@@ -88,7 +90,7 @@ export async function processDreams(agent, {
       recentTurns: mergeRecentTurns(state.recentTurns, summaries),
       dreamer: {
         ...(state.dreamer || {}),
-        processedIds: mergeProcessedIds(processedIds, summaries),
+        processedIds: nextProcessedIds,
         lastRunAt: now.toISOString()
       }
     });
@@ -96,13 +98,17 @@ export async function processDreams(agent, {
 
   return {
     processed: summaries.length,
-    pending: Math.max(0, dreams.filter((entry) => isPendingDream(entry, processedIds)).length - summaries.length),
+    pending: dreams.filter((entry) => isPendingDream(entry, new Set(nextProcessedIds))).length,
     dryRun: Boolean(dryRun),
     summaries
   };
 }
 
-export async function recall(agent, query, { limit = 5 } = {}) {
+export async function recall(agent, query, {
+  limit = 5,
+  includeIfNoTerms = false,
+  minScore = 1
+} = {}) {
   if (!agent) return [];
   const terms = importantTerms(query);
   const state = await readJson(agent.memory.statePath, {});
@@ -116,14 +122,20 @@ export async function recall(agent, query, { limit = 5 } = {}) {
 
   return candidates
     .map((entry) => ({ entry, score: scoreEntry(entry, terms) }))
-    .filter((item) => item.score > 0 || terms.length === 0)
+    .filter((item) => terms.length === 0 ? includeIfNoTerms && item.score > 0 : item.score >= minScore)
     .sort((left, right) => right.score - left.score || String(right.entry.at || "").localeCompare(String(left.entry.at || "")))
+    .filter(deduplicateScoredEntries())
     .slice(0, limit)
     .map((item) => item.entry);
 }
 
-export async function memoryContext(agent, query, { limit = 5, maxChars = 1600 } = {}) {
-  const entries = await recall(agent, query, { limit });
+export async function memoryContext(agent, query, {
+  limit = 5,
+  maxChars = 1600,
+  includeIfNoTerms = false,
+  minScore = 1
+} = {}) {
+  const entries = await recall(agent, query, { limit, includeIfNoTerms, minScore });
   if (entries.length === 0) return "";
 
   const lines = entries.map(formatEntryLine);
@@ -193,7 +205,45 @@ function isPendingDream(entry, processedIds) {
   return entry.kind === "dream-queued" || entry.kind === "pre-compact" || entry.kind === "post-compact";
 }
 
-function summarizeDream(entry, journal, now) {
+function summarizePendingDreams(pending, journal, now) {
+  const groups = groupPendingDreams(pending);
+  return groups.map((group) => summarizeDreamGroup(group, journal, now));
+}
+
+function groupPendingDreams(pending) {
+  const groups = [];
+  const byTurn = new Map();
+  for (const entry of pending) {
+    const key = dreamGroupKey(entry);
+    if (!key) {
+      groups.push([entry]);
+      continue;
+    }
+    if (!byTurn.has(key)) {
+      const group = [];
+      byTurn.set(key, group);
+      groups.push(group);
+    }
+    byTurn.get(key).push(entry);
+  }
+  return groups;
+}
+
+function dreamGroupKey(entry) {
+  const sessionId = entry.data?.sessionId || entry.data?.session_id || "";
+  const turnId = entry.data?.turnId || entry.data?.turn_id || "";
+  if (!sessionId && !turnId) return "";
+  return `${sessionId}:${turnId}`;
+}
+
+function summarizeDreamGroup(entries, journal, now) {
+  const turnEntry = entries.find((entry) => entry.kind === "dream-queued") || null;
+  if (turnEntry) return summarizeTurnDream(turnEntry, entries, journal, now);
+  if (entries.some(isCompactEdge)) return summarizeCompactDream(entries, now);
+  return summarizeTurnDream(entries[0], entries, journal, now);
+}
+
+function summarizeTurnDream(entry, sourceEntries, journal, now) {
   const sessionId = entry.data?.sessionId || entry.data?.session_id || null;
   const turnId = entry.data?.turnId || entry.data?.turn_id || null;
   const related = journal.filter((item) => sameTurn(item, { sessionId, turnId }));
@@ -209,10 +259,13 @@ function summarizeDream(entry, journal, now) {
   const toolText = changes.length > 0
     ? ` Tool activity: ${changes.slice(-4).join("; ")}.`
     : "";
-  const summary = `${subject}: ${base}${toolText}`;
+  const compactionText = compactionNote(sourceEntries.filter(isCompactEdge));
+  const summary = `${subject}: ${base}${toolText}${compactionText}`;
+  const sourceDreamIds = sourceEntries.map((item) => item.id).filter(Boolean);
 
   return {
-    sourceDreamId: entry.id,
+    sourceDreamId: sourceDreamIds[0] || entry.id,
+    sourceDreamIds,
     at: now.toISOString(),
     sessionId,
     turnId,
@@ -220,6 +273,56 @@ function summarizeDream(entry, journal, now) {
     toolCount: tools.length,
     changes
   };
+}
+
+function summarizeCompactDream(entries, now) {
+  const first = entries[0] || {};
+  const sessionId = first.data?.sessionId || first.data?.session_id || null;
+  const turnId = first.data?.turnId || first.data?.turn_id || null;
+  const sourceDreamIds = entries.map((item) => item.id).filter(Boolean);
+  const summary = compactSummary(entries);
+  return {
+    sourceDreamId: sourceDreamIds[0] || first.id,
+    sourceDreamIds,
+    at: now.toISOString(),
+    sessionId,
+    turnId,
+    summary: turnId ? `Turn ${turnId}: ${summary}` : summary,
+    toolCount: 0,
+    changes: []
+  };
+}
+
+function isCompactEdge(entry) {
+  return entry?.kind === "pre-compact" || entry?.kind === "post-compact";
+}
+
+function compactSummary(entries) {
+  const hasPre = entries.some((entry) => entry.kind === "pre-compact");
+  const hasPost = entries.some((entry) => entry.kind === "post-compact");
+  const trigger = compactTrigger(entries);
+  if (hasPre && hasPost) return `${capitalize(trigger)} compaction completed.`;
+  if (hasPost) return `${capitalize(trigger)} compaction completed.`;
+  return `${capitalize(trigger)} compaction started.`;
+}
+
+function compactionNote(entries) {
+  if (entries.length === 0) return "";
+  return ` ${compactSummary(entries)}`;
+}
+
+function compactTrigger(entries) {
+  const triggers = [...new Set(entries
+    .map((entry) => entry.data?.trigger)
+    .filter(Boolean))];
+  if (triggers.length === 1) return triggers[0];
+  if (triggers.length > 1) return "mixed";
+  return "unknown";
+}
+
+function capitalize(value) {
+  const text = String(value || "unknown");
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function sameTurn(entry, { sessionId, turnId }) {
@@ -236,7 +339,7 @@ function mergeRecentTurns(current, summaries) {
     ...summaries,
     ...(Array.isArray(current) ? current : [])
   ].filter((item) => {
-    const key = item.sourceDreamId || `${item.sessionId || ""}:${item.turnId || ""}:${item.summary || ""}`;
+    const key = (item.sourceDreamIds || []).join(",") || item.sourceDreamId || `${item.sessionId || ""}:${item.turnId || ""}:${item.summary || ""}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -245,7 +348,11 @@ function mergeRecentTurns(current, summaries) {
 
 function mergeProcessedIds(processedIds, summaries) {
   const ids = new Set(processedIds);
-  for (const summary of summaries) ids.add(summary.sourceDreamId);
+  for (const summary of summaries) {
+    for (const id of summary.sourceDreamIds || [summary.sourceDreamId]) {
+      if (id) ids.add(id);
+    }
+  }
   return [...ids].slice(-500);
 }
 
@@ -259,10 +366,33 @@ function importantTerms(value) {
 
 function scoreEntry(entry, terms) {
   const haystack = `${entry.kind || ""} ${entry.text || ""} ${JSON.stringify(entry.data || {})}`.toLowerCase();
-  if (terms.length === 0) return entry.channel === "state" ? 2 : 1;
-  return terms.reduce((score, term) => score + (haystack.includes(term) ? 1 : 0), 0);
+  const weight = sourceWeight(entry);
+  if (terms.length === 0) return weight;
+  const matches = terms.reduce((score, term) => score + (haystack.includes(term) ? 1 : 0), 0);
+  return matches > 0 ? matches * 10 + weight : 0;
+}
+
+function sourceWeight(entry) {
+  if (entry.channel === "state") return 5;
+  if (entry.kind === "dream-summary") return 4;
+  if (entry.kind === "turn-stop") return 3;
+  if (entry.kind === "preference" || entry.kind === "fact" || entry.kind === "open-thread") return 3;
+  if (entry.kind === "tool-use") return 2;
+  return 1;
+}
+
+function deduplicateScoredEntries() {
+  const seen = new Set();
+  return ({ entry }) => {
+    const key = compact(entry.text || entry.value || JSON.stringify(entry.data || entry), 260).toLowerCase();
+    if (!key) return true;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  };
 }
 
 const STOP_WORDS = new Set([
-  "the", "and", "for", "that", "this", "with", "from", "you", "your", "about", "have", "has", "are", "was", "were"
+  "the", "and", "for", "that", "this", "with", "from", "you", "your", "about", "have", "has", "are", "was", "were",
+  "what", "when", "where", "why", "how", "did", "does", "can", "could", "would", "should", "please"
 ]);
