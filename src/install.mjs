@@ -2,7 +2,7 @@ import path from "node:path";
 import { doctor } from "./doctor.mjs";
 import { installHooks, wakefieldHookCommand } from "./hook-manager.mjs";
 import { appHome, expandHome } from "./paths.mjs";
-import { initAgent, loadAgent, saveAgent, selectThread } from "./profile.mjs";
+import { ensureAgentMemory, initAgent, loadAgent, saveAgent, selectThread } from "./profile.mjs";
 import { installWakefieldSkills } from "./skills.mjs";
 
 export async function installWakefield({
@@ -41,6 +41,7 @@ export async function installWakefield({
       cwd: path.resolve(expandHome(cwd))
     }, home);
   }
+  profile = await ensureAgentMemory(profile, home);
 
   const hookResult = skipHooks
     ? null

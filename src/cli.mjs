@@ -6,6 +6,7 @@ import { formatAgentPackInspection, formatAgentPackInstall, inspectAgentPack, in
 import { listRecentThreads } from "./codex-sessions.mjs";
 import { asArray, configureConnector, connectorStatuses, connectorWizard, connectorWizards, CONNECTOR_SETUP_SLOTS, formatConnectorStatuses, formatConnectorWizard, parseSettings } from "./connectors.mjs";
 import { formatContactResolution, formatContacts, importContactsFile, loadContacts, resolveContact } from "./contacts.mjs";
+import { archiveMatter, contextMemory, forgetMemoryItem, formatContextMemory, formatMatters, formatNotes, loadMatters, loadNotes, matterFromCli, noteFromCli, recallContext, scopeFromOptions, upsertMatter, upsertNote } from "./context-memory.mjs";
 import { startDiscordGateway } from "./discord-gateway.mjs";
 import { doctor, formatDoctor } from "./doctor.mjs";
 import { configureDuty, configureWakeup, dutyStatuses, formatDutyRun, formatDutyStatuses, importDuties, runDueDuties } from "./duties.mjs";
@@ -23,7 +24,7 @@ import { configureManagedConnector, formatManagedConnectorConfigInit, formatMana
 import { formatMenuSnapshot, menuSnapshot } from "./menu-snapshot.mjs";
 import { compact, formatDreamResult, memoryContext, processDreams, recordMemory } from "./memory.mjs";
 import { appHome } from "./paths.mjs";
-import { initAgent, loadAgent, selectThread } from "./profile.mjs";
+import { ensureAgentMemory, initAgent, loadAgent, selectThread } from "./profile.mjs";
 import { configureService, formatLaunchAgentResult, formatLaunchAgentStatus, formatServiceRun, formatServiceStatus, installLaunchAgent, launchAgentPlist, launchAgentStatus, loadLaunchAgent, runServiceOnce, serviceStatus, uninstallLaunchAgent, unloadLaunchAgent } from "./service.mjs";
 import { formatSelfTest, runSelfTest } from "./self-test.mjs";
 import { formatActions, formatConnectors, formatNextSteps, formatSetupStatus, setupStatus } from "./setup.mjs";
@@ -745,6 +746,95 @@ async function main(argv = process.argv.slice(2)) {
     return;
   }
 
+  if (command === "memory") {
+    const agent = await requireAgent();
+    const group = rest[0] || "recall";
+    const action = rest[1] || "list";
+
+    if (group === "notes" && (action === "list" || action === "status")) {
+      const options = parseOptions(rest.slice(2));
+      const notes = await loadNotes(agent);
+      console.log(options.json ? JSON.stringify(notes, null, 2) : formatNotes(notes));
+      return;
+    }
+
+    if (group === "notes" && (action === "add" || action === "upsert")) {
+      const options = parseOptions(rest.slice(2));
+      const note = noteFromCli(options, options._.join(" "));
+      const notes = await upsertNote(agent, note);
+      console.log(options.json ? JSON.stringify(notes.notes.find((item) => item.id === note.id), null, 2) : `Saved note ${note.id}`);
+      return;
+    }
+
+    if ((group === "matters" || group === "active-context") && (action === "list" || action === "status")) {
+      const options = parseOptions(rest.slice(2));
+      const matters = await loadMatters(agent);
+      console.log(options.json ? JSON.stringify(matters, null, 2) : formatMatters(matters, {
+        includeArchived: Boolean(options.all || options.includeArchived)
+      }));
+      return;
+    }
+
+    if ((group === "matters" || group === "active-context") && (action === "upsert" || action === "add")) {
+      const options = parseOptions(rest.slice(2));
+      const matter = matterFromCli(options, options._.join(" "));
+      const matters = await upsertMatter(agent, matter);
+      console.log(options.json ? JSON.stringify(matters.matters.find((item) => item.id === matter.id), null, 2) : `Saved matter ${matter.id}`);
+      return;
+    }
+
+    if ((group === "matters" || group === "active-context") && action === "archive") {
+      const id = rest[2] && !rest[2].startsWith("--") ? rest[2] : null;
+      const options = parseOptions(id ? rest.slice(3) : rest.slice(2));
+      const matters = await archiveMatter(agent, id || options.id, {
+        reason: options.reason || null
+      });
+      console.log(options.json ? JSON.stringify(matters.matters.find((item) => item.id === (id || options.id)), null, 2) : `Archived matter ${id || options.id}`);
+      return;
+    }
+
+    if (group === "forget") {
+      const type = rest[1] && !rest[1].startsWith("--") ? rest[1] : null;
+      const id = rest[2] && !rest[2].startsWith("--") ? rest[2] : null;
+      const options = parseOptions(id ? rest.slice(3) : rest.slice(1));
+      await forgetMemoryItem(agent, type || options.type, id || options.id);
+      console.log(`Forgot ${type || options.type} ${id || options.id}`);
+      return;
+    }
+
+    if (group === "recall" || group === "context") {
+      const options = parseOptions(rest.slice(1));
+      const query = options.query || options._.join(" ");
+      const recalled = await recallContext(agent, {
+        query,
+        scope: scopeFromOptions(options),
+        limitNotes: Number(options.limitNotes || options.limit || 3),
+        limitMatters: Number(options.limitMatters || options.limit || 3),
+        includeArchived: Boolean(options.all || options.includeArchived)
+      });
+      const formatted = formatContextMemory(recalled, {
+        heading: "Wakefield scoped memory recall"
+      });
+      console.log(options.json ? JSON.stringify(recalled, null, 2) : formatted || "No matching Wakefield scoped memory.");
+      return;
+    }
+
+    if (group === "context-preview") {
+      const options = parseOptions(rest.slice(1));
+      const preview = await contextMemory(agent, {
+        query: options.query || options._.join(" "),
+        scope: scopeFromOptions(options),
+        limitNotes: Number(options.limitNotes || options.limit || 3),
+        limitMatters: Number(options.limitMatters || options.limit || 3),
+        maxChars: Number(options.maxChars || 1200)
+      });
+      console.log(preview || "No matching Wakefield scoped memory.");
+      return;
+    }
+
+    throw new Error(`Unknown memory command: ${rest.join(" ") || "(missing)"}`);
+  }
+
   if (command === "dream") {
     const options = parseOptions(rest);
     const agent = await requireAgent();
@@ -925,6 +1015,13 @@ function usage() {
     "  wakefield inbox pending [--status pending|delivered|ignored|failed|all] [--json]",
     "  wakefield inbox ack ID [--status delivered|ignored|failed] [--json]",
     "  wakefield inbox dispatch [ID] [--mode dry-run|manual|ipc|auto|steer|start] [--json]",
+    "  wakefield memory notes list [--json]",
+    "  wakefield memory notes add --text TEXT [--id ID] [--title TITLE] [--person ID] [--task ID] [--topic TOPIC] [--json]",
+    "  wakefield memory matters list [--all] [--json]",
+    "  wakefield memory matters upsert --summary TEXT [--id ID] [--title TITLE] [--status active|waiting|resolved|archived] [--person ID] [--task ID] [--case ID] [--json]",
+    "  wakefield memory matters archive ID [--reason TEXT] [--json]",
+    "  wakefield memory forget note|matter ID",
+    "  wakefield memory recall [--query TEXT] [--person ID] [--task ID] [--topic TOPIC] [--json]",
     "  wakefield remember --text TEXT [--kind KIND] [--channel journal|inbox|dreams]",
     "  wakefield recall --query TEXT [--limit N]",
     "  wakefield dream [--limit N] [--dry-run] [--json]",
@@ -946,7 +1043,7 @@ function usage() {
 async function requireAgent() {
   const agent = await loadAgent();
   if (!agent) throw new Error("No Wakefield agent is initialized yet. Run wakefield init first.");
-  return agent;
+  return ensureAgentMemory(agent);
 }
 
 async function ask(label, { fallback = null } = {}) {

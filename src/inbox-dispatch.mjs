@@ -10,7 +10,7 @@ export async function dispatchExternalMessage(agent, {
 } = {}) {
   if (!agent) throw new Error("dispatchExternalMessage needs an agent profile.");
   const message = await selectMessage(agent, id);
-  const route = routeForExternalMessage(agent, message);
+  const route = await routeForExternalMessage(agent, message);
   if (route.status !== "ready") {
     return {
       ok: false,

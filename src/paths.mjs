@@ -82,6 +82,10 @@ export function memoryPath(agentId, name, home = appHome()) {
   return path.join(memoryDir(agentId, home), `${name}.jsonl`);
 }
 
+export function memoryDocumentPath(agentId, name, home = appHome()) {
+  return path.join(memoryDir(agentId, home), `${name}.json`);
+}
+
 export function externalMessagesPath(agentId, home = appHome()) {
   return path.join(memoryDir(agentId, home), "external-messages.jsonl");
 }

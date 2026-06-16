@@ -1,6 +1,6 @@
-import fs from "node:fs/promises";
+import { contextMemory } from "./context-memory.mjs";
 import { findAgentForHookInput } from "./profile.mjs";
-import { compact, memoryContext, recordMemory } from "./memory.mjs";
+import { compact, recordMemory } from "./memory.mjs";
 
 export async function handleHookInput(input) {
   const eventName = input?.hook_event_name;
@@ -20,7 +20,6 @@ export async function handleHookInput(input) {
   }
 
   if (eventName === "SessionStart") {
-    const context = await sessionContext(agent, input);
     await recordMemory(agent, {
       channel: "journal",
       kind: "session-start",
@@ -28,7 +27,7 @@ export async function handleHookInput(input) {
       source: "codex-hook",
       data: hookData(input)
     });
-    return additionalContext(eventName, context);
+    return null;
   }
 
   if (eventName === "Stop") {
@@ -115,44 +114,20 @@ function additionalContext(eventName, context) {
   };
 }
 
-async function sessionContext(agent, input) {
-  const source = input?.source || "session start";
-  const lines = [`Wakefield agent: ${agent.name}.`, `Codex session boundary: ${source}.`];
-  const soul = await readSoul(agent);
-  if (soul) lines.push("Wakefield soul:", soul);
-  const memory = await memoryContext(agent, "", {
-    limit: 4,
-    maxChars: 1200,
-    includeIfNoTerms: true
-  });
-  if (memory) lines.push("Wakefield memory for this session boundary:", memory);
-  lines.push("Wakefield runtime note: this is transient hook context. Do not rewrite chat history; use it only when it helps the current turn.");
-  return lines.join("\n");
-}
-
 async function promptMemoryContext(agent, query) {
-  const memory = await memoryContext(agent, query, {
-    limit: 4,
-    maxChars: 1200,
-    includeIfNoTerms: false
+  const memory = await contextMemory(agent, {
+    query,
+    limitNotes: 2,
+    limitMatters: 2,
+    maxChars: 1000,
+    heading: "Wakefield scoped memory relevant to this turn"
   });
   if (!memory) return "";
   const lines = [
-    `Wakefield memory relevant to this turn for ${agent.name}:`,
     memory,
     "Use this as background only; the latest user request is authoritative. Do not mention Wakefield memory unless it materially helps."
   ];
   return lines.join("\n");
-}
-
-async function readSoul(agent) {
-  if (!agent?.soulPath) return "";
-  try {
-    return compact(await fs.readFile(agent.soulPath, "utf8"), 1200);
-  } catch (error) {
-    if (error?.code === "ENOENT") return "";
-    throw error;
-  }
 }
 
 function jsonNoopEvent(eventName) {

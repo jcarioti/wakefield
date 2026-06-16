@@ -13,7 +13,7 @@ It is built around a simple idea: pick one long-lived Codex thread as the person
 - **Connector-ready**: Discord, Photon/Spectrum iMessage, email, local HTTP intake, and a transport-neutral inbox are included.
 - **Scheduled wakeups**: define named wakeups like `08:00 morning-ops`, then attach reusable duties to each wakeup.
 - **Skill-backed duties**: keep scheduled prompts compact by pointing duties at Codex skills instead of pasting large prompt blobs.
-- **Memory and dreaming**: Codex hooks record turns, tool activity, compaction edges, and assistant outputs for durable local memory processing.
+- **Scoped memory**: stable notes plus temporary active context are recalled only when they match the current person, room, task, case, or topic.
 - **Installer-friendly API**: JSON commands, setup actions, wizards, and a local HTTP API make it practical to build a menu bar or desktop setup flow.
 - **No secret storage by default**: Wakefield stores environment variable names and local file references, not raw tokens.
 
@@ -30,7 +30,7 @@ Wakefield has a few first-class objects:
 | **Duties** | Reusable units of scheduled work, usually backed by one or more skills. |
 | **Wakeups** | Local clock events that run one or more duties together in a single Codex turn. |
 | **Connectors** | Inbound and outbound bridges for Discord, iMessage, email, HTTP, and local scripts. |
-| **Memory** | Local journal, inbox, dreams, and state produced from Codex hooks and routed messages. |
+| **Memory** | Durable notes, temporary active context, local journals, dreams, and hook-produced state. |
 | **Service** | A background tick that runs dreams, due wakeups, connector polls, and optional pending-message dispatch. |
 | **Agent Packs** | Portable recipes that install an agent profile, contacts, skills, duties, wakeups, connectors, and service defaults. |
 
@@ -140,7 +140,7 @@ Use `WAKEFIELD_HOME` only for tests, isolated experiments, or advanced relocatio
 Each agent gets an app-support folder with:
 
 - `AGENTS.md` for the generated soul
-- local memory files: `inbox.jsonl`, `journal.jsonl`, `dreams.jsonl`, `external-messages.jsonl`, `state.json`
+- local memory files: `notes.json`, `matters.json`, `inbox.jsonl`, `journal.jsonl`, `dreams.jsonl`, `external-messages.jsonl`, `state.json`
 - profile and selected thread metadata
 - schedule, contacts, connector, and service state
 
@@ -341,22 +341,41 @@ pnpm exec wakefield email poll --json
 
 ## Memory And Dreaming
 
-Wakefield installs Codex lifecycle hooks so manual and routed turns can produce local memory:
+Wakefield treats Codex as the owner of the persistent chat, compaction, and personality. It does not rewrite transcripts, replay old messages, or refresh the soul during compaction. Instead, it keeps a small local memory ledger and hands Codex a relevant note card only when a turn needs outside context.
+
+The two first-class memory types are:
+
+- `notes`: stable durable facts and preferences.
+- `matters`: temporary active context for a person, room, task, case, or topic. Matters can be `active`, `waiting`, `resolved`, or `archived`.
+
+Wakefield installs Codex lifecycle hooks and uses routed-turn metadata:
 
 - `UserPromptSubmit`: records user prompts and injects only memory that matches the current request
-- `SessionStart`: injects the agent name, soul, and a compact memory primer at startup, resume, or compact boundaries
+- external Discord, iMessage, email, and HTTP turns: recall by connector, contact, room, sender, conversation, and likely topic
+- scheduled wakeups: recall by wakeup, duty, skill, task, and topic
+- `SessionStart`: records a lifecycle edge without injecting the soul or memory
 - `PostToolUse`: records meaningful tool activity for change-based memory
-- `PreCompact` / `PostCompact`: records compaction boundaries and folds matching start/finish events into one compact memory
+- `PreCompact` / `PostCompact`: records compaction boundaries for bookkeeping only
 - `Stop`: records the latest assistant output and queues a dream
 
-Wakefield treats Codex as the owner of the active chat history. It does not rewrite transcripts, replay old messages, or try to fight Codex's compaction and token-caching behavior. Hooks write lightweight observations to Wakefield's local store, and hook output is only transient additional context. The default policy is:
+Inspect and edit scoped memory:
 
-- inject the soul and a tiny memory primer at session boundaries
-- inject prompt-time memory only when local recall finds a relevant match
-- keep tool and stop events write-only
-- summarize compaction as lifecycle state, not as duplicate chat history
+```bash
+pnpm exec wakefield memory notes list
+pnpm exec wakefield memory notes add --id reply-style --text "Use concise package updates." --person joe --topic package
 
-Process queued memories:
+pnpm exec wakefield memory matters list
+pnpm exec wakefield memory matters upsert \
+  --id joe-package \
+  --summary "Joe is waiting for a package tracking follow-up." \
+  --person joe \
+  --topic package
+
+pnpm exec wakefield memory recall --query "tracking package" --person joe
+pnpm exec wakefield memory matters archive joe-package --reason "Tracking sent."
+```
+
+The older journal/dreamer path still exists for hook telemetry and future provider integration:
 
 ```bash
 pnpm exec wakefield dream
@@ -453,7 +472,7 @@ Wakefield is intentionally conservative:
 
 ## Project Status
 
-Wakefield is an early local-first runtime. The core profile, hooks, memory, wakeups, service tick, connector setup contracts, Discord connector, Photon/Spectrum iMessage connector, email intake, HTTP API, and macOS LaunchAgent paths are implemented.
+Wakefield is an early local-first runtime. The core profile, hooks, scoped memory, wakeups, service tick, connector setup contracts, Discord connector, Photon/Spectrum iMessage connector, email intake, HTTP API, and macOS LaunchAgent paths are implemented.
 
 Still intentionally out of scope for this slice:
 

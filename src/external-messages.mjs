@@ -2,6 +2,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { CONNECTOR_SETUP_SLOTS } from "./connectors.mjs";
 import { connectorSkillPrompt } from "./connector-skills.mjs";
+import { contextMemory, externalMessageScope } from "./context-memory.mjs";
 import { resolveContact } from "./contacts.mjs";
 import { appendJsonl, readJsonl } from "./json-store.mjs";
 import { compact, recordMemory } from "./memory.mjs";
@@ -46,7 +47,7 @@ export async function ingestExternalMessage(agent, {
     return {
       duplicate: true,
       message: existing,
-      route: routeForExternalMessage(agent, existing)
+      route: await routeForExternalMessage(agent, existing)
     };
   }
 
@@ -91,7 +92,7 @@ export async function ingestExternalMessage(agent, {
   return {
     duplicate: false,
     message: entry,
-    route: routeForExternalMessage(agent, entry)
+    route: await routeForExternalMessage(agent, entry)
   };
 }
 
@@ -164,18 +165,23 @@ export async function acknowledgeExternalMessage(agent, externalMessageId, {
   };
 }
 
-export function routeForExternalMessage(agent, message) {
+export async function routeForExternalMessage(agent, message) {
   const ready = Boolean(agent?.threadId && agent?.cwd);
+  const memory = await contextMemory(agent, {
+    query: [message.subject, message.text].filter(Boolean).join("\n"),
+    scope: externalMessageScope(message),
+    heading: "Wakefield context for this external message"
+  });
   return {
     status: ready ? "ready" : "needs-thread",
     reason: ready ? null : "Select a persistent Codex thread before dispatching external messages.",
     threadId: agent?.threadId || null,
     cwd: agent?.cwd || null,
-    prompt: formatExternalPrompt(message)
+    prompt: formatExternalPrompt(message, { memory })
   };
 }
 
-export function formatExternalPrompt(message) {
+export function formatExternalPrompt(message, { memory = "" } = {}) {
   const header = [
     `External ${message.connectorName || message.connector || "connector"} message`,
     `Connector: ${message.connector}`,
@@ -194,6 +200,8 @@ export function formatExternalPrompt(message) {
   return [
     ...header,
     connectorSkillPrompt(message.connector) || null,
+    memory ? "" : null,
+    memory || null,
     "",
     "Message:",
     message.text || "",

@@ -1,0 +1,523 @@
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { readJson, writeJson } from "./json-store.mjs";
+
+const NOTES_SCHEMA_VERSION = 1;
+const MATTERS_SCHEMA_VERSION = 1;
+const ACTIVE_MATTER_STATUSES = new Set(["active", "waiting"]);
+const ALL_MATTER_STATUSES = new Set(["active", "waiting", "resolved", "archived"]);
+
+export async function loadNotes(agent) {
+  if (!agent) throw new Error("loadNotes needs an agent profile.");
+  const file = notesPathForAgent(agent);
+  return normalizeNotesDocument(file ? await readJson(file, null) : null);
+}
+
+export async function loadMatters(agent) {
+  if (!agent) throw new Error("loadMatters needs an agent profile.");
+  const file = mattersPathForAgent(agent);
+  return normalizeMattersDocument(file ? await readJson(file, null) : null);
+}
+
+export async function saveNotes(agent, document) {
+  const file = notesPathForAgent(agent);
+  if (!file) throw new Error("saveNotes needs an agent memory store.");
+  const next = normalizeNotesDocument(document);
+  next.updatedAt = new Date().toISOString();
+  await writeJson(file, next);
+  return next;
+}
+
+export async function saveMatters(agent, document) {
+  const file = mattersPathForAgent(agent);
+  if (!file) throw new Error("saveMatters needs an agent memory store.");
+  const next = normalizeMattersDocument(document);
+  next.updatedAt = new Date().toISOString();
+  await writeJson(file, next);
+  return next;
+}
+
+export async function upsertNote(agent, note, { now = new Date() } = {}) {
+  const current = await loadNotes(agent);
+  const normalized = normalizeNote(note, { now });
+  const existing = current.notes.find((item) => item.id === normalized.id);
+  const nextNote = existing
+    ? normalizeNote({
+      ...existing,
+      ...normalized,
+      createdAt: existing.createdAt || normalized.createdAt,
+      scope: mergeScopes(existing.scope, normalized.scope),
+      tags: uniqueStrings([...existing.tags, ...normalized.tags]),
+      sources: uniqueStrings([...existing.sources, ...normalized.sources])
+    }, { now })
+    : normalized;
+  return saveNotes(agent, {
+    ...current,
+    notes: replaceById(current.notes, nextNote)
+  });
+}
+
+export async function upsertMatter(agent, matter, { now = new Date() } = {}) {
+  const current = await loadMatters(agent);
+  const normalized = normalizeMatter(matter, { now });
+  const existing = current.matters.find((item) => item.id === normalized.id);
+  const nextMatter = existing
+    ? normalizeMatter({
+      ...existing,
+      ...normalized,
+      createdAt: existing.createdAt || normalized.createdAt,
+      scope: mergeScopes(existing.scope, normalized.scope),
+      tags: uniqueStrings([...existing.tags, ...normalized.tags]),
+      sources: uniqueStrings([...existing.sources, ...normalized.sources])
+    }, { now })
+    : normalized;
+  return saveMatters(agent, {
+    ...current,
+    matters: replaceById(current.matters, nextMatter)
+  });
+}
+
+export async function archiveMatter(agent, id, {
+  reason = null,
+  now = new Date()
+} = {}) {
+  const current = await loadMatters(agent);
+  const matter = current.matters.find((item) => item.id === id);
+  if (!matter) throw new Error(`Matter not found: ${id}`);
+  const archived = normalizeMatter({
+    ...matter,
+    status: "archived",
+    statusReason: reason || matter.statusReason || null,
+    archivedAt: now.toISOString(),
+    updatedAt: now.toISOString()
+  }, { now });
+  return saveMatters(agent, {
+    ...current,
+    matters: replaceById(current.matters, archived)
+  });
+}
+
+export async function forgetMemoryItem(agent, type, id) {
+  const normalizedType = normalizeMemoryType(type);
+  if (normalizedType === "note") {
+    const current = await loadNotes(agent);
+    const notes = current.notes.filter((item) => item.id !== id);
+    if (notes.length === current.notes.length) throw new Error(`Note not found: ${id}`);
+    return saveNotes(agent, { ...current, notes });
+  }
+  const current = await loadMatters(agent);
+  const matters = current.matters.filter((item) => item.id !== id);
+  if (matters.length === current.matters.length) throw new Error(`Matter not found: ${id}`);
+  return saveMatters(agent, { ...current, matters });
+}
+
+export async function recallContext(agent, {
+  query = "",
+  scope = {},
+  limitNotes = 3,
+  limitMatters = 3,
+  includeArchived = false
+} = {}) {
+  const terms = importantTerms(query);
+  const recallScope = normalizeScope(scope);
+  const [notes, matters] = await Promise.all([
+    loadNotes(agent),
+    loadMatters(agent)
+  ]);
+
+  return {
+    notes: rankItems(notes.notes, {
+      terms,
+      scope: recallScope,
+      kind: "note"
+    }).slice(0, Number(limitNotes || 3)),
+    matters: rankItems(matters.matters.filter((matter) => includeArchived || ACTIVE_MATTER_STATUSES.has(matter.status)), {
+      terms,
+      scope: recallScope,
+      kind: "matter"
+    }).slice(0, Number(limitMatters || 3))
+  };
+}
+
+export async function contextMemory(agent, {
+  query = "",
+  scope = {},
+  limitNotes = 3,
+  limitMatters = 3,
+  maxChars = 1200,
+  heading = "Wakefield scoped memory"
+} = {}) {
+  const recalled = await recallContext(agent, {
+    query,
+    scope,
+    limitNotes,
+    limitMatters
+  });
+  const formatted = formatContextMemory(recalled, { heading });
+  if (!formatted) return "";
+  return formatted.length <= maxChars ? formatted : `${formatted.slice(0, maxChars - 3)}...`;
+}
+
+export function formatContextMemory({ notes = [], matters = [] } = {}, {
+  heading = "Wakefield scoped memory"
+} = {}) {
+  if (notes.length === 0 && matters.length === 0) return "";
+  const lines = [heading];
+  if (notes.length > 0) {
+    lines.push("Notes:");
+    for (const note of notes) lines.push(`- ${formatNoteLine(note)}`);
+  }
+  if (matters.length > 0) {
+    lines.push("Active context:");
+    for (const matter of matters) lines.push(`- ${formatMatterLine(matter)}`);
+  }
+  return lines.join("\n");
+}
+
+export function formatNotes(document) {
+  const notes = normalizeNotesDocument(document).notes;
+  if (notes.length === 0) return "No Wakefield notes.";
+  return notes.map(formatNoteLine).join("\n");
+}
+
+export function formatMatters(document, {
+  includeArchived = false
+} = {}) {
+  const matters = normalizeMattersDocument(document).matters
+    .filter((matter) => includeArchived || matter.status !== "archived");
+  if (matters.length === 0) return "No Wakefield matters.";
+  return matters.map(formatMatterLine).join("\n");
+}
+
+export function noteFromCli(options, trailingText = "") {
+  const text = options.text || trailingText;
+  if (!text) throw new Error("memory notes add needs --text or trailing text.");
+  const id = slugify(options.id || options.title || text);
+  return {
+    id,
+    title: options.title || firstSentence(text),
+    text,
+    tags: optionList(options.tag || options.tags),
+    scope: scopeFromOptions(options),
+    sources: optionList(options.source || options.sources)
+  };
+}
+
+export function matterFromCli(options, trailingText = "") {
+  const summary = options.summary || options.text || trailingText;
+  if (!summary) throw new Error("memory matters upsert needs --summary, --text, or trailing text.");
+  const id = slugify(options.id || options.title || summary);
+  return {
+    id,
+    kind: options.kind || "matter",
+    title: options.title || firstSentence(summary),
+    summary,
+    status: options.status || "active",
+    nextAction: options.nextAction || null,
+    notifyWhen: options.notifyWhen || null,
+    statusReason: options.reason || null,
+    tags: optionList(options.tag || options.tags),
+    scope: scopeFromOptions(options),
+    sources: optionList(options.source || options.sources)
+  };
+}
+
+export function scopeFromOptions(options = {}) {
+  return normalizeScope({
+    person: options.person,
+    room: options.room,
+    channel: options.channel,
+    task: options.task || options.duty,
+    topic: options.topic,
+    case: options.case || options.caseId,
+    connector: options.connector,
+    sender: options.sender,
+    conversation: options.conversation || options.conversationId
+  });
+}
+
+export function externalMessageScope(message) {
+  return normalizeScope({
+    connector: message.connector,
+    sender: message.sender,
+    conversation: message.conversationId,
+    channel: message.conversationId,
+    person: message.contactId || message.contact?.id || message.contact?.displayName || message.sender,
+    room: message.metadata?.roomId || message.metadata?.channelId || message.metadata?.spaceId || null,
+    topic: [message.subject, message.metadata?.topic].filter(Boolean)
+  });
+}
+
+export function dutyScope(duty) {
+  return normalizeScope({
+    task: [duty.id, duty.dutyIds, duty.skills].flat().filter(Boolean),
+    topic: [duty.label, duty.dutyIds, duty.skills].flat().filter(Boolean),
+    channel: "scheduled-wakeup"
+  });
+}
+
+export function normalizeScope(scope = {}) {
+  const source = scope && typeof scope === "object" ? scope : {};
+  return {
+    people: scopeArray(source.people ?? source.person),
+    rooms: scopeArray(source.rooms ?? source.room),
+    channels: scopeArray(source.channels ?? source.channel),
+    tasks: scopeArray(source.tasks ?? source.task),
+    topics: scopeArray(source.topics ?? source.topic),
+    cases: scopeArray(source.cases ?? source.case),
+    connectors: scopeArray(source.connectors ?? source.connector),
+    senders: scopeArray(source.senders ?? source.sender),
+    conversations: scopeArray(source.conversations ?? source.conversation)
+  };
+}
+
+export function notesPathForAgent(agent) {
+  if (agent.memory?.notesPath) return agent.memory.notesPath;
+  if (!agent.memory?.inboxPath) return null;
+  return path.join(path.dirname(agent.memory.inboxPath), "notes.json");
+}
+
+export function mattersPathForAgent(agent) {
+  if (agent.memory?.mattersPath) return agent.memory.mattersPath;
+  if (!agent.memory?.inboxPath) return null;
+  return path.join(path.dirname(agent.memory.inboxPath), "matters.json");
+}
+
+function normalizeNotesDocument(value) {
+  const source = value && typeof value === "object" ? value : {};
+  return {
+    schemaVersion: NOTES_SCHEMA_VERSION,
+    updatedAt: source.updatedAt || null,
+    notes: (source.notes || []).map((note) => normalizeNote(note))
+  };
+}
+
+function normalizeMattersDocument(value) {
+  const source = value && typeof value === "object" ? value : {};
+  return {
+    schemaVersion: MATTERS_SCHEMA_VERSION,
+    updatedAt: source.updatedAt || null,
+    matters: (source.matters || []).map((matter) => normalizeMatter(matter))
+  };
+}
+
+function normalizeNote(note, { now = new Date() } = {}) {
+  const source = note && typeof note === "object" ? note : {};
+  const text = String(source.text || source.summary || source.title || "").trim();
+  const id = slugify(source.id || source.title || text || randomUUID());
+  const timestamp = now.toISOString();
+  return {
+    id,
+    type: "note",
+    title: String(source.title || firstSentence(text) || id).trim(),
+    text,
+    scope: normalizeScope(source.scope),
+    tags: uniqueStrings(source.tags || source.tag || []),
+    sources: uniqueStrings(source.sources || source.source || []),
+    createdAt: source.createdAt || timestamp,
+    updatedAt: source.updatedAt || timestamp
+  };
+}
+
+function normalizeMatter(matter, { now = new Date() } = {}) {
+  const source = matter && typeof matter === "object" ? matter : {};
+  const summary = String(source.summary || source.text || source.title || "").trim();
+  const id = slugify(source.id || source.title || summary || randomUUID());
+  const status = normalizeStatus(source.status || "active");
+  const timestamp = now.toISOString();
+  return {
+    id,
+    type: "matter",
+    kind: String(source.kind || "matter").trim() || "matter",
+    title: String(source.title || firstSentence(summary) || id).trim(),
+    summary,
+    status,
+    statusReason: source.statusReason || null,
+    scope: normalizeScope(source.scope),
+    nextAction: source.nextAction || null,
+    notifyWhen: source.notifyWhen || null,
+    tags: uniqueStrings(source.tags || source.tag || []),
+    sources: uniqueStrings(source.sources || source.source || []),
+    createdAt: source.createdAt || timestamp,
+    updatedAt: source.updatedAt || timestamp,
+    resolvedAt: source.resolvedAt || (status === "resolved" ? timestamp : null),
+    archivedAt: source.archivedAt || (status === "archived" ? timestamp : null)
+  };
+}
+
+function rankItems(items, { terms, scope, kind }) {
+  return items
+    .filter((item) => !scopeConflicts(item.scope, scope))
+    .map((item) => ({ item, score: scoreItem(item, { terms, scope, kind }) }))
+    .filter(({ score }) => score > 0)
+    .sort((left, right) => right.score - left.score || String(right.item.updatedAt || "").localeCompare(String(left.item.updatedAt || "")))
+    .map(({ item }) => item);
+}
+
+function scopeConflicts(left, right) {
+  const itemScope = normalizeScope(left);
+  const recallScope = normalizeScope(right);
+  for (const key of ["people", "rooms", "cases", "connectors", "senders", "conversations"]) {
+    if (itemScope[key].length === 0 || recallScope[key].length === 0) continue;
+    const available = new Set(itemScope[key]);
+    if (!recallScope[key].some((value) => available.has(value))) return true;
+  }
+  if (itemScope.tasks.length > 0 && recallScope.tasks.length > 0) {
+    const tasks = new Set(itemScope.tasks);
+    if (!recallScope.tasks.some((value) => tasks.has(value))) return true;
+  }
+  if (recallScope.tasks.length > 0 && itemScope.tasks.length === 0) {
+    return itemScope.people.length > 0
+      || itemScope.rooms.length > 0
+      || itemScope.senders.length > 0
+      || itemScope.conversations.length > 0;
+  }
+  return false;
+}
+
+function scoreItem(item, { terms, scope, kind }) {
+  const itemTerms = searchableText(item);
+  const queryScore = terms.reduce((score, term) => score + (itemTerms.includes(term) ? 3 : 0), 0);
+  const scopeScore = scopeOverlapScore(item.scope, scope);
+  if (terms.length === 0 && scopeScore === 0) return kind === "matter" && ACTIVE_MATTER_STATUSES.has(item.status) ? 1 : 0;
+  if (queryScore === 0 && scopeScore === 0) return 0;
+  const statusScore = kind === "matter" ? matterStatusScore(item.status) : 2;
+  return queryScore + scopeScore + statusScore;
+}
+
+function scopeOverlapScore(left, right) {
+  const normalizedLeft = normalizeScope(left);
+  const normalizedRight = normalizeScope(right);
+  let score = 0;
+  for (const key of Object.keys(normalizedRight)) {
+    const wanted = normalizedRight[key];
+    if (wanted.length === 0) continue;
+    const available = new Set(normalizedLeft[key]);
+    for (const value of wanted) {
+      if (available.has(value)) score += key === "people" || key === "cases" ? 8 : 5;
+    }
+  }
+  return score;
+}
+
+function matterStatusScore(status) {
+  if (status === "active") return 4;
+  if (status === "waiting") return 3;
+  if (status === "resolved") return 1;
+  return 0;
+}
+
+function searchableText(item) {
+  return [
+    item.id,
+    item.title,
+    item.text,
+    item.summary,
+    item.kind,
+    item.nextAction,
+    item.notifyWhen,
+    item.tags,
+    item.sources,
+    Object.values(normalizeScope(item.scope)).flat()
+  ].flat().filter(Boolean).join(" ").toLowerCase();
+}
+
+function formatNoteLine(note) {
+  const scope = compactScope(note.scope);
+  return `${note.id}: ${note.title}${note.text && note.text !== note.title ? ` - ${note.text}` : ""}${scope ? ` (${scope})` : ""}`;
+}
+
+function formatMatterLine(matter) {
+  const pieces = [
+    `${matter.id}: [${matter.status}] ${matter.title}`,
+    matter.summary && matter.summary !== matter.title ? matter.summary : null,
+    matter.nextAction ? `Next: ${matter.nextAction}` : null,
+    matter.notifyWhen ? `Notify: ${matter.notifyWhen}` : null
+  ].filter(Boolean);
+  const scope = compactScope(matter.scope);
+  return `${pieces.join(" - ")}${scope ? ` (${scope})` : ""}`;
+}
+
+function compactScope(scope) {
+  const normalized = normalizeScope(scope);
+  const chunks = [];
+  if (normalized.people.length > 0) chunks.push(`people=${normalized.people.join(",")}`);
+  if (normalized.tasks.length > 0) chunks.push(`tasks=${normalized.tasks.join(",")}`);
+  if (normalized.cases.length > 0) chunks.push(`cases=${normalized.cases.join(",")}`);
+  if (normalized.topics.length > 0) chunks.push(`topics=${normalized.topics.join(",")}`);
+  return chunks.join("; ");
+}
+
+function mergeScopes(left, right) {
+  const a = normalizeScope(left);
+  const b = normalizeScope(right);
+  const merged = {};
+  for (const key of Object.keys(a)) merged[key] = uniqueStrings([...a[key], ...b[key]]);
+  return merged;
+}
+
+function replaceById(items, nextItem) {
+  const filtered = items.filter((item) => item.id !== nextItem.id);
+  return [...filtered, nextItem].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function normalizeStatus(value) {
+  const status = String(value || "active").trim().toLowerCase();
+  if (ALL_MATTER_STATUSES.has(status)) return status;
+  throw new Error(`Matter status must be one of: ${[...ALL_MATTER_STATUSES].join(", ")}`);
+}
+
+function normalizeMemoryType(value) {
+  const type = String(value || "").trim().toLowerCase();
+  if (["note", "notes"].includes(type)) return "note";
+  if (["matter", "matters", "active-context", "active_context"].includes(type)) return "matter";
+  throw new Error("Memory type must be note or matter.");
+}
+
+function scopeArray(value) {
+  return uniqueStrings(optionList(value).map(normalizeScopeValue).filter(Boolean));
+}
+
+function normalizeScopeValue(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function optionList(value) {
+  if (value == null || value === false) return [];
+  if (Array.isArray(value)) return value.flatMap(optionList);
+  return String(value).split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function uniqueStrings(values) {
+  return [...new Set(optionList(values))].filter(Boolean);
+}
+
+function importantTerms(value) {
+  return uniqueStrings(String(value || "")
+    .toLowerCase()
+    .split(/[^a-z0-9_+.-]+/g)
+    .filter((term) => term.length >= 3)
+    .filter((term) => !STOP_WORDS.has(term)));
+}
+
+function firstSentence(value) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  const sentence = text.match(/^.{1,80}?(?:[.!?](?:\s|$)|$)/)?.[0] || text.slice(0, 80);
+  return sentence.trim();
+}
+
+function slugify(value) {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/[^\w\s-]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[-\s]+/g, "-")
+    .replace(/^-+|-+$/g, "") || randomUUID();
+}
+
+const STOP_WORDS = new Set([
+  "the", "and", "for", "that", "this", "with", "from", "you", "your", "about", "have", "has", "are", "was", "were",
+  "what", "when", "where", "why", "how", "did", "does", "can", "could", "would", "should", "please", "message"
+]);

@@ -10,6 +10,7 @@ import { routePromptToCodex } from "../src/codex-ipc.mjs";
 import { listRecentThreads, threadIdFromFilename } from "../src/codex-sessions.mjs";
 import { configureConnector, connectorWizard, connectorWizards, CONNECTOR_SETUP_SLOTS, connectorStatuses } from "../src/connectors.mjs";
 import { importContactsFile, loadContacts, resolveContact } from "../src/contacts.mjs";
+import { archiveMatter, formatContextMemory, recallContext, upsertMatter, upsertNote } from "../src/context-memory.mjs";
 import { discordMessageAllowed, ingestDiscordGatewayMessage, normalizeDiscordMessage } from "../src/discord-gateway.mjs";
 import { doctor } from "../src/doctor.mjs";
 import { configureDuty, configureWakeup, dutyStatuses, runDueDuties } from "../src/duties.mjs";
@@ -50,6 +51,8 @@ test("init creates a normal app-support profile and memory files", async () => {
   assert.equal(profile.cwd, path.join(home, "agents", "mira-field"));
   assert.equal(profile.soulPath, path.join(profile.cwd, "AGENTS.md"));
   assert.equal(profile.memory.externalMessagesPath, path.join(profile.cwd, "memory", "external-messages.jsonl"));
+  assert.equal(profile.memory.notesPath, path.join(profile.cwd, "memory", "notes.json"));
+  assert.equal(profile.memory.mattersPath, path.join(profile.cwd, "memory", "matters.json"));
   assert.equal((await loadAgent(null, home)).id, profile.id);
 
   const report = await doctor({ home });
@@ -58,6 +61,8 @@ test("init creates a normal app-support profile and memory files", async () => {
   assert.equal(report.checks.find((check) => check.label === "External inbox").ok, true);
   assert.equal(report.checks.find((check) => check.label === "Codex thread").ok, false);
   assert.match(await fs.readFile(profile.memory.externalMessagesPath, "utf8"), /^$/);
+  assert.deepEqual(JSON.parse(await fs.readFile(profile.memory.notesPath, "utf8")).notes, []);
+  assert.deepEqual(JSON.parse(await fs.readFile(profile.memory.mattersPath, "utf8")).matters, []);
 });
 
 test("local memory recall returns relevant journal entries", async () => {
@@ -72,6 +77,125 @@ test("local memory recall returns relevant journal entries", async () => {
 
   const context = await memoryContext(profile, "morning summary");
   assert.match(context, /morning summaries/);
+});
+
+test("scoped notes and matters recall, archive, and forget temporary context", async () => {
+  const home = await tempHome();
+  const profile = await initAgent({ name: "Memory", soul: "", home });
+
+  await upsertNote(profile, {
+    id: "rma-white-box",
+    title: "RMA white box SKU rule",
+    text: "Use white-box replacement SKUs for RMA replacements unless explicitly authorized otherwise.",
+    scope: {
+      tasks: ["rma-support"],
+      topics: ["rma"]
+    }
+  });
+  await upsertMatter(profile, {
+    id: "dominic-rma",
+    title: "Dominic RMA",
+    summary: "Dominic is waiting on a Pro white-box RMA replacement.",
+    status: "waiting",
+    scope: {
+      people: ["dominic"],
+      tasks: ["rma-support"],
+      cases: ["rma-dominic"]
+    },
+    nextAction: "Check stock before promising a ship date."
+  });
+
+  const recalled = await recallContext(profile, {
+    query: "Dominic Pro white box",
+    scope: {
+      people: ["Dominic"],
+      tasks: ["rma-support"]
+    }
+  });
+  assert.equal(recalled.notes[0].id, "rma-white-box");
+  assert.equal(recalled.matters[0].id, "dominic-rma");
+  assert.match(formatContextMemory(recalled), /Check stock/);
+
+  await archiveMatter(profile, "dominic-rma", {
+    reason: "Replacement shipped."
+  });
+  const afterArchive = await recallContext(profile, {
+    query: "Dominic Pro white box",
+    scope: {
+      people: ["dominic"],
+      tasks: ["rma-support"]
+    }
+  });
+  assert.deepEqual(afterArchive.matters, []);
+  assert.equal(afterArchive.notes[0].id, "rma-white-box");
+});
+
+test("memory CLI lists notes, matters, scoped recall, and archives matters", async () => {
+  const home = await tempHome();
+  await initAgent({ name: "Memory CLI", soul: "", home });
+  const env = { ...process.env, WAKEFIELD_HOME: home };
+
+  await execFileAsync(process.execPath, [
+    "src/cli.mjs",
+    "memory",
+    "notes",
+    "add",
+    "--id",
+    "shipping-style",
+    "--text",
+    "Use concise package updates.",
+    "--person",
+    "joe",
+    "--topic",
+    "package"
+  ], { cwd: path.resolve("."), env });
+  await execFileAsync(process.execPath, [
+    "src/cli.mjs",
+    "memory",
+    "matters",
+    "upsert",
+    "--id",
+    "joe-package",
+    "--summary",
+    "Joe is waiting for a package tracking follow-up.",
+    "--person",
+    "joe",
+    "--topic",
+    "package"
+  ], { cwd: path.resolve("."), env });
+
+  const { stdout: recallOut } = await execFileAsync(process.execPath, [
+    "src/cli.mjs",
+    "memory",
+    "recall",
+    "--query",
+    "tracking package",
+    "--person",
+    "joe"
+  ], { cwd: path.resolve("."), env });
+  assert.match(recallOut, /shipping-style/);
+  assert.match(recallOut, /joe-package/);
+
+  await execFileAsync(process.execPath, [
+    "src/cli.mjs",
+    "memory",
+    "matters",
+    "archive",
+    "joe-package",
+    "--reason",
+    "Tracking sent."
+  ], { cwd: path.resolve("."), env });
+  const { stdout: afterArchive } = await execFileAsync(process.execPath, [
+    "src/cli.mjs",
+    "memory",
+    "recall",
+    "--query",
+    "tracking package",
+    "--person",
+    "joe"
+  ], { cwd: path.resolve("."), env });
+  assert.match(afterArchive, /shipping-style/);
+  assert.doesNotMatch(afterArchive, /joe-package/);
 });
 
 test("selectThread attaches the current agent to a persistent Codex thread", async () => {
@@ -878,6 +1002,84 @@ test("contacts import legacy people maps and annotate external messages", async 
   assert.match(ingested.route.prompt, /business leadership/);
 });
 
+test("external message memory follows a contact across connectors without leaking to other people", async () => {
+  const home = await tempHome();
+  const contactsFile = path.join(home, "people.json");
+  await fs.mkdir(home, { recursive: true });
+  await fs.writeFile(contactsFile, JSON.stringify({
+    version: 1,
+    identity_resolution: {
+      phone_rule: "normalize"
+    },
+    people: {
+      joe: {
+        display_name: "Joe",
+        discord_user_ids: ["joe-discord"],
+        phone_numbers: ["+15550001000"]
+      },
+      terence: {
+        display_name: "Terence",
+        discord_user_ids: ["terence-discord"],
+        phone_numbers: ["+15550002000"]
+      }
+    }
+  }));
+  await importContactsFile(contactsFile, {
+    home,
+    format: "people-v1"
+  });
+  const profile = await initAgent({
+    name: "Cross Channel",
+    soul: "",
+    threadId: "thread-cross-channel",
+    cwd: "/tmp/cross-channel",
+    home
+  });
+  await upsertMatter(profile, {
+    id: "joe-package-followup",
+    title: "Joe package follow-up",
+    summary: "Joe asked about tracking for a replacement package on Discord.",
+    scope: {
+      people: ["joe"],
+      topics: ["package", "tracking"]
+    }
+  });
+
+  const discord = await ingestExternalMessage(profile, {
+    home,
+    connector: "discord",
+    sender: "joe-discord",
+    messageId: "joe-discord-1",
+    text: "Any update on that package?",
+    metadata: {
+      authorId: "joe-discord"
+    }
+  });
+  assert.match(discord.route.prompt, /Wakefield context for this external message/);
+  assert.match(discord.route.prompt, /joe-package-followup/);
+
+  const imessage = await ingestExternalMessage(profile, {
+    home,
+    connector: "imessage",
+    sender: "(555) 000-1000",
+    messageId: "joe-imessage-1",
+    text: "Following up from yesterday on the tracking."
+  });
+  assert.match(imessage.route.prompt, /joe-package-followup/);
+
+  const terence = await ingestExternalMessage(profile, {
+    home,
+    connector: "discord",
+    sender: "terence-discord",
+    messageId: "terence-discord-1",
+    text: "Any update on that package?",
+    metadata: {
+      authorId: "terence-discord"
+    }
+  });
+  assert.doesNotMatch(terence.route.prompt, /joe-package-followup/);
+});
+
 test("Discord connector is ready only when its bot token env var exists", async () => {
   const home = await tempHome();
   const envName = "WAKEFIELD_TEST_DISCORD_TOKEN_READY";
@@ -1627,7 +1829,7 @@ test("manifest describes package, core features, setup commands, and connector s
   assert.equal(manifest.runtime.binary, "wakefield");
   assert.deepEqual(
     manifest.core.filter((feature) => feature.status === "available").map((feature) => feature.id),
-    ["agent-profile", "soul", "thread-selection", "agent-packs", "codex-hooks", "contacts", "local-memory", "local-dreamer", "external-message-ingest", "discord-gateway", "email-rfc822-ingest", "email-imap-poll", "imessage-chatdb-poll", "http-intake", "http-setup-api", "external-message-dispatch", "service-tick", "scheduled-duties", "service-env-file", "service-external-dispatch", "macos-launch-agent", "setup-actions", "menu-snapshot", "clone-self-test", "clone-verify", "one-command-setup", "connector-config", "connector-wizards", "managed-connector-packages", "managed-connector-wizards", "managed-connector-config-init", "managed-connector-mcp-install", "managed-connector-launch-agents"]
+    ["agent-profile", "soul", "thread-selection", "agent-packs", "codex-hooks", "contacts", "local-memory", "scoped-memory-notes", "active-context-matters", "scoped-memory-recall", "local-dreamer", "external-message-ingest", "discord-gateway", "email-rfc822-ingest", "email-imap-poll", "imessage-chatdb-poll", "http-intake", "http-setup-api", "external-message-dispatch", "service-tick", "scheduled-duties", "service-env-file", "service-external-dispatch", "macos-launch-agent", "setup-actions", "menu-snapshot", "clone-self-test", "clone-verify", "one-command-setup", "connector-config", "connector-wizards", "managed-connector-packages", "managed-connector-wizards", "managed-connector-config-init", "managed-connector-mcp-install", "managed-connector-launch-agents"]
   );
   assert.deepEqual(
     manifest.connectors.map((connector) => connector.setupActionId),
@@ -1655,6 +1857,9 @@ test("manifest describes package, core features, setup commands, and connector s
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield imessage poll --json"));
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield inbox pending --json"));
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield inbox dispatch --mode dry-run --json"));
+  assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield memory notes list --json"));
+  assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield memory matters list --json"));
+  assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield memory recall --query $query --json"));
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield dream --json"));
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield service configure --env-file $envFile --json"));
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield service run-once --json"));
@@ -1690,10 +1895,13 @@ test("UserPromptSubmit hook records prompt and injects relevant memory", async (
   process.env.WAKEFIELD_HOME = home;
   try {
     const profile = await initAgent({ name: "Morrow", soul: "", home });
-    await recordMemory(profile, {
-      kind: "preference",
+    await upsertNote(profile, {
+      id: "weekly-planning-style",
+      title: "Weekly planning style",
       text: "Morrow likes a compact weekly planning style.",
-      source: "test"
+      scope: {
+        topics: ["weekly planning"]
+      }
     });
 
     const output = await handleHookInput({
@@ -1705,7 +1913,7 @@ test("UserPromptSubmit hook records prompt and injects relevant memory", async (
     });
 
     assert.equal(output.hookSpecificOutput.hookEventName, "UserPromptSubmit");
-    assert.match(output.hookSpecificOutput.additionalContext, /Wakefield memory relevant to this turn/);
+    assert.match(output.hookSpecificOutput.additionalContext, /Wakefield scoped memory relevant to this turn/);
     assert.match(output.hookSpecificOutput.additionalContext, /weekly planning/);
     assert.doesNotMatch(output.hookSpecificOutput.additionalContext, /Wakefield soul/);
 
@@ -1716,29 +1924,41 @@ test("UserPromptSubmit hook records prompt and injects relevant memory", async (
   }
 });
 
-test("SessionStart hook injects soul and a compact memory primer", async () => {
+test("SessionStart and compaction hooks record lifecycle edges without injecting context", async () => {
   const home = await tempHome();
   process.env.WAKEFIELD_HOME = home;
   try {
     const profile = await initAgent({ name: "Morrow", soul: "A careful planning companion.", home });
-    await recordMemory(profile, {
-      kind: "preference",
-      text: "Morrow prefers quiet session-start summaries.",
-      source: "test"
-    });
 
-    const output = await handleHookInput({
+    const sessionStart = await handleHookInput({
       hook_event_name: "SessionStart",
       session_id: "session-1",
       cwd: profile.cwd,
       source: "compact"
     });
+    const preCompact = await handleHookInput({
+      hook_event_name: "PreCompact",
+      session_id: "session-1",
+      turn_id: "turn-1",
+      cwd: profile.cwd,
+      trigger: "manual"
+    });
+    const postCompact = await handleHookInput({
+      hook_event_name: "PostCompact",
+      session_id: "session-1",
+      turn_id: "turn-1",
+      cwd: profile.cwd,
+      trigger: "manual"
+    });
 
-    assert.equal(output.hookSpecificOutput.hookEventName, "SessionStart");
-    assert.match(output.hookSpecificOutput.additionalContext, /Codex session boundary: compact/);
-    assert.match(output.hookSpecificOutput.additionalContext, /Wakefield soul/);
-    assert.match(output.hookSpecificOutput.additionalContext, /quiet session-start summaries/);
-    assert.match(output.hookSpecificOutput.additionalContext, /transient hook context/);
+    assert.equal(sessionStart, null);
+    assert.deepEqual(preCompact, {});
+    assert.deepEqual(postCompact, {});
+    assert.match(await fs.readFile(profile.memory.journalPath, "utf8"), /session-start/);
+    const dreams = await fs.readFile(profile.memory.dreamsPath, "utf8");
+    assert.match(dreams, /pre-compact/);
+    assert.match(dreams, /post-compact/);
+    assert.doesNotMatch(dreams, /Wakefield soul/);
   } finally {
     delete process.env.WAKEFIELD_HOME;
   }
@@ -1892,6 +2112,23 @@ test("duties can be configured and run through dry-run routing", async () => {
     dispatchMode: "dry-run",
     requiredTools: ["calendar"]
   });
+  await upsertMatter(profile, {
+    id: "morning-check-context",
+    title: "Morning check context",
+    summary: "Review the overnight blocker queue before summarizing.",
+    scope: {
+      tasks: ["morning-check"]
+    }
+  });
+  await upsertMatter(profile, {
+    id: "joe-package-chat",
+    title: "Joe package chat",
+    summary: "Joe asked about a package in a human conversation.",
+    scope: {
+      people: ["joe"],
+      topics: ["package"]
+    }
+  });
 
   const before = await dutyStatuses({
     home,
@@ -1909,6 +2146,8 @@ test("duties can be configured and run through dry-run routing", async () => {
   assert.match(run.results[0].route.prompt, /Scheduled Wakefield wakeup: Morning Check/);
   assert.match(run.results[0].route.prompt, /Use \$wakefield-scheduled-wakeup\./);
   assert.match(run.results[0].route.prompt, /Required tools: calendar/);
+  assert.match(run.results[0].route.prompt, /morning-check-context/);
+  assert.doesNotMatch(run.results[0].route.prompt, /joe-package-chat/);
 
   const after = await dutyStatuses({
     home,

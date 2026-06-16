@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { appConfigPath, appHome, agentDir, agentsDir, externalMessagesPath, memoryPath, profilePath, soulPath, statePath, expandHome, isPathInside } from "./paths.mjs";
+import { appConfigPath, appHome, agentDir, agentsDir, externalMessagesPath, memoryDocumentPath, memoryPath, profilePath, soulPath, statePath, expandHome, isPathInside } from "./paths.mjs";
 import { ensureDir, pathExists, readJson, touch, writeJson } from "./json-store.mjs";
 
 export function slugifyName(name) {
@@ -46,6 +46,8 @@ export async function initAgent({
       inboxPath: memoryPath(agentId, "inbox", home),
       journalPath: memoryPath(agentId, "journal", home),
       dreamsPath: memoryPath(agentId, "dreams", home),
+      notesPath: memoryDocumentPath(agentId, "notes", home),
+      mattersPath: memoryDocumentPath(agentId, "matters", home),
       externalMessagesPath: externalMessagesPath(agentId, home),
       statePath: statePath(agentId, home)
     },
@@ -66,6 +68,16 @@ export async function initAgent({
     openThreads: [],
     updatedAt: now
   });
+  await writeJson(profile.memory.notesPath, {
+    schemaVersion: 1,
+    updatedAt: now,
+    notes: []
+  });
+  await writeJson(profile.memory.mattersPath, {
+    schemaVersion: 1,
+    updatedAt: now,
+    matters: []
+  });
   await touch(profile.memory.inboxPath);
   await touch(profile.memory.journalPath);
   await touch(profile.memory.dreamsPath);
@@ -76,6 +88,42 @@ export async function initAgent({
   });
 
   return profile;
+}
+
+export async function ensureAgentMemory(profile, home = appHome()) {
+  if (!profile) return null;
+  const now = new Date().toISOString();
+  const memory = {
+    provider: "local-jsonl",
+    ...(profile.memory || {}),
+    notesPath: profile.memory?.notesPath || memoryDocumentPath(profile.id, "notes", home),
+    mattersPath: profile.memory?.mattersPath || memoryDocumentPath(profile.id, "matters", home)
+  };
+  const next = {
+    ...profile,
+    memory
+  };
+  let changed = memory.notesPath !== profile.memory?.notesPath
+    || memory.mattersPath !== profile.memory?.mattersPath
+    || memory.provider !== profile.memory?.provider;
+
+  if (!await pathExists(memory.notesPath)) {
+    await writeJson(memory.notesPath, {
+      schemaVersion: 1,
+      updatedAt: now,
+      notes: []
+    });
+  }
+  if (!await pathExists(memory.mattersPath)) {
+    await writeJson(memory.mattersPath, {
+      schemaVersion: 1,
+      updatedAt: now,
+      matters: []
+    });
+  }
+
+  if (changed) return saveAgent(next, home);
+  return next;
 }
 
 export async function loadAppConfig(home = appHome()) {
