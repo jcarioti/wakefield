@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   classifySpectrumBridge,
+  classifySpectrumBridgeWithoutLocalHistory,
   findMatchingConnectorEvent,
   findMatchingPhotonHistoryMessage,
   findMatchingStatusMessage,
@@ -182,6 +183,30 @@ test("classifySpectrumBridge marks row healthy when connector event exists", () 
   assert.equal(result.stateUpdate.lastHandledLocalRowId, 319620);
 });
 
+test("classifySpectrumBridgeWithoutLocalHistory preserves Photon data-plane errors", () => {
+  const result = classifySpectrumBridgeWithoutLocalHistory({
+    status: {
+      updatedAt: "2026-05-24T19:30:50.000Z",
+      receiveLoop: {
+        state: "running",
+        lastErrorAt: "2026-05-24T19:30:49.000Z",
+        lastError: "IMessageError: Unknown server error occurred\n    at fromGrpcError"
+      }
+    },
+    localHistory: {
+      ok: false,
+      skipped: true,
+      error: { message: "local iMessage history skipped" }
+    },
+    now: new Date("2026-05-24T19:30:51.000Z")
+  });
+
+  assert.equal(result.state, "suspect");
+  assert.equal(result.reason, "local_history_unavailable_data_plane_error");
+  assert.equal(result.spectrumError.plane, "data");
+  assert.equal(result.receiveLoop.lastError, "IMessageError: Unknown server error occurred");
+});
+
 test("parseJsonLines parses imsg JSON lines", () => {
   assert.deepEqual(parseJsonLines('{"id":1}\n{"id":2}\n'), [{ id: 1 }, { id: 2 }]);
 });
@@ -233,6 +258,24 @@ test("summarizeIncidentEvidence distinguishes messages missing from Photon histo
   assert.equal(
     summarizeIncidentEvidence({ classification, deepProbe }).conclusion,
     "local_sender_has_message_but_photon_history_does_not"
+  );
+});
+
+test("summarizeIncidentEvidence handles deep probes without local history baseline", () => {
+  assert.equal(
+    summarizeIncidentEvidence({
+      classification: {
+        state: "suspect",
+        latestLocalRow: null
+      },
+      deepProbe: {
+        listInChat: {
+          ok: true,
+          value: { messages: [] }
+        }
+      }
+    }).conclusion,
+    "photon_data_plane_probe_completed_without_local_baseline"
   );
 });
 

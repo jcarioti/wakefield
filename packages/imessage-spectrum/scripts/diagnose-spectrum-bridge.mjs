@@ -15,6 +15,7 @@ Options:
   --artifact-dir <path>    Incident artifact directory.
   --baseline-current       Mark the latest local outbound row as already accounted for.
   --active-imsg-probe      Send one synthetic local imsg message to Rick, then verify live capture.
+  --skip-local-history     Skip local imsg history reads; useful for cloud-only Photon checks.
   --probe-text <text>      Override the synthetic probe text.
   --probe-wait-ms <ms>     Time to wait for the active probe to be captured.
   --probe-poll-ms <ms>     Poll interval while waiting for the active probe.
@@ -74,6 +75,8 @@ function parseArgs(argv) {
       parsed.baselineCurrent = true;
     } else if (arg === "--active-imsg-probe") {
       parsed.activeProbe = true;
+    } else if (arg === "--skip-local-history") {
+      parsed.skipLocalHistory = true;
     } else if (arg === "--probe-text") {
       parsed.probeText = argv[++i];
     } else if (arg.startsWith("--probe-text=")) {

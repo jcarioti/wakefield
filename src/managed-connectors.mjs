@@ -1582,6 +1582,7 @@ function managedConnectorSmokePlan(adapter, status, kind) {
         summary: "Run the local-first Spectrum diagnostic CLI when receive-loop health is suspect.",
         items: [
           `Command: node ${path.join(status.package.path, "scripts/diagnose-spectrum-bridge.mjs")} --config ${status.connectorConfig.path}`,
+          "Cloud-only check: add --deep --skip-local-history when local imsg is unavailable or you only need Photon auth/data-plane evidence.",
           "Optional: add --deep only when a human has approved Photon cloud/API probes.",
           "Optional: add --active-imsg-probe only when a human has approved a synthetic local iMessage probe.",
           "Optional: add --restart-on-stale only when a human has approved restarting the configured Spectrum LaunchAgent after stale evidence."
@@ -1647,7 +1648,7 @@ async function spectrumBridgeStatus(ipcSocketPath) {
         resolve({
           ok: Boolean(response.ok) && !recentError,
           detail: recentError
-            ? `Recent bridge error: ${recentError.message}`
+            ? `Recent ${recentError.label}: ${recentError.message}`
             : response.ok ? response.result?.status || "status returned" : response.error || "status failed",
           response
         });
@@ -1672,12 +1673,21 @@ function recentSpectrumBridgeError(receiveLoop, { now = Date.now(), maxAgeMs = 1
   }
   return {
     at: receiveLoop.lastErrorAt,
-    message: firstLine(receiveLoop.lastError)
+    message: firstLine(receiveLoop.lastError),
+    label: spectrumBridgeErrorLabel(receiveLoop.lastError)
   };
 }
 
 function firstLine(value) {
   return String(value || "").split(/\r?\n/)[0];
+}
+
+function spectrumBridgeErrorLabel(value) {
+  const message = firstLine(value);
+  if (/Authentication failed|unauth/i.test(message)) return "Photon auth error";
+  if (/Target not allowed for this project/i.test(message)) return "Photon target authorization error";
+  if (/Unknown server error|Service temporarily unavailable|internalError|Connection dropped/i.test(message)) return "Photon data-plane error";
+  return "bridge error";
 }
 
 async function execFileJson(execFileImpl, command, args, {

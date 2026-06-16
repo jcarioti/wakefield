@@ -35,6 +35,7 @@ export async function runSpectrumBridgeDiagnostic({
   probePollMs = DEFAULT_PROBE_POLL_MS,
   restartOnStale = false,
   deep = false,
+  skipLocalHistory = false,
   execFileImpl = execFileAsync,
   now = new Date()
 } = {}) {
@@ -45,22 +46,27 @@ export async function runSpectrumBridgeDiagnostic({
   const resolvedArtifactDir = expandPath(artifactDir);
   const target = config.targets.find((entry) => entry.id === "rick") || config.targets[0] || {};
 
-  const [status, state, localRows, eventRecords, outLogTail, errLogTail] = await Promise.all([
+  const [status, state, localHistory, eventRecords, outLogTail, errLogTail] = await Promise.all([
     readJsonFile(config.imessage.spectrum.statusPath),
     readJsonFile(resolvedStatePath, {}),
-    readLocalMessagesHistory({
+    readLocalMessagesHistoryResult({
       imsgPath: config.imessage.imsgPath,
       databasePath: config.imessage.databasePath,
       chatId,
       limit: DEFAULT_HISTORY_LIMIT,
-      execFileImpl
+      execFileImpl,
+      skip: skipLocalHistory
     }),
     readJsonlFile(target.eventLogPath),
     readTail(path.join(path.dirname(config.imessage.spectrum.statusPath), "logs", "launchd.out.log"), 120),
     readTail(path.join(path.dirname(config.imessage.spectrum.statusPath), "logs", "launchd.err.log"), 120)
   ]);
+  const localRows = localHistory.ok ? localHistory.rows : [];
 
   if (baselineCurrent) {
+    if (!localHistory.ok) {
+      throw new Error(`Cannot baseline Spectrum diagnostics because local iMessage history is unavailable: ${localHistory.error?.message || "unknown error"}`);
+    }
     const latest = latestLocalOutbound(localRows);
     const nextState = {
       ...state,
@@ -95,14 +101,20 @@ export async function runSpectrumBridgeDiagnostic({
     });
   }
 
-  const classification = classifySpectrumBridge({
-    status,
-    localRows,
-    eventRecords,
-    state,
-    spaceId,
-    now
-  });
+  const classification = localHistory.ok
+    ? classifySpectrumBridge({
+      status,
+      localRows,
+      eventRecords,
+      state,
+      spaceId,
+      now
+    })
+    : classifySpectrumBridgeWithoutLocalHistory({
+      status,
+      localHistory,
+      now
+    });
 
   let deepProbe = null;
   let restart = null;
@@ -135,6 +147,7 @@ export async function runSpectrumBridgeDiagnostic({
       createdAt: now.toISOString(),
       classification,
       status,
+      localHistory,
       localRows: localRows.slice(0, 8).map(summarizeLocalRow),
       eventRecords: recentRelevantEvents(eventRecords, spaceId),
       deepProbe,
@@ -188,6 +201,7 @@ export async function runSpectrumBridgeDiagnostic({
       lastMatchedInboundAt: status?.lastMatchedInboundAt || null,
       receiveLoop: status?.receiveLoop || null
     },
+    localHistory,
     deepProbe,
     restart,
     nextState
@@ -242,6 +256,43 @@ export function classifySpectrumBridge({
     matchingEvent: summarizeEventRecord(lastMatchingEvent),
     stateUpdate: {
       lastHandledLocalRowId: lastMatchedRow.id
+    }
+  };
+}
+
+export function classifySpectrumBridgeWithoutLocalHistory({
+  status,
+  localHistory,
+  now = new Date()
+}) {
+  const statusFreshness = statusFreshnessSummary(status, now);
+  const receiveLoop = status?.receiveLoop || {};
+  const spectrumError = receiveLoop.lastError ? classifySpectrumError(receiveLoop.lastError) : null;
+  if (spectrumError) {
+    return {
+      state: "suspect",
+      reason: `local_history_unavailable_${spectrumError.reason}`,
+      latestLocalRow: null,
+      localHistory,
+      statusFreshness,
+      receiveLoop: {
+        state: receiveLoop.state || null,
+        lastErrorAt: receiveLoop.lastErrorAt || null,
+        lastError: firstLine(receiveLoop.lastError)
+      },
+      spectrumError
+    };
+  }
+  return {
+    state: statusFreshness.fresh ? "suspect" : "stale",
+    reason: "local_history_unavailable",
+    latestLocalRow: null,
+    localHistory,
+    statusFreshness,
+    receiveLoop: {
+      state: receiveLoop.state || null,
+      lastErrorAt: receiveLoop.lastErrorAt || null,
+      lastError: receiveLoop.lastError ? firstLine(receiveLoop.lastError) : null
     }
   };
 }
@@ -382,6 +433,20 @@ export function summarizeIncidentEvidence({
     };
   }
 
+  if (!classification?.latestLocalRow) {
+    if (deepProbe.listInChat?.ok === true) {
+      return {
+        conclusion: "photon_data_plane_probe_completed_without_local_baseline",
+        nextStep: "Local iMessage history was unavailable, but the Photon data-plane probe completed; re-run with local history or an active probe if a specific missed message needs correlation."
+      };
+    }
+    return {
+      conclusion: "photon_history_probe_failed",
+      listInChat: deepProbe.listInChat || null,
+      nextStep: "Fix or escalate the Photon history/API failure before classifying the live stream."
+    };
+  }
+
   const photonHistoryMatch = findMatchingPhotonHistoryMessage({
     localRow: classification.latestLocalRow,
     deepProbe
@@ -409,6 +474,40 @@ export function summarizeIncidentEvidence({
 export function shouldRestartAfterIncident(evidenceSummary) {
   const evidence = JSON.stringify(evidenceSummary || {});
   return !/Authentication failed|Target not allowed for this project/i.test(evidence);
+}
+
+function classifySpectrumError(value) {
+  const message = firstLine(value);
+  if (/Authentication failed|unauth/i.test(message)) {
+    return {
+      plane: "control",
+      reason: "authentication_error",
+      message
+    };
+  }
+  if (/Target not allowed for this project/i.test(message)) {
+    return {
+      plane: "authorization",
+      reason: "target_authorization_error",
+      message
+    };
+  }
+  if (/Unknown server error|Service temporarily unavailable|internalError|Connection dropped/i.test(message)) {
+    return {
+      plane: "data",
+      reason: "data_plane_error",
+      message
+    };
+  }
+  return {
+    plane: "unknown",
+    reason: "bridge_error",
+    message
+  };
+}
+
+function firstLine(value) {
+  return String(value || "").split(/\r?\n/)[0];
 }
 
 async function runActiveImsgProbe({
@@ -592,6 +691,33 @@ async function readLocalMessagesHistory({
   }
   const { stdout } = await execFileImpl(imsgPath, args, { maxBuffer: 1024 * 1024 * 10 });
   return parseJsonLines(stdout);
+}
+
+async function readLocalMessagesHistoryResult(options) {
+  if (options.skip) {
+    return {
+      ok: false,
+      skipped: true,
+      rows: [],
+      error: {
+        message: "local iMessage history skipped"
+      }
+    };
+  }
+  try {
+    return {
+      ok: true,
+      skipped: false,
+      rows: await readLocalMessagesHistory(options)
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      skipped: false,
+      rows: [],
+      error: errorSummary(error)
+    };
+  }
 }
 
 async function sendLocalImsgProbe({
