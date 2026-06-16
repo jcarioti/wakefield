@@ -52,6 +52,28 @@ test("Discord prompts trigger the Wakefield connector skill", () => {
   assert.doesNotMatch(prompt, /Keep reasoning\/tool traces out of Discord/);
 });
 
+test("Discord prompts can include a bounded Wakefield memory card", () => {
+  const prompt = formatDiscordMessageForCodex({
+    target: { id: "rick", displayName: "Rick" },
+    memory: "Wakefield context for this external message\nActive context:\n- joe-package: [active] Joe package follow-up",
+    message: {
+      id: "message-1",
+      guildId: null,
+      guild: null,
+      channelId: "dm-channel-1",
+      channel: {},
+      author: { id: "user-1", username: "Joe" },
+      createdAt: new Date("2026-05-22T12:00:00Z"),
+      content: "any update?",
+      attachments: new Map()
+    }
+  });
+
+  assert.match(prompt, /Wakefield context for this external message\nActive context:/);
+  assert.match(prompt, /joe-package/);
+  assert.match(prompt, /joe-package[\s\S]+Message:\nany update\?/);
+});
+
 test("DM prompts point Rick at the Discord DM tool", () => {
   const prompt = formatDiscordMessageForCodex({
     target: { id: "rick", displayName: "Rick" },

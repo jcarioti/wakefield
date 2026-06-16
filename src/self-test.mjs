@@ -11,6 +11,7 @@ import { handleHookInput } from "./hooks.mjs";
 import { startHttpIntakeServer } from "./http-intake.mjs";
 import { pollImessageChatDb } from "./imessage-chatdb.mjs";
 import { configureManagedConnector, managedConnectorLaunchAgentPlist, managedConnectorLaunchAgentStatus, managedConnectorStatus, managedConnectorWizard, testManagedConnector } from "./managed-connectors.mjs";
+import { installMemoryMcp, memoryMcpStatus } from "./memory-mcp.mjs";
 import { menuSnapshot } from "./menu-snapshot.mjs";
 import { doctor } from "./doctor.mjs";
 import { loadAgent } from "./profile.mjs";
@@ -139,6 +140,9 @@ export async function runSelfTest({
     ));
     const managedTest = await testManagedConnector("self-test-discord-codex", { home, kind: "status", agent });
     steps.push(check("managed-connector-status-test", managedTest.ok, `${managedTest.checks.length} check(s)`));
+    const memoryMcp = await installMemoryMcp({ home, agent });
+    const memoryMcpCheck = await memoryMcpStatus({ home, agent });
+    steps.push(check("memory-mcp-install", memoryMcp.ok && memoryMcpCheck.ok, memoryMcp.serverName));
     const managedLaunchStatus = await managedConnectorLaunchAgentStatus("self-test-discord-codex", {
       home,
       launchAgentsPath

@@ -1,11 +1,26 @@
+import fs from "node:fs/promises";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readJson, writeJson } from "./json-store.mjs";
 
+const INJECTION_LEDGER_SCHEMA_VERSION = 1;
+const INJECTION_LEDGER_MAX_ENTRIES = 500;
 const NOTES_SCHEMA_VERSION = 1;
 const MATTERS_SCHEMA_VERSION = 1;
 const ACTIVE_MATTER_STATUSES = new Set(["active", "waiting"]);
 const ALL_MATTER_STATUSES = new Set(["active", "waiting", "resolved", "archived"]);
+const EXPLICIT_RECALL_PATTERNS = [
+  /\bremind me\b/i,
+  /\brefresh me\b/i,
+  /\brecap\b/i,
+  /\bwhat do (?:we|you) know\b/i,
+  /\bwhat(?:'s| is) going on\b/i,
+  /\bwhat(?:'s| is) the status\b/i,
+  /\bstatus (?:of|on|for)\b/i,
+  /\bwhere (?:are we|does .+ stand)\b/i,
+  /\bbring me up to speed\b/i,
+  /\bcatch me up\b/i
+];
 
 export async function loadNotes(agent) {
   if (!agent) throw new Error("loadNotes needs an agent profile.");
@@ -145,7 +160,8 @@ export async function contextMemory(agent, {
   limitNotes = 3,
   limitMatters = 3,
   maxChars = 1200,
-  heading = "Wakefield scoped memory"
+  heading = "Wakefield scoped memory",
+  injection = null
 } = {}) {
   const recalled = await recallContext(agent, {
     query,
@@ -153,7 +169,17 @@ export async function contextMemory(agent, {
     limitNotes,
     limitMatters
   });
-  const formatted = formatContextMemory(recalled, { heading });
+  const injectable = injection
+    ? await filterInjectableMemory(agent, recalled, {
+      query,
+      threadId: injection.threadId || agent.threadId || null,
+      lane: injection.lane || "default",
+      force: injection.force,
+      record: injection.record !== false,
+      now: injection.now
+    })
+    : recalled;
+  const formatted = formatContextMemory(injectable, { heading });
   if (!formatted) return "";
   return formatted.length <= maxChars ? formatted : `${formatted.slice(0, maxChars - 3)}...`;
 }
@@ -283,6 +309,175 @@ export function mattersPathForAgent(agent) {
   return path.join(path.dirname(agent.memory.inboxPath), "matters.json");
 }
 
+export function injectionLedgerPathForAgent(agent) {
+  if (agent.memory?.injectionLedgerPath) return agent.memory.injectionLedgerPath;
+  const anchor = agent.memory?.notesPath
+    || agent.memory?.mattersPath
+    || agent.memory?.statePath
+    || agent.memory?.inboxPath
+    || agent.memory?.journalPath
+    || agent.memory?.dreamsPath;
+  return anchor ? path.join(path.dirname(anchor), "injection-ledger.json") : null;
+}
+
+async function filterInjectableMemory(agent, recalled, {
+  query = "",
+  threadId = null,
+  lane = "default",
+  force = false,
+  record = true,
+  now = new Date()
+} = {}) {
+  if (!record) return recalled;
+
+  const ledgerPath = injectionLedgerPathForAgent(agent);
+  if (!ledgerPath) return recalled;
+
+  const compactEpoch = await compactEpochForAgent(agent);
+  const explicit = Boolean(force) || isExplicitRecallRequest(query);
+  const ledger = await readInjectionLedger(ledgerPath);
+  const context = {
+    threadId: normalizeLedgerValue(threadId || agent.threadId || agent.id || "default-thread"),
+    lane: normalizeLedgerValue(lane || "default"),
+    compactEpoch,
+    explicit,
+    now
+  };
+
+  const notes = [];
+  const matters = [];
+  for (const note of recalled.notes || []) {
+    if (shouldInjectMemoryItem(ledger, note, { ...context, type: "note" })) notes.push(note);
+  }
+  for (const matter of recalled.matters || []) {
+    if (shouldInjectMemoryItem(ledger, matter, { ...context, type: "matter" })) matters.push(matter);
+  }
+
+  if (notes.length > 0 || matters.length > 0) {
+    await writeInjectionLedger(ledgerPath, ledger, { now });
+  }
+
+  return { notes, matters };
+}
+
+function shouldInjectMemoryItem(ledger, item, {
+  type,
+  threadId,
+  lane,
+  compactEpoch,
+  explicit,
+  now
+}) {
+  const itemId = item.id || "";
+  if (!itemId) return false;
+  const ledgerKey = [threadId, lane, type, itemId].map(normalizeLedgerValue).join("|");
+  const contentHash = memoryItemHash(item);
+  const previous = ledger.entries[ledgerKey];
+  const reason = injectionReason(previous, { compactEpoch, contentHash, explicit });
+  if (!reason) return false;
+
+  ledger.entries[ledgerKey] = {
+    threadId,
+    lane,
+    type,
+    itemId,
+    compactEpoch,
+    contentHash,
+    lastInjectedAt: now.toISOString(),
+    reason
+  };
+  return true;
+}
+
+function injectionReason(previous, { compactEpoch, contentHash, explicit }) {
+  if (explicit) return "explicit-recall";
+  if (!previous) return "first-in-epoch";
+  if (previous.compactEpoch !== compactEpoch) return "after-compaction";
+  if (previous.contentHash !== contentHash) return "memory-changed";
+  return null;
+}
+
+function isExplicitRecallRequest(query) {
+  const text = String(query || "");
+  return EXPLICIT_RECALL_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function memoryItemHash(item) {
+  const stable = {
+    id: item.id || null,
+    type: item.type || null,
+    title: item.title || null,
+    text: item.text || null,
+    summary: item.summary || null,
+    status: item.status || null,
+    statusReason: item.statusReason || null,
+    scope: normalizeScope(item.scope),
+    nextAction: item.nextAction || null,
+    notifyWhen: item.notifyWhen || null,
+    tags: item.tags || [],
+    sources: item.sources || [],
+    updatedAt: item.updatedAt || null
+  };
+  return createHash("sha256").update(JSON.stringify(stable)).digest("hex");
+}
+
+async function compactEpochForAgent(agent) {
+  const candidates = [];
+  if (agent.memory?.statePath) {
+    const state = await readJson(agent.memory.statePath, null);
+    for (const turn of state?.recentTurns || []) {
+      if (String(turn.summary || "").toLowerCase().includes("compaction")) {
+        candidates.push(turn.at || turn.updatedAt || null);
+      }
+    }
+  }
+  if (agent.memory?.dreamsPath) {
+    for (const entry of await readJsonl(agent.memory.dreamsPath)) {
+      if (entry?.kind === "pre-compact" || entry?.kind === "post-compact") {
+        candidates.push(entry.at || entry.data?.at || null);
+      }
+    }
+  }
+  const latest = candidates
+    .filter(Boolean)
+    .sort()
+    .at(-1);
+  return latest || "initial";
+}
+
+async function readInjectionLedger(file) {
+  const source = await readJson(file, null);
+  return {
+    schemaVersion: INJECTION_LEDGER_SCHEMA_VERSION,
+    updatedAt: source?.updatedAt || null,
+    entries: source?.entries && typeof source.entries === "object" ? source.entries : {}
+  };
+}
+
+async function writeInjectionLedger(file, ledger, { now = new Date() } = {}) {
+  const entries = Object.fromEntries(Object.entries(ledger.entries || {})
+    .sort((left, right) => String(right[1].lastInjectedAt || "").localeCompare(String(left[1].lastInjectedAt || "")))
+    .slice(0, INJECTION_LEDGER_MAX_ENTRIES));
+  await writeJson(file, {
+    schemaVersion: INJECTION_LEDGER_SCHEMA_VERSION,
+    updatedAt: now.toISOString(),
+    entries
+  });
+}
+
+async function readJsonl(file) {
+  if (!file) return [];
+  try {
+    const text = await fs.readFile(file, "utf8");
+    return text.split(/\r?\n/g)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
+}
+
 function normalizeNotesDocument(value) {
   const source = value && typeof value === "object" ? value : {};
   return {
@@ -347,11 +542,21 @@ function normalizeMatter(matter, { now = new Date() } = {}) {
 
 function rankItems(items, { terms, scope, kind }) {
   return items
-    .filter((item) => !scopeConflicts(item.scope, scope))
+    .filter((item) => !scopeConflicts(item.scope, scope) || queryNamesScopedSubject(item, terms))
     .map((item) => ({ item, score: scoreItem(item, { terms, scope, kind }) }))
     .filter(({ score }) => score > 0)
     .sort((left, right) => right.score - left.score || String(right.item.updatedAt || "").localeCompare(String(left.item.updatedAt || "")))
     .map(({ item }) => item);
+}
+
+function queryNamesScopedSubject(item, terms) {
+  if (terms.length === 0) return false;
+  const scope = normalizeScope(item.scope);
+  const scopedSubjects = [
+    ...scope.people,
+    ...scope.cases
+  ].filter(Boolean).join(" ").toLowerCase();
+  return terms.some((term) => term.length >= 4 && scopedSubjects.includes(term));
 }
 
 function scopeConflicts(left, right) {
@@ -480,6 +685,10 @@ function scopeArray(value) {
 
 function normalizeScopeValue(value) {
   return String(value || "").trim().toLowerCase();
+}
+
+function normalizeLedgerValue(value) {
+  return String(value || "").trim().toLowerCase() || "default";
 }
 
 function optionList(value) {

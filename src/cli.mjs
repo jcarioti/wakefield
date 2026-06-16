@@ -21,6 +21,7 @@ import { formatImessagePoll, pollImessageChatDb } from "./imessage-chatdb.mjs";
 import { installWakefield } from "./install.mjs";
 import { formatManifest, wakefieldManifest } from "./manifest.mjs";
 import { configureManagedConnector, formatManagedConnectorConfigInit, formatManagedConnectorMcpInstall, formatManagedConnectorStatuses, formatManagedConnectorTest, formatManagedConnectorWizard, formatManagedLaunchAgentResult, formatManagedLaunchAgentStatus, importManagedConnectors, initializeManagedConnectorConfig, installManagedConnectorMcp, managedConnectorLaunchAgentPlist, managedConnectorLaunchAgentStatus, managedConnectorStatus, managedConnectorStatuses, managedConnectorWizard, managedConnectorWizards, printManagedConnectorMcp, runManagedConnectorProcess, testManagedConnector, installManagedConnectorLaunchAgent, loadManagedConnectorLaunchAgent, unloadManagedConnectorLaunchAgent, uninstallManagedConnectorLaunchAgent } from "./managed-connectors.mjs";
+import { formatMemoryMcpInstall, formatMemoryMcpStatus, installMemoryMcp, memoryMcpStatus, printMemoryMcp } from "./memory-mcp.mjs";
 import { formatMenuSnapshot, menuSnapshot } from "./menu-snapshot.mjs";
 import { compact, formatDreamResult, memoryContext, processDreams, recordMemory } from "./memory.mjs";
 import { appHome } from "./paths.mjs";
@@ -396,6 +397,38 @@ async function main(argv = process.argv.slice(2)) {
       return;
     }
     throw new Error(`Unknown managed connector MCP action: ${action}`);
+  }
+
+  if (command === "mcp" && rest[0] === "memory") {
+    const action = rest[1] || "status";
+    const options = parseOptions(rest.slice(2));
+    const agent = await loadAgent();
+    if (action === "status") {
+      const status = await memoryMcpStatus({
+        agent,
+        codexConfigPath: options.codexConfig || options.codexConfigPath || null
+      });
+      console.log(options.json ? JSON.stringify(status, null, 2) : formatMemoryMcpStatus(status));
+      process.exitCode = status.ok ? 0 : 1;
+      return;
+    }
+    if (action === "print") {
+      process.stdout.write(await printMemoryMcp({
+        agentId: options.agentId || agent?.id || null
+      }));
+      return;
+    }
+    if (action === "install") {
+      const result = await installMemoryMcp({
+        agent,
+        agentId: options.agentId || null,
+        codexConfigPath: options.codexConfig || options.codexConfigPath || null,
+        dryRun: Boolean(options.dryRun)
+      });
+      console.log(options.json ? JSON.stringify(result, null, 2) : formatMemoryMcpInstall(result));
+      return;
+    }
+    throw new Error(`Unknown memory MCP action: ${action}`);
   }
 
   if (command === "managed-connectors" && rest[0] === "run") {
@@ -989,6 +1022,9 @@ function usage() {
     "  wakefield managed-connectors mcp status ID [--json]",
     "  wakefield managed-connectors mcp print ID",
     "  wakefield managed-connectors mcp install ID [--codex-config PATH] [--dry-run] [--json]",
+    "  wakefield mcp memory status [--codex-config PATH] [--json]",
+    "  wakefield mcp memory print",
+    "  wakefield mcp memory install [--codex-config PATH] [--dry-run] [--json]",
     "  wakefield managed-connectors test ID [--kind status|follower-probe|spectrum-bridge|reply-plan|tapback-plan] [--json]",
     "  wakefield managed-connectors launch-agent status ID [--json]",
     "  wakefield managed-connectors launch-agent print ID",

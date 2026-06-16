@@ -247,7 +247,10 @@ export async function formatDutyPrompt(duty, {
   const memory = agent ? await contextMemory(agent, {
     query: [duty.id, duty.label, duty.dutyIds, skills].flat().filter(Boolean).join(" "),
     scope: dutyScope(duty),
-    heading: "Wakefield context for this scheduled wakeup"
+    heading: "Wakefield context for this scheduled wakeup",
+    injection: {
+      lane: `scheduled-wakeup:${duty.id}`
+    }
   }) : "";
   return [
     `Scheduled Wakefield wakeup: ${duty.label || duty.id}`,

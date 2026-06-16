@@ -170,7 +170,10 @@ export async function routeForExternalMessage(agent, message) {
   const memory = await contextMemory(agent, {
     query: [message.subject, message.text].filter(Boolean).join("\n"),
     scope: externalMessageScope(message),
-    heading: "Wakefield context for this external message"
+    heading: "Wakefield context for this external message",
+    injection: {
+      lane: `external-message:${message.connector || "connector"}`
+    }
   });
   return {
     status: ready ? "ready" : "needs-thread",

@@ -26,6 +26,8 @@ import { isPhotonBackpressureError, shouldUsePhotonNativeFallback } from "../pac
 import { installWakefield } from "../src/install.mjs";
 import { configureManagedConnector, importManagedConnectors, initializeManagedConnectorConfig, installManagedConnectorMcp, managedConnectorLaunchAgentPlist, managedConnectorLaunchAgentStatus, managedConnectorStatus, managedConnectorWizard, testManagedConnector } from "../src/managed-connectors.mjs";
 import { wakefieldManifest } from "../src/manifest.mjs";
+import { installMemoryMcp, memoryMcpStatus } from "../src/memory-mcp.mjs";
+import { registerWakefieldMemoryTools } from "../src/mcp-memory-server.mjs";
 import { menuSnapshot } from "../src/menu-snapshot.mjs";
 import { memoryContext, processDreams, recordMemory } from "../src/memory.mjs";
 import { initAgent, loadAgent, selectThread } from "../src/profile.mjs";
@@ -116,6 +118,22 @@ test("scoped notes and matters recall, archive, and forget temporary context", a
   assert.equal(recalled.matters[0].id, "dominic-rma");
   assert.match(formatContextMemory(recalled), /Check stock/);
 
+  const crossPersonSubject = await recallContext(profile, {
+    query: "Did Dominic get the Pro white box?",
+    scope: {
+      people: ["joe"]
+    }
+  });
+  assert.equal(crossPersonSubject.matters[0].id, "dominic-rma");
+
+  const genericOtherPersonScope = await recallContext(profile, {
+    query: "Any RMA update?",
+    scope: {
+      people: ["joe"]
+    }
+  });
+  assert.deepEqual(genericOtherPersonScope.matters, []);
+
   await archiveMatter(profile, "dominic-rma", {
     reason: "Replacement shipped."
   });
@@ -196,6 +214,81 @@ test("memory CLI lists notes, matters, scoped recall, and archives matters", asy
   ], { cwd: path.resolve("."), env });
   assert.match(afterArchive, /shipping-style/);
   assert.doesNotMatch(afterArchive, /joe-package/);
+});
+
+test("memory MCP installs Codex tool config for the selected agent", async () => {
+  const home = await tempHome();
+  const cwd = path.join(home, "agent-cwd");
+  await fs.mkdir(path.join(cwd, ".codex"), { recursive: true });
+  const profile = await initAgent({
+    name: "Memory MCP",
+    soul: "",
+    cwd,
+    home
+  });
+
+  const install = await installMemoryMcp({ home, agent: profile });
+  assert.equal(install.changed, true);
+  assert.equal(install.serverName, "wakefield-memory");
+  assert.ok(install.tools.includes("wakefield_memory_recall"));
+
+  const configText = await fs.readFile(path.join(cwd, ".codex", "config.toml"), "utf8");
+  assert.match(configText, /mcp_servers\.wakefield-memory/);
+  assert.match(configText, /wakefield_memory_upsert_matter/);
+  assert.match(configText, /--home/);
+  assert.match(configText, new RegExp(escapeRegExp(home)));
+
+  const status = await memoryMcpStatus({ home, agent: profile });
+  assert.equal(status.ok, true);
+  assert.equal(status.tools.length, 10);
+});
+
+test("memory MCP tools recall, update, archive, and forget scoped memory", async () => {
+  const home = await tempHome();
+  const profile = await initAgent({ name: "Memory Tooling", soul: "", home });
+  const server = fakeMcpServer();
+  registerWakefieldMemoryTools(server, { agent: profile, home });
+
+  await callMcpTool(server, "wakefield_memory_upsert_note", {
+    id: "package-style",
+    text: "Use concise package status updates.",
+    person: "joe",
+    topic: "package"
+  });
+  await callMcpTool(server, "wakefield_memory_upsert_matter", {
+    id: "joe-package",
+    summary: "Joe is waiting for a package tracking follow-up.",
+    status: "waiting",
+    person: "joe",
+    topic: "package"
+  });
+
+  const recalled = await callMcpTool(server, "wakefield_memory_recall", {
+    query: "tracking package",
+    person: "joe"
+  });
+  assert.equal(recalled.notes[0].id, "package-style");
+  assert.equal(recalled.matters[0].id, "joe-package");
+
+  const archived = await callMcpTool(server, "wakefield_memory_archive_matter", {
+    id: "joe-package",
+    reason: "Tracking sent."
+  });
+  assert.equal(archived.matter.status, "archived");
+
+  const afterArchive = await callMcpTool(server, "wakefield_memory_recall", {
+    query: "tracking package",
+    person: "joe"
+  });
+  assert.equal(afterArchive.notes[0].id, "package-style");
+  assert.deepEqual(afterArchive.matters, []);
+
+  await callMcpTool(server, "wakefield_memory_forget", {
+    type: "note",
+    id: "package-style"
+  });
+  const notes = await callMcpTool(server, "wakefield_memory_list_notes");
+  assert.deepEqual(notes.notes, []);
 });
 
 test("selectThread attaches the current agent to a persistent Codex thread", async () => {
@@ -1829,7 +1922,7 @@ test("manifest describes package, core features, setup commands, and connector s
   assert.equal(manifest.runtime.binary, "wakefield");
   assert.deepEqual(
     manifest.core.filter((feature) => feature.status === "available").map((feature) => feature.id),
-    ["agent-profile", "soul", "thread-selection", "agent-packs", "codex-hooks", "contacts", "local-memory", "scoped-memory-notes", "active-context-matters", "scoped-memory-recall", "local-dreamer", "external-message-ingest", "discord-gateway", "email-rfc822-ingest", "email-imap-poll", "imessage-chatdb-poll", "http-intake", "http-setup-api", "external-message-dispatch", "service-tick", "scheduled-duties", "service-env-file", "service-external-dispatch", "macos-launch-agent", "setup-actions", "menu-snapshot", "clone-self-test", "clone-verify", "one-command-setup", "connector-config", "connector-wizards", "managed-connector-packages", "managed-connector-wizards", "managed-connector-config-init", "managed-connector-mcp-install", "managed-connector-launch-agents"]
+    ["agent-profile", "soul", "thread-selection", "agent-packs", "codex-hooks", "contacts", "local-memory", "scoped-memory-notes", "active-context-matters", "scoped-memory-recall", "memory-mcp-tools", "local-dreamer", "external-message-ingest", "discord-gateway", "email-rfc822-ingest", "email-imap-poll", "imessage-chatdb-poll", "http-intake", "http-setup-api", "external-message-dispatch", "service-tick", "scheduled-duties", "service-env-file", "service-external-dispatch", "macos-launch-agent", "setup-actions", "menu-snapshot", "clone-self-test", "clone-verify", "one-command-setup", "connector-config", "connector-wizards", "managed-connector-packages", "managed-connector-wizards", "managed-connector-config-init", "managed-connector-mcp-install", "managed-connector-launch-agents"]
   );
   assert.deepEqual(
     manifest.connectors.map((connector) => connector.setupActionId),
@@ -1849,6 +1942,8 @@ test("manifest describes package, core features, setup commands, and connector s
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield connectors wizard discord --json"));
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield managed-connectors status --json"));
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield managed-connectors wizards --json"));
+  assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield mcp memory status --json"));
+  assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield mcp memory install --json"));
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield managed-connectors test $connectorId --kind status --json"));
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield managed-connectors launch-agent status $connectorId --json"));
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield discord listen"));
@@ -1919,6 +2014,66 @@ test("UserPromptSubmit hook records prompt and injects relevant memory", async (
 
     const inbox = await fs.readFile(profile.memory.inboxPath, "utf8");
     assert.match(inbox, /weekly plan/);
+  } finally {
+    delete process.env.WAKEFIELD_HOME;
+  }
+});
+
+test("UserPromptSubmit hook suppresses repeated memory until compaction", async () => {
+  const home = await tempHome();
+  process.env.WAKEFIELD_HOME = home;
+  try {
+    const profile = await initAgent({ name: "Morrow", soul: "", home });
+    await upsertNote(profile, {
+      id: "weekly-planning-style",
+      title: "Weekly planning style",
+      text: "Morrow likes a compact weekly planning style.",
+      scope: {
+        topics: ["weekly planning"]
+      }
+    });
+
+    const first = await handleHookInput({
+      hook_event_name: "UserPromptSubmit",
+      session_id: "session-1",
+      turn_id: "turn-1",
+      cwd: profile.cwd,
+      prompt: "Can you make a weekly plan?"
+    });
+    const second = await handleHookInput({
+      hook_event_name: "UserPromptSubmit",
+      session_id: "session-1",
+      turn_id: "turn-2",
+      cwd: profile.cwd,
+      prompt: "Can you make another weekly plan?"
+    });
+
+    assert.match(first.hookSpecificOutput.additionalContext, /weekly planning/);
+    assert.equal(second, null);
+
+    await handleHookInput({
+      hook_event_name: "PreCompact",
+      session_id: "session-1",
+      turn_id: "turn-compact",
+      cwd: profile.cwd,
+      trigger: "manual"
+    });
+    await handleHookInput({
+      hook_event_name: "PostCompact",
+      session_id: "session-1",
+      turn_id: "turn-compact",
+      cwd: profile.cwd,
+      trigger: "manual"
+    });
+
+    const afterCompact = await handleHookInput({
+      hook_event_name: "UserPromptSubmit",
+      session_id: "session-1",
+      turn_id: "turn-3",
+      cwd: profile.cwd,
+      prompt: "Can you make another weekly plan?"
+    });
+    assert.match(afterCompact.hookSpecificOutput.additionalContext, /weekly planning/);
   } finally {
     delete process.env.WAKEFIELD_HOME;
   }
@@ -2867,6 +3022,28 @@ async function createFakeManagedConnector(root, adapterId = "discord-codex", {
     codexConfigPath,
     targetCwd
   };
+}
+
+function fakeMcpServer() {
+  const tools = new Map();
+  return {
+    tools,
+    registerTool(name, config, handler) {
+      tools.set(name, { config, handler });
+    }
+  };
+}
+
+async function callMcpTool(server, name, input = {}) {
+  const tool = server.tools.get(name);
+  assert.ok(tool, `missing MCP tool ${name}`);
+  const result = await tool.handler(input);
+  assert.equal(result.content[0].type, "text");
+  return JSON.parse(result.content[0].text);
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function writeCodexSession(codexHomePath, {

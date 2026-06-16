@@ -9,6 +9,7 @@ import {
 } from "./config.mjs";
 import { sendTextToCodexTarget } from "@wakefield/connector-shared/codex-router.mjs";
 import { findThreadRolloutPath, waitForTurnCompletion } from "@wakefield/connector-shared/codex-rollout-watch.mjs";
+import { wakefieldMemoryForConnectorMessage } from "@wakefield/connector-shared/wakefield-memory.mjs";
 import {
   eventLogRecordFromDiscordMessage,
   formatDiscordMessageForCodex
@@ -77,10 +78,12 @@ client.on("messageCreate", async (message) => {
 
     for (const target of targets) {
       const stopTyping = startDiscordTyping(message.channel, config.discord.typing);
+      const memory = await connectorMemoryForDiscord({ message, target });
       const text = formatDiscordMessageForCodex({
         message,
         target,
-        connectorGuidance: config.codex.connectorSkillPrompt
+        connectorGuidance: config.codex.connectorSkillPrompt,
+        memory
       });
       try {
         const routeResult = await sendTextToCodexTarget({
@@ -100,6 +103,34 @@ client.on("messageCreate", async (message) => {
     console.error(`Failed to route Discord message ${message.id}: ${error.stack || error.message}`);
   }
 });
+
+async function connectorMemoryForDiscord({ message, target }) {
+  try {
+    return await wakefieldMemoryForConnectorMessage({
+      target,
+      query: [
+        message.content,
+        [...message.attachments.values()].map((attachment) => attachment.name || attachment.id)
+      ].flat().filter(Boolean).join("\n"),
+      scope: {
+        connector: "discord",
+        sender: message.author?.id || null,
+        conversation: message.channelId || null,
+        channel: message.channelId || null,
+        room: message.guildId ? message.channelId : null,
+        person: [
+          message.author?.id,
+          message.member?.displayName,
+          message.author?.globalName,
+          message.author?.username
+        ].filter(Boolean)
+      }
+    });
+  } catch (error) {
+    console.warn(`Wakefield memory unavailable for Discord message ${message.id}: ${error.message}`);
+    return "";
+  }
+}
 
 await client.login(botCredential);
 

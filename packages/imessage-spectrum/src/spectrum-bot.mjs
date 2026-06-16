@@ -59,6 +59,7 @@ import {
   findEarlierPendingDeliveryInLane
 } from "./spectrum-delivery-queue.mjs";
 import { SpectrumDeliveryLaneScheduler } from "./spectrum-delivery-lanes.mjs";
+import { wakefieldMemoryForSpectrumMessage } from "./spectrum-memory.mjs";
 
 const args = parseCliArgs();
 if (args.help) {
@@ -366,13 +367,15 @@ async function handleSpectrumMessage({ space, message }) {
   const content = await enrichSpectrumContentFromHistory({ space, message, content: liveContent });
 
   for (const target of matchedTargets) {
+    const memory = await connectorMemoryForSpectrum({ space, message, content, target });
     const text = formatSpectrumMessageForCodex({
       space,
       message,
       target,
       content,
       contacts,
-      connectorGuidance: config.codex.connectorSkillPrompt
+      connectorGuidance: config.codex.connectorSkillPrompt,
+      memory
     });
     const record = await deliveryQueue.upsert(createPendingDeliveryRecord({
       target,
@@ -383,6 +386,10 @@ async function handleSpectrumMessage({ space, message }) {
     }));
     await routeDeliveryRecord(record, { space, message, source: "live" });
   }
+}
+
+async function connectorMemoryForSpectrum({ space, message, content, target }) {
+  return wakefieldMemoryForSpectrumMessage({ space, message, content, target });
 }
 
 async function enrichSpectrumContentFromHistory({ space, message, content }) {
@@ -637,13 +644,20 @@ async function enqueueStartupHistoryReplay({ previousStatus: status }) {
             message: replay.message,
             attachmentDir: config.imessage.spectrum.attachmentDir
           });
+          const memory = await connectorMemoryForSpectrum({
+            space: replay.space,
+            message: replay.message,
+            content,
+            target
+          });
           const text = formatSpectrumMessageForCodex({
             space: replay.space,
             message: replay.message,
             target,
             content,
             contacts,
-            connectorGuidance: config.codex.connectorSkillPrompt
+            connectorGuidance: config.codex.connectorSkillPrompt,
+            memory
           });
           const queued = await deliveryQueue.upsert(createPendingDeliveryRecord({
             target,
@@ -694,13 +708,20 @@ async function enqueuePreviousStatusReplay({ previousStatus: status }) {
         message: replay.message,
         attachmentDir: config.imessage.spectrum.attachmentDir
       });
+      const memory = await connectorMemoryForSpectrum({
+        space: replay.space,
+        message: replay.message,
+        content,
+        target
+      });
       const text = formatSpectrumMessageForCodex({
         space: replay.space,
         message: replay.message,
         target,
         content,
         contacts,
-        connectorGuidance: config.codex.connectorSkillPrompt
+        connectorGuidance: config.codex.connectorSkillPrompt,
+        memory
       });
       const queued = await deliveryQueue.upsert(createPendingDeliveryRecord({
         target,

@@ -101,6 +101,20 @@ test("formatSpectrumMessageForCodex stays compact and includes Spectrum reply ta
   assert.doesNotMatch(text, /Source metadata/);
 });
 
+test("formatSpectrumMessageForCodex can include a bounded Wakefield memory card", () => {
+  const text = formatSpectrumMessageForCodex({
+    space,
+    message,
+    target: { id: "rick" },
+    content: { text: "is Earle closed?", attachments: [] },
+    memory: "Wakefield context for this external message\nActive context:\n- rma-earle-20260514-01: [waiting] Earle RMA"
+  });
+
+  assert.match(text, /Wakefield context for this external message\nActive context:/);
+  assert.match(text, /rma-earle-20260514-01/);
+  assert.match(text, /rma-earle-20260514-01[\s\S]+Message:\nis Earle closed\?/);
+});
+
 test("formatSpectrumMessageForCodex includes quiet group behavior", () => {
   const text = formatSpectrumMessageForCodex({
     space: {

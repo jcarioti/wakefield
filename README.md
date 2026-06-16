@@ -375,6 +375,28 @@ pnpm exec wakefield memory recall --query "tracking package" --person joe
 pnpm exec wakefield memory matters archive joe-package --reason "Tracking sent."
 ```
 
+Install Wakefield memory tools into the selected Codex config:
+
+```bash
+pnpm exec wakefield mcp memory install
+pnpm exec wakefield mcp memory status
+```
+
+This exposes:
+
+- `wakefield_memory_recall`
+- `wakefield_memory_list_notes`
+- `wakefield_memory_get_note`
+- `wakefield_memory_upsert_note`
+- `wakefield_memory_list_matters`
+- `wakefield_memory_get_matter`
+- `wakefield_memory_upsert_matter`
+- `wakefield_memory_archive_matter`
+- `wakefield_memory_forget`
+- `wakefield_memory_status`
+
+Use these tools when Codex needs to deliberately inspect or maintain memory beyond the tiny note card Wakefield injects automatically. The app-support JSON files are Wakefield's storage layer, not the agent-facing API.
+
 The older journal/dreamer path still exists for hook telemetry and future provider integration:
 
 ```bash

@@ -120,7 +120,10 @@ async function promptMemoryContext(agent, query) {
     limitNotes: 2,
     limitMatters: 2,
     maxChars: 1000,
-    heading: "Wakefield scoped memory relevant to this turn"
+    heading: "Wakefield scoped memory relevant to this turn",
+    injection: {
+      lane: "manual-prompt"
+    }
   });
   if (!memory) return "";
   const lines = [

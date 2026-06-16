@@ -15,7 +15,8 @@
     "./codex-rollout-watch.mjs": "./src/codex-rollout-watch.mjs",
     "./codex-router.mjs": "./src/codex-router.mjs",
     "./lock.mjs": "./src/lock.mjs",
-    "./message-batches.mjs": "./src/message-batches.mjs"
+    "./message-batches.mjs": "./src/message-batches.mjs",
+    "./wakefield-memory.mjs": "./src/wakefield-memory.mjs"
   },
   "files": [
     "src"
