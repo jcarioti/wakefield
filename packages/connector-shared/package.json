@@ -1,0 +1,30 @@
+{
+  "name": "@wakefield/connector-shared",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Shared Codex routing and message batching helpers for Wakefield managed connectors.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jcarioti/wakefield.git",
+    "directory": "packages/connector-shared"
+  },
+  "exports": {
+    "./codex-app-server-client.mjs": "./src/codex-app-server-client.mjs",
+    "./codex-ipc-client.mjs": "./src/codex-ipc-client.mjs",
+    "./codex-rollout-watch.mjs": "./src/codex-rollout-watch.mjs",
+    "./codex-router.mjs": "./src/codex-router.mjs",
+    "./lock.mjs": "./src/lock.mjs",
+    "./message-batches.mjs": "./src/message-batches.mjs"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "check": "node --check src/*.mjs && node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

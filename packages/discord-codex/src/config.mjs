@@ -101,7 +101,7 @@ export function expandPath(value, { cwd = process.cwd(), home = os.homedir() } =
 }
 
 export function defaultConfigPath(env = process.env) {
-  return env.CODEX_DISCORD_CONFIG || "connectors/discord-codex/config.local.json";
+  return env.CODEX_DISCORD_CONFIG || "packages/discord-codex/config.local.json";
 }
 
 export async function loadConnectorConfig({

@@ -27,33 +27,25 @@
     "AGENTS.md",
     "LICENSE",
     "README.md",
-    "connectors/*/config.example.json",
-    "connectors/*/package.json",
-    "connectors/*/README.md",
-    "connectors/*/scripts/**",
-    "connectors/*/src/**",
-    "connectors/shared",
     "skills",
     "src"
   ],
   "scripts": {
+    "wakefield": "node src/cli.mjs",
     "check": "node --check src/*.mjs && node --test test/*.test.mjs",
     "doctor": "node src/cli.mjs doctor",
     "http:serve": "node src/cli.mjs http serve",
     "install:wakefield": "node src/cli.mjs install",
     "self-test": "node src/cli.mjs self-test",
     "test": "node --test test/*.test.mjs",
-    "test:discord": "node --test connectors/discord-codex/test/*.test.mjs",
-    "test:imessage": "node --test connectors/imessage-codex/test/*.test.mjs",
+    "test:shared": "pnpm --dir packages/connector-shared test",
+    "test:discord": "pnpm --dir packages/discord-codex test",
+    "test:imessage": "pnpm --dir packages/imessage-spectrum test",
+    "test:connectors": "pnpm run test:shared && pnpm run test:discord && pnpm run test:imessage",
     "verify": "node src/cli.mjs verify"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.20.0",
-    "@photon-ai/advanced-imessage": "0.8.0",
-    "discord.js": "^14.19.3",
     "imapflow": "^1.4.0",
-    "spectrum-ts": "^1.12.0",
-    "zod": "^3.25.76",
     "ws": "^8.21.0"
   },
   "engines": {

@@ -21,7 +21,7 @@ import { handleHookInput } from "../src/hooks.mjs";
 import { startHttpIntakeServer } from "../src/http-intake.mjs";
 import { dispatchExternalMessage } from "../src/inbox-dispatch.mjs";
 import { appleMessageDateToIso, imessageMessageAllowed, normalizeImessageRow, pollImessageChatDb } from "../src/imessage-chatdb.mjs";
-import { isPhotonBackpressureError, shouldUsePhotonNativeFallback } from "../connectors/imessage-codex/src/spectrum-client.mjs";
+import { isPhotonBackpressureError, shouldUsePhotonNativeFallback } from "../packages/imessage-spectrum/src/spectrum-client.mjs";
 import { installWakefield } from "../src/install.mjs";
 import { configureManagedConnector, importManagedConnectors, initializeManagedConnectorConfig, installManagedConnectorMcp, managedConnectorLaunchAgentPlist, managedConnectorLaunchAgentStatus, managedConnectorStatus, managedConnectorWizard, testManagedConnector } from "../src/managed-connectors.mjs";
 import { wakefieldManifest } from "../src/manifest.mjs";
@@ -526,7 +526,7 @@ test("managed connector wizards expose package, MCP, daemon, and smoke-test fact
   const status = await managedConnectorStatus("discord-codex", { home });
   assert.equal(status.ready, true);
   assert.equal(status.running, false);
-  assert.equal(status.package.packageName, "@wakefield/discord-codex-connector");
+  assert.equal(status.package.packageName, "@wakefield/discord-codex");
   assert.equal(status.mcp.tools.includes("discord_send_message"), true);
   assert.equal(status.connectorSkill.name, "wakefield-discord");
 
@@ -550,6 +550,48 @@ test("managed connector wizards expose package, MCP, daemon, and smoke-test fact
   const plist = await managedConnectorLaunchAgentPlist("discord-codex", { home });
   assert.match(plist, /managed-connectors/);
   assert.match(plist, /com.wakefield.test.discord/);
+});
+
+test("managed connectors resolve installed package dependencies without packagePath", async () => {
+  const home = await tempHome();
+  const root = await tempHome();
+  const targetCwd = path.join(root, "target");
+  const configPath = path.join(root, "discord-config.json");
+  await fs.mkdir(path.join(targetCwd, ".codex"), { recursive: true });
+  await fs.writeFile(path.join(targetCwd, "AGENTS.md"), "# Dependency Resolved Agent\n");
+  await fs.writeFile(configPath, JSON.stringify({
+    bot: {
+      tokenEnv: "WAKEFIELD_TEST_MANAGED_DISCORD_TOKEN"
+    },
+    targets: [
+      {
+        id: "self-test",
+        displayName: "Self Test",
+        threadId: "thread-installed-package",
+        cwd: targetCwd,
+        allowedChannelIds: ["channel-1"]
+      }
+    ]
+  }));
+
+  await importManagedConnectors([
+    {
+      id: "discord-codex",
+      adapter: "discord-codex",
+      enabled: true,
+      configPath,
+      targetId: "self-test",
+      mcp: {
+        codexConfigPath: path.join(targetCwd, ".codex", "config.toml")
+      }
+    }
+  ], { home });
+
+  const status = await managedConnectorStatus("discord-codex", { home });
+  assert.equal(status.package.packageName, "@wakefield/discord-codex");
+  assert.equal(status.package.ok, true);
+  assert.match(status.package.path, /packages[\/\\]discord-codex$/);
+  assert.equal(status.connectorConfig.targetId, "self-test");
 });
 
 test("managed connectors initialize local configs and install MCP entries for Discord and Photon Spectrum", async () => {
@@ -2382,7 +2424,7 @@ async function createFakeManagedConnector(root, adapterId = "discord-codex", {
 
   if (adapterId === "discord-codex") {
     await fs.writeFile(path.join(packagePath, "package.json"), JSON.stringify({
-      name: "@wakefield/discord-codex-connector",
+      name: "@wakefield/discord-codex",
       type: "module",
       bin: {
         "discord-codex-bot": "src/discord-bot.mjs",
@@ -2440,7 +2482,7 @@ async function createFakeManagedConnector(root, adapterId = "discord-codex", {
     }
   } else if (adapterId === "imessage-spectrum") {
     await fs.writeFile(path.join(packagePath, "package.json"), JSON.stringify({
-      name: "@wakefield/imessage-codex-connector",
+      name: "@wakefield/imessage-spectrum",
       type: "module",
       bin: {
         "imessage-codex-bot": "src/spectrum-bot.mjs",

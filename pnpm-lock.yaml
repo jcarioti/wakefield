@@ -8,24 +8,44 @@ importers:
 
   .:
     dependencies:
+      imapflow:
+        specifier: ^1.4.0
+        version: 1.4.0
+      ws:
+        specifier: ^8.21.0
+        version: 8.21.0
+
+  packages/connector-shared: {}
+
+  packages/discord-codex:
+    dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.20.0
+        version: 1.29.0(zod@3.25.76)
+      '@wakefield/connector-shared':
+        specifier: workspace:*
+        version: link:../connector-shared
+      discord.js:
+        specifier: ^14.19.3
+        version: 14.26.4
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+
+  packages/imessage-spectrum:
+    dependencies:
       '@modelcontextprotocol/sdk':
         specifier: ^1.20.0
         version: 1.29.0(zod@3.25.76)
       '@photon-ai/advanced-imessage':
         specifier: 0.8.0
         version: 0.8.0
-      discord.js:
-        specifier: ^14.19.3
-        version: 14.26.4
-      imapflow:
-        specifier: ^1.4.0
-        version: 1.4.0
+      '@wakefield/connector-shared':
+        specifier: workspace:*
+        version: link:../connector-shared
       spectrum-ts:
         specifier: ^1.12.0
         version: 1.18.0(typescript@5.9.3)
-      ws:
-        specifier: ^8.21.0
-        version: 8.21.0
       zod:
         specifier: ^3.25.76
         version: 3.25.76

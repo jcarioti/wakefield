@@ -113,7 +113,7 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
 }
 
 export function defaultConfigPath(env = process.env) {
-  return env.CODEX_IMESSAGE_CONFIG || "connectors/imessage-codex/config.local.json";
+  return env.CODEX_IMESSAGE_CONFIG || "packages/imessage-spectrum/config.local.json";
 }
 
 export function expandPath(value, { cwd = process.cwd(), home = os.homedir() } = {}) {

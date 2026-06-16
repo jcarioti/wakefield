@@ -22,13 +22,13 @@ import {
   matchesTarget
 } from "./imessage-message-format.mjs";
 import { startCodexFocusMonitor } from "./imessage-focus.mjs";
-import { sendTextToCodexTarget } from "../../discord-codex/src/codex-router.mjs";
-import { findThreadRolloutPath, waitForTurnCompletion } from "../../discord-codex/src/codex-rollout-watch.mjs";
-import { acquireSingletonProcessLock } from "../../discord-codex/src/lock.mjs";
+import { sendTextToCodexTarget } from "@wakefield/connector-shared/codex-router.mjs";
+import { findThreadRolloutPath, waitForTurnCompletion } from "@wakefield/connector-shared/codex-rollout-watch.mjs";
+import { acquireSingletonProcessLock } from "@wakefield/connector-shared/lock.mjs";
 
 const args = parseCliArgs();
 if (args.help) {
-  console.log("Usage: imessage-codex-bot --config connectors/imessage-codex/config.local.json");
+  console.log("Usage: imessage-codex-bot --config packages/imessage-spectrum/config.local.json");
   process.exit(0);
 }
 

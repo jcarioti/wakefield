@@ -23,7 +23,7 @@ const DEFAULT_PROBE_WAIT_MS = 30000;
 const DEFAULT_PROBE_POLL_MS = 1000;
 
 export async function runSpectrumBridgeDiagnostic({
-  configPath = "connectors/imessage-codex/config.local.json",
+  configPath = "packages/imessage-spectrum/config.local.json",
   chatId = DEFAULT_CHAT_ID,
   spaceId = DEFAULT_SPACE_ID,
   statePath = null,

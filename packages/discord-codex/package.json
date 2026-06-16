@@ -1,15 +1,25 @@
 {
-  "name": "@wakefield/discord-codex-connector",
+  "name": "@wakefield/discord-codex",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "Discord inbound bridge and Discord MCP tools for live Codex app threads.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jcarioti/wakefield.git",
+    "directory": "packages/discord-codex"
+  },
   "bin": {
     "discord-codex-bot": "src/discord-bot.mjs",
     "discord-codex-mcp": "src/mcp-server.mjs",
     "discord-codex-probe-follower": "src/codex-follower-probe.mjs",
     "discord-codex-send": "src/codex-send.mjs"
   },
+  "files": [
+    "README.md",
+    "config.example.json",
+    "src"
+  ],
   "scripts": {
     "bot": "node src/discord-bot.mjs",
     "mcp": "node src/mcp-server.mjs",
@@ -19,6 +29,7 @@
     "check": "node --check src/*.mjs && node --test test/*.test.mjs"
   },
   "dependencies": {
+    "@wakefield/connector-shared": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.20.0",
     "discord.js": "^14.19.3",
     "zod": "^3.25.76"

@@ -27,11 +27,11 @@ import {
   buildRecentMessageBatches,
   normalizeEventLogRecord,
   readJsonlRecords
-} from "../../shared/message-batches.mjs";
+} from "@wakefield/connector-shared/message-batches.mjs";
 
 const args = parseCliArgs();
 if (args.help) {
-  console.log("Usage: imessage-codex-mcp --config connectors/imessage-codex/config.local.json");
+  console.log("Usage: imessage-codex-mcp --config packages/imessage-spectrum/config.local.json");
   process.exit(0);
 }
 

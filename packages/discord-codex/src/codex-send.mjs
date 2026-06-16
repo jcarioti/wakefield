@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { getTarget, loadConnectorConfig, parseCliArgs } from "./config.mjs";
-import { sendTextToCodexTarget } from "./codex-router.mjs";
+import { sendTextToCodexTarget } from "@wakefield/connector-shared/codex-router.mjs";
 
 const args = parseCliArgs();
 if (args.help || !args.text) {
-  console.log("Usage: discord-codex-send --config connectors/discord-codex/config.local.json --target rick --mode auto --text \"hello\"");
+  console.log("Usage: discord-codex-send --config packages/discord-codex/config.local.json --target rick --mode auto --text \"hello\"");
   process.exit(args.help ? 0 : 1);
 }
 

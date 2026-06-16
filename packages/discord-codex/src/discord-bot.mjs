@@ -7,19 +7,19 @@ import {
   loadConnectorConfig,
   parseCliArgs
 } from "./config.mjs";
-import { sendTextToCodexTarget } from "./codex-router.mjs";
-import { findThreadRolloutPath, waitForTurnCompletion } from "./codex-rollout-watch.mjs";
+import { sendTextToCodexTarget } from "@wakefield/connector-shared/codex-router.mjs";
+import { findThreadRolloutPath, waitForTurnCompletion } from "@wakefield/connector-shared/codex-rollout-watch.mjs";
 import {
   eventLogRecordFromDiscordMessage,
   formatDiscordMessageForCodex
 } from "./discord-message-format.mjs";
 import { startCodexPresenceMonitor } from "./discord-presence.mjs";
 import { startDiscordTyping } from "./discord-typing.mjs";
-import { acquireSingletonProcessLock } from "./lock.mjs";
+import { acquireSingletonProcessLock } from "@wakefield/connector-shared/lock.mjs";
 
 const args = parseCliArgs();
 if (args.help) {
-  console.log("Usage: discord-codex-bot --config connectors/discord-codex/config.local.json");
+  console.log("Usage: discord-codex-bot --config packages/discord-codex/config.local.json");
   process.exit(0);
 }
 

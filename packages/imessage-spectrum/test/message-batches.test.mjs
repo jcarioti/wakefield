@@ -7,7 +7,7 @@ import {
   buildRecentMessageBatches,
   normalizeEventLogRecord,
   readJsonlRecords
-} from "../../shared/message-batches.mjs";
+} from "@wakefield/connector-shared/message-batches.mjs";
 
 test("buildRecentMessageBatches returns the latest logical time chunk", () => {
   const batches = buildRecentMessageBatches([

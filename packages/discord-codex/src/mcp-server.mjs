@@ -15,11 +15,11 @@ import {
   sendDiscordChannelMessage,
   sendDiscordDm
 } from "./discord-rest.mjs";
-import { buildRecentMessageBatches } from "../../shared/message-batches.mjs";
+import { buildRecentMessageBatches } from "@wakefield/connector-shared/message-batches.mjs";
 
 const args = parseCliArgs();
 if (args.help) {
-  console.log("Usage: discord-codex-mcp --config connectors/discord-codex/config.local.json");
+  console.log("Usage: discord-codex-mcp --config packages/discord-codex/config.local.json");
   process.exit(0);
 }
 

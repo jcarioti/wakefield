@@ -1,4 +1,4 @@
-import { findThreadRolloutPath, readLatestThreadStatus } from "./codex-rollout-watch.mjs";
+import { findThreadRolloutPath, readLatestThreadStatus } from "@wakefield/connector-shared/codex-rollout-watch.mjs";
 import { ActivityType } from "discord.js";
 
 const DEFAULT_PRESENCE = {

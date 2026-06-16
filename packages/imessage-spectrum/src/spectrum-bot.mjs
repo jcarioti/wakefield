@@ -40,9 +40,9 @@ import {
   formatSpectrumMessageForCodex,
   matchesSpectrumTarget
 } from "./spectrum-message-format.mjs";
-import { sendTextToCodexTarget } from "../../discord-codex/src/codex-router.mjs";
-import { findThreadRolloutPath, waitForTurnCompletion } from "../../discord-codex/src/codex-rollout-watch.mjs";
-import { acquireSingletonProcessLock } from "../../discord-codex/src/lock.mjs";
+import { sendTextToCodexTarget } from "@wakefield/connector-shared/codex-router.mjs";
+import { findThreadRolloutPath, waitForTurnCompletion } from "@wakefield/connector-shared/codex-rollout-watch.mjs";
+import { acquireSingletonProcessLock } from "@wakefield/connector-shared/lock.mjs";
 import {
   createPhotonImessageClients,
   getPhotonMessage,
@@ -62,7 +62,7 @@ import { SpectrumDeliveryLaneScheduler } from "./spectrum-delivery-lanes.mjs";
 
 const args = parseCliArgs();
 if (args.help) {
-  console.log("Usage: imessage-spectrum-bot --config connectors/imessage-codex/config.local.json");
+  console.log("Usage: imessage-spectrum-bot --config packages/imessage-spectrum/config.local.json");
   process.exit(0);
 }
 

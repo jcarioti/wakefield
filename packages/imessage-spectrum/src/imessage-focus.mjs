@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import {
   findThreadRolloutPath,
   readLatestThreadStatus
-} from "../../discord-codex/src/codex-rollout-watch.mjs";
+} from "@wakefield/connector-shared/codex-rollout-watch.mjs";
 
 const DEFAULT_FOCUS = {
   enabled: false,

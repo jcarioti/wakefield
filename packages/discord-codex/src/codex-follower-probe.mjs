@@ -1,21 +1,21 @@
 #!/usr/bin/env node
-import { CodexIpcClient } from "./codex-ipc-client.mjs";
+import { CodexIpcClient } from "@wakefield/connector-shared/codex-ipc-client.mjs";
 import {
   findThreadRolloutPath,
   readLatestThreadStatus
-} from "./codex-rollout-watch.mjs";
+} from "@wakefield/connector-shared/codex-rollout-watch.mjs";
 import {
   extractTurnId,
   isInactiveTurnError,
   isMissingFollowerClientError
-} from "./codex-router.mjs";
+} from "@wakefield/connector-shared/codex-router.mjs";
 import { getTarget, loadConnectorConfig, parseCliArgs } from "./config.mjs";
 
 const PROBE_TEXT = "[DIAGNOSTIC ONLY] Codex follower registration probe. No reply needed.";
 
 const args = parseCliArgs();
 if (args.help) {
-  console.log("Usage: discord-codex-probe-follower --config connectors/discord-codex/config.local.json --target rick");
+  console.log("Usage: discord-codex-probe-follower --config packages/discord-codex/config.local.json --target rick");
   process.exit(0);
 }
 

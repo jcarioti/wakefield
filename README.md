@@ -37,7 +37,8 @@ Wakefield has a few first-class objects:
 ## Requirements
 
 - Node.js 20 or newer
-- pnpm
+- pnpm for Wakefield development
+- npm, pnpm, or yarn for projects that consume Wakefield as a dependency
 - Codex desktop app for IPC-routed turns and visible conversation sync
 - macOS for LaunchAgent helpers and local Messages database polling
 - Optional connector credentials:
@@ -55,6 +56,49 @@ cd wakefield
 pnpm install
 pnpm verify
 ```
+
+Use this path when you want to contribute to Wakefield itself. In a checkout of this repo, run the CLI through the local script:
+
+```bash
+pnpm wakefield manifest --json
+pnpm wakefield setup status
+```
+
+## Use In An Agent Project
+
+You do not need to clone Wakefield to build a new agent. Create a small agent repo that carries the agent pack, soul, contacts, and skills, then install Wakefield as a dependency.
+
+```json
+{
+  "dependencies": {
+    "wakefield": "^0.1.0"
+  },
+  "optionalDependencies": {
+    "@wakefield/discord-codex": "^0.1.0",
+    "@wakefield/imessage-spectrum": "^0.1.0"
+  },
+  "scripts": {
+    "wakefield": "wakefield",
+    "verify": "wakefield verify",
+    "install-agent": "wakefield pack install --file wakefield-pack.json"
+  }
+}
+```
+
+Then run Wakefield through your package manager:
+
+```bash
+pnpm wakefield setup status
+npm exec wakefield -- setup status
+yarn wakefield setup status
+```
+
+The core `wakefield` package is intentionally light. Managed connector packages are optional:
+
+- `@wakefield/discord-codex` for the Discord Gateway/MCP connector
+- `@wakefield/imessage-spectrum` for the Photon/Spectrum iMessage connector
+
+The Photon/Spectrum package includes native/transitive provider dependencies. npm and yarn run those builds as part of install; pnpm may ask you to approve the native builds before first use.
 
 Create or reuse a local agent:
 
@@ -205,8 +249,8 @@ Wakefield supports two connector levels.
 
 **Managed connector packages** are supervised connector runtimes with MCP reply tools and LaunchAgent wiring:
 
-- `discord-codex`
-- `imessage-spectrum`
+- `@wakefield/discord-codex` (`discord-codex` adapter id)
+- `@wakefield/imessage-spectrum` (`imessage-spectrum` adapter id)
 
 Check connector state:
 
@@ -424,14 +468,18 @@ pnpm verify
 Run connector tests directly:
 
 ```bash
-node --test connectors/imessage-codex/test/*.test.mjs
-node --test connectors/discord-codex/test/*.test.mjs
+pnpm run test:shared
+pnpm run test:discord
+pnpm run test:imessage
 ```
 
 Package smoke test:
 
 ```bash
 npm pack --dry-run
+pnpm --dir packages/connector-shared pack --dry-run
+pnpm --dir packages/discord-codex pack --dry-run
+pnpm --dir packages/imessage-spectrum pack --dry-run
 ```
 
 ## License

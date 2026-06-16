@@ -407,7 +407,7 @@ async function createManagedConnectorFixture(root, {
   await fs.mkdir(path.join(targetCwd, ".codex"), { recursive: true });
   await fs.writeFile(path.join(targetCwd, "AGENTS.md"), "# Managed Connector Self Test\n");
   await fs.writeFile(path.join(packagePath, "package.json"), JSON.stringify({
-    name: "@wakefield/discord-codex-connector",
+    name: "@wakefield/discord-codex",
     type: "module",
     bin: {
       "discord-codex-bot": "src/discord-bot.mjs",

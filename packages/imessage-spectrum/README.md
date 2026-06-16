@@ -56,7 +56,7 @@ Typing indicators and programmatic read marking on the `imsg` provider require `
 ## Configure
 
 ```bash
-cd connectors/imessage-codex
+cd packages/imessage-spectrum
 cp config.example.json config.local.json
 ```
 
@@ -107,7 +107,7 @@ pnpm bot -- --config config.local.json
 Codex MCP command:
 
 ```bash
-node connectors/imessage-codex/src/mcp-server.mjs --config connectors/imessage-codex/config.local.json
+node packages/imessage-spectrum/src/mcp-server.mjs --config packages/imessage-spectrum/config.local.json
 ```
 
 ## Spectrum Ingest Diagnostics

@@ -22,7 +22,7 @@ Dependencies are installed from the repo root as part of the pnpm workspace:
 ```bash
 cd wakefield
 pnpm install
-cp connectors/discord-codex/config.example.json connectors/discord-codex/config.local.json
+cp packages/discord-codex/config.example.json packages/discord-codex/config.local.json
 ```
 
 Keep the Discord bot credential in the environment or in a local token file:
@@ -34,7 +34,7 @@ export DISCORD_BOT_TOKEN=...
 By default, `config.example.json` points at a local token file:
 
 ```bash
-~/.codex/connectors/discord-codex/bot-token
+~/.codex/packages/discord-codex/bot-token
 ```
 
 The Discord bot needs the Message Content intent and access to the target guild/channels.
@@ -65,7 +65,7 @@ Persistent launchd service on this Mac:
 ```bash
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.wakefield.discord-codex-connector.plist
 launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.wakefield.discord-codex-connector.plist
-tail -f ~/.codex/connectors/discord-codex/logs/launchd.out.log
+tail -f ~/.codex/packages/discord-codex/logs/launchd.out.log
 ```
 
 Manual Codex IPC probe:
@@ -89,7 +89,7 @@ pnpm probe:follower -- --config config.local.json --target rick
 Codex MCP command:
 
 ```bash
-node connectors/discord-codex/src/mcp-server.mjs --config connectors/discord-codex/config.local.json
+node packages/discord-codex/src/mcp-server.mjs --config packages/discord-codex/config.local.json
 ```
 
 ## Runtime Rules

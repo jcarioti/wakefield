@@ -3,6 +3,8 @@ import { readFileSync, statSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { execFile, spawn } from "node:child_process";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { ensureDir, pathExists, readJson, writeJson } from "./json-store.mjs";
 import { appHome, expandHome, launchAgentsDir, logsDir, managedConnectorsConfigPath, serviceConfigPath } from "./paths.mjs";
@@ -10,6 +12,7 @@ import { loadEnvFile } from "./service-env.mjs";
 import { connectorSkill, connectorSkillPrompt } from "./connector-skills.mjs";
 
 const execFileAsync = promisify(execFile);
+const require = createRequire(import.meta.url);
 const CONFIG_SCHEMA_VERSION = 1;
 const DEFAULT_THROTTLE_INTERVAL = 10;
 
@@ -18,7 +21,8 @@ export const MANAGED_CONNECTOR_ADAPTERS = [
     id: "discord-codex",
     name: "Discord Codex Connector",
     connectorId: "discord",
-    packageName: "@wakefield/discord-codex-connector",
+    packageName: "@wakefield/discord-codex",
+    workspacePath: "packages/discord-codex",
     description: "Supervise a mature Discord Gateway connector and expose its Codex MCP reply tools.",
     capabilities: [
       "inbound-discord-gateway",
@@ -79,7 +83,8 @@ export const MANAGED_CONNECTOR_ADAPTERS = [
     id: "imessage-spectrum",
     name: "Photon/Spectrum iMessage Connector",
     connectorId: "imessage",
-    packageName: "@wakefield/imessage-codex-connector",
+    packageName: "@wakefield/imessage-spectrum",
+    workspacePath: "packages/imessage-spectrum",
     description: "Supervise the Photon/Spectrum iMessage connector and expose send, reply, tapback, lookup, and typing tools.",
     capabilities: [
       "inbound-spectrum-stream",
@@ -811,7 +816,7 @@ export async function loadManagedConnectorConfigs({
   home = appHome()
 } = {}) {
   const store = await readManagedConnectorStore({ home });
-  return Object.values(store.connectors).map((config) => normalizeManagedConnectorConfig(config));
+  return Object.values(store.connectors).map((config) => resolveManagedPackagePath(normalizeManagedConnectorConfig(config)));
 }
 
 export function managedConnectorAdapter(id) {
@@ -1061,6 +1066,39 @@ function normalizeManagedConnectorConfig(config, {
   };
 }
 
+function resolveManagedPackagePath(config) {
+  if (config.packagePath) return config;
+  let adapter = null;
+  try {
+    adapter = managedConnectorAdapter(config.adapter);
+  } catch {
+    return config;
+  }
+  const packagePath = resolveInstalledPackagePath(adapter.packageName)
+    || resolveWorkspacePackagePath(adapter.workspacePath);
+  return packagePath ? { ...config, packagePath } : config;
+}
+
+function resolveInstalledPackagePath(packageName) {
+  try {
+    return path.dirname(require.resolve(`${packageName}/package.json`));
+  } catch {
+    return null;
+  }
+}
+
+function resolveWorkspacePackagePath(workspacePath) {
+  if (!workspacePath) return null;
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const candidate = path.join(root, workspacePath);
+  try {
+    const stat = statSync(path.join(candidate, "package.json"));
+    return stat.isFile() ? candidate : null;
+  } catch {
+    return null;
+  }
+}
+
 function resolveConfigPath(value, { cwd }) {
   const expanded = expandHome(String(value));
   return path.isAbsolute(expanded) ? expanded : path.resolve(cwd || process.cwd(), expanded);
@@ -1069,7 +1107,7 @@ function resolveConfigPath(value, { cwd }) {
 async function inspectManagedPackage(adapter, config) {
   const checks = [];
   const packagePath = config.packagePath;
-  checks.push(check("package path", Boolean(packagePath), packagePath || "missing"));
+  checks.push(check("package path", Boolean(packagePath), packagePath || `${adapter.packageName} is not installed and packagePath is not set`));
   if (!packagePath) {
     return {
       ok: false,
