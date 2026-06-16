@@ -16,7 +16,7 @@ import { configureDuty, configureWakeup, dutyStatuses, runDueDuties } from "../s
 import { pollEmailImap } from "../src/email-imap.mjs";
 import { ingestEmailRfc822, parseRfc822 } from "../src/email-rfc822.mjs";
 import { acknowledgeExternalMessage, ingestExternalMessage, listExternalMessages } from "../src/external-messages.mjs";
-import { hooksStatus } from "../src/hook-manager.mjs";
+import { hooksStatus, wakefieldHookCommand } from "../src/hook-manager.mjs";
 import { handleHookInput } from "../src/hooks.mjs";
 import { startHttpIntakeServer } from "../src/http-intake.mjs";
 import { dispatchExternalMessage } from "../src/inbox-dispatch.mjs";
@@ -114,9 +114,14 @@ test("install creates an agent and idempotent Codex hook config", async () => {
   assert.equal(first.skillResult.configured, true);
   assert.equal(second.skillResult.installed.every((skill) => skill.changed === false), true);
 
-  const status = await hooksStatus({ codexHomePath });
+  const status = await hooksStatus({
+    command: wakefieldHookCommand({ home }),
+    codexHomePath
+  });
   assert.equal(status.configured, true);
   assert.equal(status.commands.length, 1);
+  assert.match(status.commands[0], /WAKEFIELD_HOME=/);
+  assert.match(status.commands[0], /hook$/);
   assert.equal((await wakefieldSkillsStatus({ codexHomePath })).configured, true);
 
   const hooksJson = await fs.readFile(status.hooksPath, "utf8");
@@ -294,7 +299,10 @@ test("runSetup gives clone installs a one-command idempotent setup path", async 
   assert.equal((await serviceStatus({ home })).enabled, true);
   assert.equal((await serviceStatus({ home })).externalDispatch.enabled, true);
   assert.equal((await serviceStatus({ home })).externalDispatch.limit, 2);
-  assert.equal((await hooksStatus({ codexHomePath })).configured, true);
+  assert.equal((await hooksStatus({
+    command: wakefieldHookCommand({ home }),
+    codexHomePath
+  })).configured, true);
   assert.equal((await wakefieldSkillsStatus({ codexHomePath })).configured, true);
 
   const second = await runSetup({

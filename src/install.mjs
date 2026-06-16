@@ -1,6 +1,6 @@
 import path from "node:path";
 import { doctor } from "./doctor.mjs";
-import { installHooks } from "./hook-manager.mjs";
+import { installHooks, wakefieldHookCommand } from "./hook-manager.mjs";
 import { appHome, expandHome } from "./paths.mjs";
 import { initAgent, loadAgent, saveAgent, selectThread } from "./profile.mjs";
 import { installWakefieldSkills } from "./skills.mjs";
@@ -44,7 +44,10 @@ export async function installWakefield({
 
   const hookResult = skipHooks
     ? null
-    : await installHooks({ codexHomePath: codexHomePath || undefined });
+    : await installHooks({
+      command: wakefieldHookCommand({ home }),
+      codexHomePath: codexHomePath || undefined
+    });
   const skillResult = skipSkills
     ? null
     : await installWakefieldSkills({ codexHomePath: codexHomePath || undefined });

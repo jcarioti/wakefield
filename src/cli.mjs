@@ -860,7 +860,7 @@ async function main(argv = process.argv.slice(2)) {
   }
 
   if (command === "hooks" && rest[0] === "print-config") {
-    const config = hookConfig({ command: wakefieldHookCommand(), statusMessage: "Wakefield memory" });
+    const config = hookConfig({ command: wakefieldHookCommand({ home: appHome() }), statusMessage: "Wakefield memory" });
     console.log(JSON.stringify(config, null, 2));
     return;
   }

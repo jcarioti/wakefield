@@ -8,7 +8,7 @@ export async function doctor({ home = appHome(), codexHomePath = null } = {}) {
   const agents = await listAgents(home);
   const current = await loadAgent(null, home);
   const hooks = await hooksStatus({
-    command: wakefieldHookCommand(),
+    command: wakefieldHookCommand({ home }),
     codexHomePath: codexHomePath || undefined
   });
   const skills = await wakefieldSkillsStatus({ codexHomePath: codexHomePath || undefined });
