@@ -43,6 +43,7 @@ import {
 import { sendTextToCodexTarget } from "@wakefield/connector-shared/codex-router.mjs";
 import { findThreadRolloutPath, waitForTurnCompletion } from "@wakefield/connector-shared/codex-rollout-watch.mjs";
 import { acquireSingletonProcessLock } from "@wakefield/connector-shared/lock.mjs";
+import { recordWakefieldConnectorTurn } from "@wakefield/connector-shared/wakefield-memory.mjs";
 import {
   createPhotonImessageClients,
   getPhotonMessage,
@@ -498,7 +499,7 @@ async function routeDeliveryRecordNow(record, { space = null, message = null, so
     await deliveryQueue.markDelivered(deliveryRecord.id, routeResult);
     console.log(`Routed Photon/Spectrum iMessage ${deliveryRecord.messageId} to ${target.id} via Codex ${routeResult.action}${source === "live" ? "" : ` (${source} replay)`}.`);
     if (space && message) {
-      schedulePostRouteEffects({ target, routeResult, space, message });
+      schedulePostRouteEffects({ target, routeResult, space, message, prompt: deliveryRecord.codexText });
     } else {
       scheduleReplayPostRouteEffects({ record: deliveryRecord });
     }
@@ -513,7 +514,7 @@ async function routeDeliveryRecordNow(record, { space = null, message = null, so
   }
 }
 
-function schedulePostRouteEffects({ target, routeResult, space, message }) {
+function schedulePostRouteEffects({ target, routeResult, space, message, prompt = "" }) {
   Promise.resolve()
     .then(() => maybeMarkRead({ space, message }))
     .catch((error) => {
@@ -527,6 +528,7 @@ function schedulePostRouteEffects({ target, routeResult, space, message }) {
   const stopTyping = startTypingWhileThinking({ space, typing: config.imessage.typing });
   Promise.resolve()
     .then(() => keepTypingUntilTurnCompletes({ target, routeResult, message }))
+    .then((completionStatus) => recordSpectrumConnectorTurn({ target, routeResult, completionStatus, space, message, prompt }))
     .catch((error) => {
       console.warn(`Photon/Spectrum typing watcher failed after routing ${message.id}: ${error.message}`);
     })
@@ -1047,7 +1049,7 @@ function sleep(ms) {
 
 async function keepTypingUntilTurnCompletes({ target, routeResult, message }) {
   if (!routeResult.turnId) {
-    return;
+    return null;
   }
   const rolloutPath = target.rolloutPath || await findThreadRolloutPath(target.threadId);
   const status = await waitForTurnCompletion({
@@ -1062,10 +1064,48 @@ async function keepTypingUntilTurnCompletes({ target, routeResult, message }) {
   });
   if (status.completed) {
     console.log(`Codex turn ${routeResult.turnId} completed for Photon/Spectrum iMessage ${message.id}.`);
+    return status;
   } else if (status.outboundToolCallEnded) {
     console.log(`Stopped Photon/Spectrum typing for ${message.id} after ${status.toolCall.server}/${status.toolCall.tool}.`);
+    const finalStatus = await waitForTurnCompletion({
+      rolloutPath,
+      turnId: routeResult.turnId,
+      timeoutMs: Math.min(config.imessage.typing.completionTimeoutMs, 120000),
+      pollMs: config.imessage.typing.completionPollMs
+    });
+    if (finalStatus.completed) {
+      console.log(`Codex turn ${routeResult.turnId} completed for Photon/Spectrum iMessage ${message.id}.`);
+      return finalStatus;
+    }
+    return status;
   } else {
     console.warn(`Stopped waiting for Codex turn ${routeResult.turnId} (${status.reason}) for Photon/Spectrum iMessage ${message.id}.`);
+    return status;
+  }
+}
+
+async function recordSpectrumConnectorTurn({ target, routeResult, completionStatus, space, message, prompt }) {
+  try {
+    const result = await recordWakefieldConnectorTurn({
+      target,
+      connector: "imessage",
+      messageId: message.id,
+      prompt,
+      routeResult,
+      completionStatus,
+      scope: {
+        connector: "imessage",
+        sender: message.sender?.id || null,
+        conversation: space?.id || null,
+        channel: space?.id || null,
+        room: spectrumSpaceType(space) === "group" ? space?.id || null : null
+      }
+    });
+    if (!result.ok) {
+      console.warn(`Wakefield memory record skipped for Photon/Spectrum iMessage ${message.id}: ${result.reason}`);
+    }
+  } catch (error) {
+    console.warn(`Wakefield memory record failed for Photon/Spectrum iMessage ${message.id}: ${error.message}`);
   }
 }
 

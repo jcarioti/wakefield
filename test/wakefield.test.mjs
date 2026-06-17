@@ -2337,6 +2337,8 @@ test("memory capture uses Codex exec as the default reviewer", async () => {
         assert.ok(args.includes("--ignore-rules"));
         assert.ok(args.includes("--skip-git-repo-check"));
         assert.equal(args[args.indexOf("--model") + 1], "test-codex-model");
+        assert.equal(args.at(-1), "-");
+        assert.match(options.input, /Photon\/Spectrum iMessage appears degraded/);
         assert.equal(options.env.WAKEFIELD_CODEX_DREAMER, "1");
         return {
           stdout: JSON.stringify({

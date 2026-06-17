@@ -25,7 +25,7 @@ import { startCodexFocusMonitor } from "./imessage-focus.mjs";
 import { sendTextToCodexTarget } from "@wakefield/connector-shared/codex-router.mjs";
 import { findThreadRolloutPath, waitForTurnCompletion } from "@wakefield/connector-shared/codex-rollout-watch.mjs";
 import { acquireSingletonProcessLock } from "@wakefield/connector-shared/lock.mjs";
-import { wakefieldMemoryForConnectorMessage } from "@wakefield/connector-shared/wakefield-memory.mjs";
+import { recordWakefieldConnectorTurn, wakefieldMemoryForConnectorMessage } from "@wakefield/connector-shared/wakefield-memory.mjs";
 
 const args = parseCliArgs();
 if (args.help) {
@@ -111,8 +111,9 @@ async function handleImessage(message) {
           target: replyTarget
         });
       }
-      await keepTypingUntilTurnCompletes({ target, routeResult, message });
+      const completionStatus = await keepTypingUntilTurnCompletes({ target, routeResult, message });
       await appendEventLog(target, eventLogRecordFromImessage({ message, target, routeResult, contacts }));
+      await recordConnectorTurn({ target, routeResult, completionStatus, message, text });
       await advanceState(message.id);
       console.log(`Routed iMessage row ${message.id} to ${target.id} via Codex ${routeResult.action}.`);
     } finally {
@@ -159,7 +160,7 @@ async function maybeMarkRead({ message, replyTarget }) {
 
 async function keepTypingUntilTurnCompletes({ target, routeResult, message }) {
   if (!routeResult.turnId) {
-    return;
+    return null;
   }
   const rolloutPath = target.rolloutPath || await findThreadRolloutPath(target.threadId);
   const status = await waitForTurnCompletion({
@@ -174,10 +175,49 @@ async function keepTypingUntilTurnCompletes({ target, routeResult, message }) {
   });
   if (status.completed) {
     console.log(`Codex turn ${routeResult.turnId} completed for iMessage row ${message.id}.`);
+    return status;
   } else if (status.outboundToolCallEnded) {
     console.log(`Stopped iMessage typing for row ${message.id} after ${status.toolCall.server}/${status.toolCall.tool}.`);
+    const finalStatus = await waitForTurnCompletion({
+      rolloutPath,
+      turnId: routeResult.turnId,
+      timeoutMs: Math.min(config.imessage.typing.completionTimeoutMs, 120000),
+      pollMs: config.imessage.typing.completionPollMs
+    });
+    if (finalStatus.completed) {
+      console.log(`Codex turn ${routeResult.turnId} completed for iMessage row ${message.id}.`);
+      return finalStatus;
+    }
+    return status;
   } else {
     console.warn(`Stopped waiting for Codex turn ${routeResult.turnId} (${status.reason}) for iMessage row ${message.id}.`);
+    return status;
+  }
+}
+
+async function recordConnectorTurn({ target, routeResult, completionStatus, message, text }) {
+  try {
+    const conversation = message.chat_guid || message.chat_identifier || (message.chat_id == null ? null : String(message.chat_id));
+    const result = await recordWakefieldConnectorTurn({
+      target,
+      connector: "imessage",
+      messageId: String(message.id),
+      prompt: text,
+      routeResult,
+      completionStatus,
+      scope: {
+        connector: "imessage",
+        sender: message.sender || null,
+        conversation,
+        channel: conversation,
+        room: message.is_group ? conversation : null
+      }
+    });
+    if (!result.ok) {
+      console.warn(`Wakefield memory record skipped for iMessage row ${message.id}: ${result.reason}`);
+    }
+  } catch (error) {
+    console.warn(`Wakefield memory record failed for iMessage row ${message.id}: ${error.message}`);
   }
 }
 

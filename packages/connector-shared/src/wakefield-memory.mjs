@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 
@@ -54,6 +54,74 @@ export async function wakefieldMemoryForConnectorMessage({
   const formatted = formatContextMemory(injectable, { heading });
   if (!formatted) return "";
   return formatted.length <= maxChars ? formatted : `${formatted.slice(0, maxChars - 3)}...`;
+}
+
+export async function recordWakefieldConnectorTurn({
+  target,
+  connector,
+  messageId = null,
+  prompt = "",
+  routeResult = null,
+  completionStatus = null,
+  scope = {},
+  home = wakefieldHome(),
+  now = new Date()
+} = {}) {
+  const agent = await findWakefieldAgentForConnectorTarget(target, { home });
+  if (!agent) return { ok: false, reason: "agent-not-found" };
+
+  const sessionId = target?.threadId || agent.threadId || null;
+  const turnId = routeResult?.turnId || completionStatus?.turnId || null;
+  if (!turnId) return { ok: false, reason: "missing-turn-id" };
+
+  const source = `connector:${connector || "unknown"}`;
+  const data = {
+    sessionId,
+    turnId,
+    connector: connector || null,
+    messageId,
+    codexRoute: routeResult?.action || null,
+    completionReason: completionStatus?.reason || null,
+    completed: Boolean(completionStatus?.completed),
+    scope: normalizeScope(scope)
+  };
+  const written = [];
+
+  if (prompt) {
+    await appendMemoryEntry(agent, "inbox", {
+      at: now,
+      source,
+      kind: "user-prompt",
+      text: compactText(prompt, 2400),
+      data
+    });
+    written.push("user-prompt");
+  }
+
+  if (completionStatus?.lastAgentMessage) {
+    await appendMemoryEntry(agent, "journal", {
+      at: now,
+      source,
+      kind: "turn-stop",
+      text: compactText(completionStatus.lastAgentMessage, 1200),
+      data
+    });
+    written.push("turn-stop");
+  }
+
+  await appendMemoryEntry(agent, "dreams", {
+    at: now,
+    source,
+    kind: "dream-queued",
+    text: `Connector turn ${turnId} stopped; summarize durable memory when the dreamer runs.`,
+    data: {
+      ...data,
+      reason: "connector-turn"
+    }
+  });
+  written.push("dream-queued");
+
+  return { ok: true, agentId: agent.id, turnId, written };
 }
 
 export async function findWakefieldAgentForConnectorTarget(target = {}, {
@@ -309,10 +377,13 @@ async function readJsonl(file) {
 }
 
 function rankItems(items, { terms, scope, kind }) {
-  return items
+  const ranked = items
     .filter((item) => !scopeConflicts(item.scope, scope) || queryNamesScopedSubject(item, terms))
-    .map((item) => ({ item, score: scoreItem(item, { terms, scope, kind }) }))
-    .filter(({ score }) => score > 0)
+    .map((item) => ({ item, ...scoreItem(item, { terms, scope, kind }) }))
+    .filter(({ score }) => score > 0);
+  const hasQueryMatch = terms.length > 0 && ranked.some(({ queryScore }) => queryScore > 0);
+  return ranked
+    .filter(({ queryScore, strongScopeScore }) => !hasQueryMatch || queryScore > 0 || strongScopeScore > 0)
     .sort((left, right) => right.score - left.score || String(right.item.updatedAt || "").localeCompare(String(left.item.updatedAt || "")))
     .map(({ item }) => item);
 }
@@ -352,10 +423,25 @@ function scoreItem(item, { terms, scope, kind }) {
   const itemTerms = searchableText(item);
   const queryScore = terms.reduce((score, term) => score + (itemTerms.includes(term) ? 3 : 0), 0);
   const scopeScore = scopeOverlapScore(item.scope, scope);
-  if (terms.length === 0 && scopeScore === 0) return kind === "matter" && ACTIVE_MATTER_STATUSES.has(item.status) ? 1 : 0;
-  if (queryScore === 0 && scopeScore === 0) return 0;
+  const strongScopeScore = strongScopeOverlapScore(item.scope, scope);
+  if (terms.length === 0 && scopeScore === 0) {
+    return {
+      score: kind === "matter" && ACTIVE_MATTER_STATUSES.has(item.status) ? 1 : 0,
+      queryScore,
+      scopeScore,
+      strongScopeScore
+    };
+  }
+  if (queryScore === 0 && scopeScore === 0) {
+    return { score: 0, queryScore, scopeScore, strongScopeScore };
+  }
   const statusScore = kind === "matter" ? matterStatusScore(item.status) : 2;
-  return queryScore + scopeScore + statusScore;
+  return {
+    score: queryScore + scopeScore + statusScore,
+    queryScore,
+    scopeScore,
+    strongScopeScore
+  };
 }
 
 function scopeOverlapScore(left, right) {
@@ -368,6 +454,21 @@ function scopeOverlapScore(left, right) {
     const available = new Set(normalizedLeft[key]);
     for (const value of wanted) {
       if (available.has(value)) score += key === "people" || key === "cases" ? 8 : 5;
+    }
+  }
+  return score;
+}
+
+function strongScopeOverlapScore(left, right) {
+  const normalizedLeft = normalizeScope(left);
+  const normalizedRight = normalizeScope(right);
+  let score = 0;
+  for (const key of ["rooms", "tasks", "cases", "conversations"]) {
+    const wanted = normalizedRight[key];
+    if (wanted.length === 0) continue;
+    const available = new Set(normalizedLeft[key]);
+    for (const value of wanted) {
+      if (available.has(value)) score += 8;
     }
   }
   return score;
@@ -582,6 +683,35 @@ async function readJson(file, fallback) {
     if (error?.code === "ENOENT") return fallback;
     throw error;
   }
+}
+
+async function appendMemoryEntry(agent, channel, entry) {
+  const file = memoryFile(agent, channel);
+  if (!file) return;
+  const at = entry.at instanceof Date ? entry.at.toISOString() : String(entry.at || new Date().toISOString());
+  const payload = {
+    id: randomUUID(),
+    at,
+    agentId: agent.id,
+    source: entry.source || "connector",
+    kind: entry.kind,
+    text: entry.text || "",
+    data: entry.data || {}
+  };
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.appendFile(file, `${JSON.stringify(payload)}\n`, "utf8");
+}
+
+function memoryFile(agent, channel) {
+  if (channel === "inbox") return agent.memory?.inboxPath || null;
+  if (channel === "dreams") return agent.memory?.dreamsPath || null;
+  return agent.memory?.journalPath || null;
+}
+
+function compactText(value, max = 500) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (text.length <= max) return text;
+  return `${text.slice(0, Math.max(0, max - 3))}...`;
 }
 
 function scopeArray(value) {

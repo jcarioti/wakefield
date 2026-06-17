@@ -1,12 +1,10 @@
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { expandHome } from "./paths.mjs";
 
-const execFileAsync = promisify(execFile);
-const DEFAULT_TIMEOUT_MS = 120000;
+const DEFAULT_TIMEOUT_MS = 300000;
 const DEFAULT_DREAM_MODEL = "gpt-5.4-mini";
 
 export function codexDreamerConfig(env = process.env) {
@@ -28,7 +26,7 @@ export async function createCodexStructuredMemoryResponse({
   prompt,
   schema,
   config = codexDreamerConfig(),
-  execFileImpl = execFileAsync
+  execFileImpl = execFileWithInput
 }) {
   if (!config.enabled) {
     throw new Error(`Unsupported Wakefield memory provider: ${config.provider}`);
@@ -39,7 +37,6 @@ export async function createCodexStructuredMemoryResponse({
   await fs.writeFile(schemaPath, `${JSON.stringify(schema, null, 2)}\n`);
 
   const args = codexExecArgs({
-    prompt,
     schemaPath,
     cwd: tempDir,
     model: config.model,
@@ -57,6 +54,7 @@ export async function createCodexStructuredMemoryResponse({
     const { stdout } = await execFileImpl(config.codexPath, args, {
       cwd: tempDir,
       env,
+      input: prompt,
       timeout: config.timeoutMs,
       maxBuffer: 1024 * 1024 * 4
     });
@@ -71,7 +69,6 @@ export async function createCodexStructuredMemoryResponse({
 }
 
 export function codexExecArgs({
-  prompt,
   schemaPath,
   cwd,
   model = null,
@@ -99,8 +96,66 @@ export function codexExecArgs({
   if (ephemeral) args.push("--ephemeral");
   if (ignoreUserConfig) args.push("--ignore-user-config");
   if (model) args.push("--model", model);
-  args.push(prompt);
+  args.push("-");
   return args;
+}
+
+async function execFileWithInput(file, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(file, args, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const maxBuffer = positiveInteger(options.maxBuffer, 1024 * 1024 * 4);
+
+    const finish = (error, value = null) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (error) {
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+      } else {
+        resolve(value);
+      }
+    };
+
+    const appendOutput = (name, chunk) => {
+      if (settled) return;
+      if (name === "stdout") stdout += chunk;
+      else stderr += chunk;
+      if (Buffer.byteLength(stdout) + Buffer.byteLength(stderr) > maxBuffer) {
+        child.kill("SIGTERM");
+        finish(new Error(`Command exceeded maxBuffer ${maxBuffer}`));
+      }
+    };
+
+    const timer = options.timeout
+      ? setTimeout(() => {
+          child.kill("SIGTERM");
+          finish(new Error(`Command timed out after ${options.timeout}ms`));
+        }, options.timeout)
+      : null;
+
+    child.stdout.on("data", (chunk) => appendOutput("stdout", chunk));
+    child.stderr.on("data", (chunk) => appendOutput("stderr", chunk));
+    child.on("error", finish);
+    child.on("close", (code, signal) => {
+      if (code === 0) {
+        finish(null, { stdout, stderr });
+        return;
+      }
+      const reason = signal ? `signal ${signal}` : `exit code ${code}`;
+      finish(new Error(`Command failed: ${file} ${args.join(" ")} (${reason})`));
+    });
+
+    child.stdin.end(options.input || "");
+  });
 }
 
 export function parseCodexStructuredOutput(stdout) {

@@ -9,7 +9,7 @@ import {
 } from "./config.mjs";
 import { sendTextToCodexTarget } from "@wakefield/connector-shared/codex-router.mjs";
 import { findThreadRolloutPath, waitForTurnCompletion } from "@wakefield/connector-shared/codex-rollout-watch.mjs";
-import { wakefieldMemoryForConnectorMessage } from "@wakefield/connector-shared/wakefield-memory.mjs";
+import { recordWakefieldConnectorTurn, wakefieldMemoryForConnectorMessage } from "@wakefield/connector-shared/wakefield-memory.mjs";
 import {
   eventLogRecordFromDiscordMessage,
   formatDiscordMessageForCodex
@@ -92,8 +92,9 @@ client.on("messageCreate", async (message) => {
           mode: "auto",
           codex: config.codex
         });
-        await keepTypingUntilTurnCompletes({ target, routeResult, message });
+        const completionStatus = await keepTypingUntilTurnCompletes({ target, routeResult, message });
         await appendEventLog(target, eventLogRecordFromDiscordMessage({ message, target, routeResult }));
+        await recordConnectorTurn({ target, routeResult, completionStatus, message, text });
         console.log(`Routed Discord message ${message.id} to ${target.id} via Codex ${routeResult.action}.`);
       } finally {
         stopTyping();
@@ -219,7 +220,7 @@ async function appendEventLog(target, record) {
 
 async function keepTypingUntilTurnCompletes({ target, routeResult, message }) {
   if (!routeResult.turnId) {
-    return;
+    return null;
   }
   const rolloutPath = target.rolloutPath || await findThreadRolloutPath(target.threadId);
   const status = await waitForTurnCompletion({
@@ -234,9 +235,53 @@ async function keepTypingUntilTurnCompletes({ target, routeResult, message }) {
   });
   if (status.completed) {
     console.log(`Codex turn ${routeResult.turnId} completed for Discord message ${message.id}.`);
+    return status;
   } else if (status.outboundToolCallEnded) {
     console.log(`Stopped Discord typing for ${message.id} after ${status.toolCall.server}/${status.toolCall.tool}.`);
+    const finalStatus = await waitForTurnCompletion({
+      rolloutPath,
+      turnId: routeResult.turnId,
+      timeoutMs: Math.min(config.discord.typing.completionTimeoutMs, 120000),
+      pollMs: config.discord.typing.completionPollMs
+    });
+    if (finalStatus.completed) {
+      console.log(`Codex turn ${routeResult.turnId} completed for Discord message ${message.id}.`);
+      return finalStatus;
+    }
+    return status;
   } else {
     console.warn(`Stopped waiting for Codex turn ${routeResult.turnId} (${status.reason}) for Discord message ${message.id}.`);
+    return status;
+  }
+}
+
+async function recordConnectorTurn({ target, routeResult, completionStatus, message, text }) {
+  try {
+    const result = await recordWakefieldConnectorTurn({
+      target,
+      connector: "discord",
+      messageId: message.id,
+      prompt: text,
+      routeResult,
+      completionStatus,
+      scope: {
+        connector: "discord",
+        sender: message.author?.id || null,
+        conversation: message.channelId || null,
+        channel: message.channelId || null,
+        room: message.guildId ? message.channelId : null,
+        person: [
+          message.author?.id,
+          message.member?.displayName,
+          message.author?.globalName,
+          message.author?.username
+        ].filter(Boolean)
+      }
+    });
+    if (!result.ok) {
+      console.warn(`Wakefield memory record skipped for Discord message ${message.id}: ${result.reason}`);
+    }
+  } catch (error) {
+    console.warn(`Wakefield memory record failed for Discord message ${message.id}: ${error.message}`);
   }
 }

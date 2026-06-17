@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { wakefieldMemoryForConnectorMessage } from "../src/wakefield-memory.mjs";
+import { recordWakefieldConnectorTurn, wakefieldMemoryForConnectorMessage } from "../src/wakefield-memory.mjs";
 
 test("connector memory recalls named subject even when sender is another contact", async () => {
   const { home, cwd } = await createMemoryHome();
@@ -26,6 +26,80 @@ test("connector memory recalls named subject even when sender is another contact
   assert.match(memory, /rma-earle-20260514-01/);
   assert.match(memory, /returned failed unit must be physically identified/);
   assert.match(memory, /rma-replacement-release-safety/);
+});
+
+test("connector turns are mirrored into Wakefield memory for dreams", async () => {
+  const { home, cwd, memoryDir } = await createMemoryHome();
+  const result = await recordWakefieldConnectorTurn({
+    home,
+    target: {
+      id: "rick",
+      threadId: "thread-rick",
+      cwd
+    },
+    connector: "discord",
+    messageId: "message-1",
+    prompt: "Photon/Spectrum iMessage appears down; Discord is reliable for now.",
+    routeResult: {
+      action: "start",
+      turnId: "turn-photon"
+    },
+    completionStatus: {
+      completed: true,
+      reason: "task-complete",
+      lastAgentMessage: "Acknowledged. Discord is the reliable channel until Photon/Spectrum recovers."
+    },
+    scope: {
+      connector: "discord",
+      sender: "1362496879681732688",
+      conversation: "dm-joe"
+    },
+    now: new Date("2026-06-17T02:30:00.000Z")
+  });
+
+  assert.deepEqual(result, {
+    ok: true,
+    agentId: "rickbot",
+    turnId: "turn-photon",
+    written: ["user-prompt", "turn-stop", "dream-queued"]
+  });
+
+  const inbox = await readJsonl(path.join(memoryDir, "inbox.jsonl"));
+  const journal = await readJsonl(path.join(memoryDir, "journal.jsonl"));
+  const dreams = await readJsonl(path.join(memoryDir, "dreams.jsonl"));
+
+  assert.equal(inbox[0].kind, "user-prompt");
+  assert.match(inbox[0].text, /Photon\/Spectrum iMessage appears down/);
+  assert.equal(journal[0].kind, "turn-stop");
+  assert.match(journal[0].text, /Discord is the reliable channel/);
+  assert.equal(dreams[0].kind, "dream-queued");
+  assert.equal(dreams[0].data.turnId, "turn-photon");
+  assert.equal(dreams[0].data.reason, "connector-turn");
+});
+
+test("connector memory keeps topic matches narrow for broad sender-scoped follow-ups", async () => {
+  const { home, cwd } = await createMemoryHome();
+  const memory = await wakefieldMemoryForConnectorMessage({
+    home,
+    target: {
+      id: "rick",
+      threadId: "thread-rick",
+      cwd
+    },
+    query: "What should we do about iMessage followups while Photon is down?",
+    scope: {
+      connector: "discord",
+      sender: "1362496879681732688",
+      conversation: "dm-joe"
+    },
+    injection: {
+      record: false
+    }
+  });
+
+  assert.match(memory, /photon-spectrum-imessage-outage/);
+  assert.doesNotMatch(memory, /joe-package/);
+  assert.doesNotMatch(memory, /rma-earle-20260514-01/);
 });
 
 test("connector memory uses Wakefield contacts for vague same-person follow-ups", async () => {
@@ -184,6 +258,8 @@ async function createMemoryHome() {
       notesPath: path.join(memoryDir, "notes.json"),
       mattersPath: path.join(memoryDir, "matters.json"),
       dreamsPath: path.join(memoryDir, "dreams.jsonl"),
+      inboxPath: path.join(memoryDir, "inbox.jsonl"),
+      journalPath: path.join(memoryDir, "journal.jsonl"),
       statePath: path.join(memoryDir, "state.json")
     }
   });
@@ -199,6 +275,18 @@ async function createMemoryHome() {
   });
   await writeJson(path.join(memoryDir, "matters.json"), {
     matters: [
+      {
+        id: "photon-spectrum-imessage-outage",
+        title: "Photon/Spectrum iMessage down",
+        summary: "Photon/Spectrum iMessage down; Discord is fallback.",
+        status: "waiting",
+        scope: {
+          people: ["joe"],
+          channels: ["discord", "imessage"],
+          connectors: ["photon", "spectrum", "discord", "imessage"],
+          topics: ["connector-outage", "imessage", "discord"]
+        }
+      },
       {
         id: "rma-earle-20260514-01",
         title: "Earle Robertson RMA-20260514-01",
@@ -229,4 +317,9 @@ async function createMemoryHome() {
 async function writeJson(file, value) {
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+async function readJsonl(file) {
+  const text = await fs.readFile(file, "utf8");
+  return text.split(/\r?\n/g).filter(Boolean).map((line) => JSON.parse(line));
 }
