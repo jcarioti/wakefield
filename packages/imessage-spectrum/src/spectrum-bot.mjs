@@ -38,7 +38,8 @@ import { startSpectrumBridgeIpcServer } from "./spectrum-ipc.mjs";
 import {
   eventLogRecordFromSpectrumMessage,
   formatSpectrumMessageForCodex,
-  matchesSpectrumTarget
+  matchesSpectrumTarget,
+  spectrumSpaceType
 } from "./spectrum-message-format.mjs";
 import { sendTextToCodexTarget } from "@wakefield/connector-shared/codex-router.mjs";
 import { findThreadRolloutPath, waitForTurnCompletion } from "@wakefield/connector-shared/codex-rollout-watch.mjs";
