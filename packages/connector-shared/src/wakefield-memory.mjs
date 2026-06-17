@@ -401,8 +401,10 @@ function queryNamesScopedSubject(item, terms) {
 function scopeConflicts(left, right) {
   const itemScope = normalizeScope(left);
   const recallScope = normalizeScope(right);
+  const peopleOverlap = scopeValuesOverlap(itemScope.people, recallScope.people);
   for (const key of ["people", "rooms", "cases", "connectors", "senders", "conversations"]) {
     if (itemScope[key].length === 0 || recallScope[key].length === 0) continue;
+    if (key === "senders" && peopleOverlap) continue;
     const available = new Set(itemScope[key]);
     if (!recallScope[key].some((value) => available.has(value))) return true;
   }
@@ -417,6 +419,12 @@ function scopeConflicts(left, right) {
       || itemScope.conversations.length > 0;
   }
   return false;
+}
+
+function scopeValuesOverlap(left, right) {
+  if (left.length === 0 || right.length === 0) return false;
+  const available = new Set(left);
+  return right.some((value) => available.has(value));
 }
 
 function scoreItem(item, { terms, scope, kind }) {

@@ -284,7 +284,8 @@ async function createMemoryHome() {
           people: ["joe"],
           channels: ["discord", "imessage"],
           connectors: ["photon", "spectrum", "discord", "imessage"],
-          topics: ["connector-outage", "imessage", "discord"]
+          topics: ["connector-outage", "imessage", "discord"],
+          senders: ["joe"]
         }
       },
       {
