@@ -1,6 +1,7 @@
+import path from "node:path";
 import { archiveMatter, loadMatters, loadNotes, upsertMatter, upsertNote } from "./context-memory.mjs";
 import { codexDreamerConfig, createCodexStructuredMemoryResponse } from "./codex-dreamer.mjs";
-import { readJson, readJsonl, writeJson } from "./json-store.mjs";
+import { appendJsonl, readJson, readJsonl, writeJson } from "./json-store.mjs";
 
 const CAPTURE_PROCESSED_MAX = 1000;
 const CAPTURE_CONFIDENCE = new Set(["medium", "high"]);
@@ -35,7 +36,7 @@ export async function processMemoryCaptures(agent, {
 
   const state = await loadCaptureState(agent);
   const processed = new Set(state.processedIds);
-  const candidates = (summaries || await unprocessedDreamSummaries(agent, processed))
+  const candidates = sortSummariesForCapture(summaries || await unprocessedDreamSummaries(agent, processed))
     .filter((summary) => !processed.has(summaryCaptureKey(summary)))
     .slice(0, Number(limit || 5));
   const captures = [];
@@ -56,13 +57,20 @@ export async function processMemoryCaptures(agent, {
       });
       applied.push(...capture.applied);
       if (!dryRun) nextProcessed.add(key);
+      if (!dryRun) await recordCaptureAudit(agent, {
+        key,
+        ...capture
+      }, { now });
     } catch (error) {
-      captures.push({
+      const capture = {
         key,
         error: error?.message || String(error),
         deltas: [],
+        decisions: [],
         applied: []
-      });
+      };
+      captures.push(capture);
+      if (!dryRun) await recordCaptureAudit(agent, capture, { now });
     }
   }
 
@@ -93,20 +101,40 @@ export async function captureTurnMemory(agent, summary, {
   const payload = await capturePayload(agent, summary);
   const response = normalizeCaptureResponse(await provider(payload));
   const applied = [];
+  const decisions = [];
 
   for (const delta of response.deltas) {
-    if (!CAPTURE_CONFIDENCE.has(delta.confidence)) continue;
+    if (delta.action === "noop") {
+      decisions.push(decisionForDelta(delta, "skipped", "noop"));
+      continue;
+    }
+    if (!CAPTURE_CONFIDENCE.has(delta.confidence)) {
+      decisions.push(decisionForDelta(delta, "skipped", "low-confidence"));
+      continue;
+    }
+    const stale = await staleExistingMemory(agent, delta, summary);
+    if (stale) {
+      decisions.push(decisionForDelta(delta, "skipped", "stale-existing-memory", stale));
+      continue;
+    }
     const result = await applyMemoryDelta(agent, delta, {
       summary,
       dryRun,
       now
     });
-    if (result) applied.push(result);
+    if (result) {
+      applied.push(result);
+      decisions.push(decisionForDelta(delta, "applied", result.action));
+    } else {
+      decisions.push(decisionForDelta(delta, "skipped", "no-op-result"));
+    }
   }
 
   return {
     summaryKey: summaryCaptureKey(summary),
+    review: captureReviewPreview(payload),
     deltas: response.deltas,
+    decisions,
     applied
   };
 }
@@ -198,10 +226,22 @@ export function formatMemoryCaptureResult(result) {
   if (result.reviewed === 0) return "No uncaptured dream summaries.";
   const lines = [`Reviewed ${result.reviewed} dream summar${result.reviewed === 1 ? "y" : "ies"}.`];
   if (result.applied.length === 0) lines.push("No memory deltas applied.");
+  const skipped = result.captures.flatMap((capture) => capture.decisions || []).filter((decision) => decision.status === "skipped");
+  if (skipped.length > 0) {
+    lines.push(`Skipped ${skipped.length} delta${skipped.length === 1 ? "" : "s"}: ${skipped.map((decision) => `${decision.action}:${decision.reason}`).join(", ")}`);
+  }
   for (const item of result.applied) {
     lines.push(`- ${item.action} ${item.type} ${item.id}`);
   }
   return lines.join("\n");
+}
+
+export async function listMemoryCaptureAudit(agent, {
+  limit = 20
+} = {}) {
+  if (!agent) throw new Error("listMemoryCaptureAudit needs an agent profile.");
+  const entries = await readJsonl(captureAuditPathForAgent(agent));
+  return entries.slice(-Number(limit || 20)).reverse();
 }
 
 async function codexCaptureProvider(payload, { config, execFileImpl }) {
@@ -249,9 +289,32 @@ async function capturePayload(agent, summary) {
       "Use notes for stable durable facts or preferences.",
       "Use active context for temporary situations, incidents, tasks, cases, and cross-channel continuity.",
       "Prefer active context for unresolved outages, connector failures, support cases, RMAs, and follow-up work.",
+      "When a turn changes an existing active context, update the existing id instead of nooping or creating a duplicate.",
+      "If one blocker clears but the case still has a next action, update the matter status/summary/nextAction; do not resolve the matter until the whole temporary situation is done.",
       "Use noop for ordinary chatter, completed one-off actions, or facts already captured accurately.",
       "Keep every title and summary short."
     ]
+  };
+}
+
+function captureReviewPreview(payload) {
+  return {
+    turn: payload.turn,
+    existingMemory: {
+      notes: payload.existingMemory.notes.map((note) => ({
+        id: note.id,
+        title: note.title,
+        updatedAt: note.updatedAt
+      })),
+      activeContext: payload.existingMemory.activeContext.map((matter) => ({
+        id: matter.id,
+        title: matter.title,
+        status: matter.status,
+        summary: matter.summary,
+        nextAction: matter.nextAction,
+        updatedAt: matter.updatedAt
+      }))
+    }
   };
 }
 
@@ -365,12 +428,81 @@ async function applyMemoryDelta(agent, delta, {
   };
 }
 
+async function recordCaptureAudit(agent, capture, {
+  now = new Date()
+} = {}) {
+  await appendJsonl(captureAuditPathForAgent(agent), {
+    at: now.toISOString(),
+    agentId: agent.id,
+    key: capture.key || capture.summaryKey || null,
+    summaryKey: capture.summaryKey || capture.key || null,
+    error: capture.error || null,
+    review: capture.review || null,
+    deltas: capture.deltas || [],
+    decisions: capture.decisions || [],
+    applied: capture.applied || []
+  });
+}
+
+async function staleExistingMemory(agent, delta, summary) {
+  if (!delta.id || delta.action === "noop") return null;
+  if (!summary.at) return null;
+  const target = await existingMemoryTarget(agent, delta);
+  if (!target?.updatedAt) return null;
+  const turnAt = Date.parse(summary.at);
+  const targetUpdatedAt = Date.parse(target.updatedAt);
+  if (!Number.isFinite(turnAt) || !Number.isFinite(targetUpdatedAt)) return null;
+  if (targetUpdatedAt <= turnAt) return null;
+  return {
+    targetUpdatedAt: target.updatedAt,
+    turnAt: summary.at
+  };
+}
+
+async function existingMemoryTarget(agent, delta) {
+  if (delta.action === "create_note" || delta.action === "update_note") {
+    return (await loadNotes(agent)).notes.find((note) => note.id === delta.id) || null;
+  }
+  if (delta.action.endsWith("_active_context")) {
+    return (await loadMatters(agent)).matters.find((matter) => matter.id === delta.id) || null;
+  }
+  return null;
+}
+
+function captureAuditPathForAgent(agent) {
+  if (agent.memory?.capturePath) return agent.memory.capturePath;
+  if (agent.memory?.dreamsPath) return path.join(path.dirname(agent.memory.dreamsPath), "memory-capture.jsonl");
+  if (agent.memory?.statePath) return path.join(path.dirname(agent.memory.statePath), "memory-capture.jsonl");
+  throw new Error("Wakefield memory capture needs an agent memory path.");
+}
+
+function decisionForDelta(delta, status, reason, detail = null) {
+  return {
+    status,
+    reason,
+    action: delta.action,
+    id: delta.id,
+    title: delta.title,
+    confidence: delta.confidence,
+    rationale: delta.rationale,
+    ...(detail ? { detail } : {})
+  };
+}
+
 async function unprocessedDreamSummaries(agent, processed) {
   const dreams = await readJsonl(agent.memory.dreamsPath);
   return dreams
     .filter((entry) => entry.kind === "dream-summary")
     .map(summaryFromDreamEntry)
     .filter((summary) => !processed.has(summaryCaptureKey(summary)));
+}
+
+function sortSummariesForCapture(summaries) {
+  return [...summaries].sort((left, right) => {
+    const rightTime = Date.parse(right.at || "") || 0;
+    const leftTime = Date.parse(left.at || "") || 0;
+    return rightTime - leftTime;
+  });
 }
 
 function summaryFromDreamEntry(entry) {
@@ -514,4 +646,7 @@ Rules:
 - Passive mentions can matter when they reveal an unresolved operational state, such as a connector outage.
 - Keep summaries short and scoped. Include channels, systems, people, cases, or topics when known.
 - If an existing memory already captures the state, update it instead of creating a duplicate.
+- If a turn supersedes an existing active-context matter, update that matter by id even when the new state is still waiting or active.
+- If a blocker clears but the broader case is still open, use update_active_context with the new next action instead of resolve_active_context.
+- Use resolve_active_context only when the whole temporary situation no longer needs future attention.
 - Use low confidence for guesses that should not be applied.`;

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Wakefield Memory"
+  short_description: "Use Wakefield scoped memory without bloating the thread."
+  default_prompt: "Use $wakefield-memory to inspect or maintain notes and active-context matters."

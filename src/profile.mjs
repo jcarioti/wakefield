@@ -46,6 +46,7 @@ export async function initAgent({
       inboxPath: memoryPath(agentId, "inbox", home),
       journalPath: memoryPath(agentId, "journal", home),
       dreamsPath: memoryPath(agentId, "dreams", home),
+      capturePath: memoryPath(agentId, "memory-capture", home),
       notesPath: memoryDocumentPath(agentId, "notes", home),
       mattersPath: memoryDocumentPath(agentId, "matters", home),
       externalMessagesPath: externalMessagesPath(agentId, home),
@@ -81,6 +82,7 @@ export async function initAgent({
   await touch(profile.memory.inboxPath);
   await touch(profile.memory.journalPath);
   await touch(profile.memory.dreamsPath);
+  await touch(profile.memory.capturePath);
   await touch(profile.memory.externalMessagesPath);
   await writeJson(appConfigPath(home), {
     currentAgentId: agentId,
@@ -96,6 +98,7 @@ export async function ensureAgentMemory(profile, home = appHome()) {
   const memory = {
     provider: "local-jsonl",
     ...(profile.memory || {}),
+    capturePath: profile.memory?.capturePath || memoryPath(profile.id, "memory-capture", home),
     notesPath: profile.memory?.notesPath || memoryDocumentPath(profile.id, "notes", home),
     mattersPath: profile.memory?.mattersPath || memoryDocumentPath(profile.id, "matters", home)
   };
@@ -105,6 +108,7 @@ export async function ensureAgentMemory(profile, home = appHome()) {
   };
   let changed = memory.notesPath !== profile.memory?.notesPath
     || memory.mattersPath !== profile.memory?.mattersPath
+    || memory.capturePath !== profile.memory?.capturePath
     || memory.provider !== profile.memory?.provider;
 
   if (!await pathExists(memory.notesPath)) {
@@ -121,6 +125,7 @@ export async function ensureAgentMemory(profile, home = appHome()) {
       matters: []
     });
   }
+  if (!await pathExists(memory.capturePath)) await touch(memory.capturePath);
 
   if (changed) return saveAgent(next, home);
   return next;

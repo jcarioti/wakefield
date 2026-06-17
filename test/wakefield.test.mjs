@@ -26,7 +26,7 @@ import { isPhotonBackpressureError, shouldUsePhotonNativeFallback } from "../pac
 import { installWakefield } from "../src/install.mjs";
 import { configureManagedConnector, importManagedConnectors, initializeManagedConnectorConfig, installManagedConnectorMcp, managedConnectorLaunchAgentPlist, managedConnectorLaunchAgentStatus, managedConnectorStatus, managedConnectorWizard, setupManagedConnector, testManagedConnector } from "../src/managed-connectors.mjs";
 import { wakefieldManifest } from "../src/manifest.mjs";
-import { processMemoryCaptures } from "../src/memory-capture.mjs";
+import { listMemoryCaptureAudit, processMemoryCaptures } from "../src/memory-capture.mjs";
 import { installMemoryMcp, memoryMcpStatus } from "../src/memory-mcp.mjs";
 import { registerWakefieldMemoryTools } from "../src/mcp-memory-server.mjs";
 import { menuSnapshot } from "../src/menu-snapshot.mjs";
@@ -54,6 +54,7 @@ test("init creates a normal app-support profile and memory files", async () => {
   assert.equal(profile.cwd, path.join(home, "agents", "mira-field"));
   assert.equal(profile.soulPath, path.join(profile.cwd, "AGENTS.md"));
   assert.equal(profile.memory.externalMessagesPath, path.join(profile.cwd, "memory", "external-messages.jsonl"));
+  assert.equal(profile.memory.capturePath, path.join(profile.cwd, "memory", "memory-capture.jsonl"));
   assert.equal(profile.memory.notesPath, path.join(profile.cwd, "memory", "notes.json"));
   assert.equal(profile.memory.mattersPath, path.join(profile.cwd, "memory", "matters.json"));
   assert.equal((await loadAgent(null, home)).id, profile.id);
@@ -64,6 +65,7 @@ test("init creates a normal app-support profile and memory files", async () => {
   assert.equal(report.checks.find((check) => check.label === "External inbox").ok, true);
   assert.equal(report.checks.find((check) => check.label === "Codex thread").ok, false);
   assert.match(await fs.readFile(profile.memory.externalMessagesPath, "utf8"), /^$/);
+  assert.match(await fs.readFile(profile.memory.capturePath, "utf8"), /^$/);
   assert.deepEqual(JSON.parse(await fs.readFile(profile.memory.notesPath, "utf8")).notes, []);
   assert.deepEqual(JSON.parse(await fs.readFile(profile.memory.mattersPath, "utf8")).matters, []);
 });
@@ -2509,6 +2511,258 @@ test("memory capture uses Codex exec as the default reviewer", async () => {
     assert.equal(result.applied[0].id, "incident-photon-spectrum-imessage");
     const matters = await loadMatters(profile);
     assert.equal(matters.matters.find((matter) => matter.id === "incident-photon-spectrum-imessage").status, "active");
+  } finally {
+    delete process.env.WAKEFIELD_HOME;
+  }
+});
+
+test("memory capture updates an existing active matter when one blocker clears", async () => {
+  const home = await tempHome();
+  process.env.WAKEFIELD_HOME = home;
+  try {
+    const profile = await initAgent({ name: "Matter Updates", soul: "", threadId: "session-1", home });
+    await upsertMatter(profile, {
+      id: "rma-dominic-20260611-01",
+      title: "Dominic Lee RMA-20260611-01",
+      summary: "Dominic's RMA replacement is ready to pack, but Zoho says quantity_allocated=0 and package creation is disabled.",
+      status: "waiting",
+      scope: {
+        people: ["dominic"],
+        tasks: ["rma-support"],
+        cases: ["rma-20260611-01"],
+        topics: ["rma", "zoho"]
+      },
+      nextAction: "Diagnose why the sales-order line is not package-create eligible."
+    });
+    await recordMemory(profile, {
+      channel: "dreams",
+      kind: "dream-summary",
+      text: "Turn turn-dominic: Joe created package PKG-00102 for RMA-20260611-01. The sales order now has quantity_packed=1, so the old package-create blocker is cleared. The replacement is not shipped yet and Rick should wait for shipment/tracking/carrier possession.",
+      source: "test",
+      data: {
+        sourceDreamId: "dream-dominic",
+        sourceDreamIds: ["dream-dominic"],
+        sessionId: "session-1",
+        turnId: "turn-dominic",
+        changes: []
+      }
+    });
+
+    let reviewedPayload = null;
+    const result = await processMemoryCaptures(profile, {
+      captureProvider: async (payload) => {
+        reviewedPayload = payload;
+        return {
+          deltas: [{
+            action: "update_active_context",
+            id: "rma-dominic-20260611-01",
+            title: "Dominic Lee RMA-20260611-01",
+            text: null,
+            summary: "Package PKG-00102 exists and the replacement is packed, but it is not shipped yet.",
+            status: "waiting",
+            statusReason: "Package-create blocker cleared; shipment/tracking is still pending.",
+            scope: {
+              people: ["dominic"],
+              rooms: [],
+              channels: [],
+              tasks: ["rma-support"],
+              topics: ["rma", "shipment"],
+              cases: ["rma-20260611-01"],
+              connectors: [],
+              senders: [],
+              conversations: []
+            },
+            nextAction: "Wait for shipment/tracking/carrier possession before treating the RMA as shipped or resolved.",
+            notifyWhen: null,
+            tags: ["rma"],
+            sources: [],
+            confidence: "high",
+            rationale: "The turn supersedes the existing active matter while the broader RMA remains open."
+          }]
+        };
+      }
+    });
+
+    assert.match(reviewedPayload.instructions.join("\n"), /If one blocker clears but the case still has a next action/);
+    assert.equal(reviewedPayload.existingMemory.activeContext[0].id, "rma-dominic-20260611-01");
+    assert.equal(result.applied[0].action, "update_active_context");
+    assert.equal(result.captures[0].decisions[0].status, "applied");
+
+    const matters = await loadMatters(profile);
+    const dominic = matters.matters.find((matter) => matter.id === "rma-dominic-20260611-01");
+    assert.equal(dominic.status, "waiting");
+    assert.match(dominic.summary, /Package PKG-00102 exists/);
+    assert.match(dominic.nextAction, /Wait for shipment/);
+
+    const [audit] = await listMemoryCaptureAudit(profile, { limit: 1 });
+    assert.equal(audit.applied[0].id, "rma-dominic-20260611-01");
+    assert.equal(audit.decisions[0].status, "applied");
+    assert.equal(audit.review.existingMemory.activeContext[0].id, "rma-dominic-20260611-01");
+  } finally {
+    delete process.env.WAKEFIELD_HOME;
+  }
+});
+
+test("memory capture audit records noop and low-confidence skipped deltas", async () => {
+  const home = await tempHome();
+  process.env.WAKEFIELD_HOME = home;
+  try {
+    const profile = await initAgent({ name: "Capture Audit", soul: "", threadId: "session-1", home });
+    await recordMemory(profile, {
+      channel: "dreams",
+      kind: "dream-summary",
+      text: "Turn turn-smalltalk: Prompt: thanks. Response: happy to help.",
+      source: "test",
+      data: {
+        sourceDreamId: "dream-smalltalk",
+        sourceDreamIds: ["dream-smalltalk"],
+        sessionId: "session-1",
+        turnId: "turn-smalltalk",
+        changes: []
+      }
+    });
+
+    const result = await processMemoryCaptures(profile, {
+      captureProvider: async () => ({
+        deltas: [
+          {
+            action: "noop",
+            id: null,
+            title: null,
+            text: null,
+            summary: null,
+            status: null,
+            statusReason: null,
+            scope: {
+              people: [],
+              rooms: [],
+              channels: [],
+              tasks: [],
+              topics: [],
+              cases: [],
+              connectors: [],
+              senders: [],
+              conversations: []
+            },
+            nextAction: null,
+            notifyWhen: null,
+            tags: [],
+            sources: [],
+            confidence: "high",
+            rationale: "Ordinary acknowledgement."
+          },
+          {
+            action: "create_active_context",
+            id: "maybe-thing",
+            title: "Maybe thing",
+            text: null,
+            summary: "A guessed situation that should not apply.",
+            status: "active",
+            statusReason: null,
+            scope: {
+              people: [],
+              rooms: [],
+              channels: [],
+              tasks: [],
+              topics: [],
+              cases: [],
+              connectors: [],
+              senders: [],
+              conversations: []
+            },
+            nextAction: null,
+            notifyWhen: null,
+            tags: [],
+            sources: [],
+            confidence: "low",
+            rationale: "Too speculative."
+          }
+        ]
+      })
+    });
+
+    assert.deepEqual(result.applied, []);
+    assert.deepEqual(result.captures[0].decisions.map((decision) => decision.reason), ["noop", "low-confidence"]);
+
+    const [audit] = await listMemoryCaptureAudit(profile, { limit: 1 });
+    assert.deepEqual(audit.decisions.map((decision) => decision.reason), ["noop", "low-confidence"]);
+  } finally {
+    delete process.env.WAKEFIELD_HOME;
+  }
+});
+
+test("memory capture skips stale updates to newer existing matters", async () => {
+  const home = await tempHome();
+  process.env.WAKEFIELD_HOME = home;
+  try {
+    const profile = await initAgent({ name: "Stale Capture", soul: "", threadId: "session-1", home });
+    await upsertMatter(profile, {
+      id: "rma-dominic-20260611-01",
+      title: "Dominic Lee RMA-20260611-01",
+      summary: "Package PKG-00102 exists and the replacement is packed, but it is not shipped yet.",
+      status: "waiting",
+      scope: {
+        people: ["dominic"],
+        tasks: ["rma-support"],
+        cases: ["rma-20260611-01"]
+      },
+      nextAction: "Wait for shipment/tracking/carrier possession."
+    }, {
+      now: new Date("2026-06-17T21:13:41.000Z")
+    });
+    await recordMemory(profile, {
+      channel: "dreams",
+      kind: "dream-summary",
+      text: "Turn turn-old: Earlier read said no package exists and package creation is disabled.",
+      source: "test",
+      data: {
+        sourceDreamId: "dream-old-dominic",
+        sourceDreamIds: ["dream-old-dominic"],
+        sessionId: "session-1",
+        turnId: "turn-old",
+        changes: []
+      },
+      now: new Date("2026-06-17T17:52:25.000Z")
+    });
+
+    const result = await processMemoryCaptures(profile, {
+      captureProvider: async () => ({
+        deltas: [{
+          action: "update_active_context",
+          id: "rma-dominic-20260611-01",
+          title: "Dominic Lee RMA-20260611-01",
+          text: null,
+          summary: "Zoho says no package exists and package creation is disabled.",
+          status: "waiting",
+          statusReason: null,
+          scope: {
+            people: ["dominic"],
+            rooms: [],
+            channels: [],
+            tasks: ["rma-support"],
+            topics: ["rma"],
+            cases: ["rma-20260611-01"],
+            connectors: [],
+            senders: [],
+            conversations: []
+          },
+          nextAction: "Resolve the package-create blocker.",
+          notifyWhen: null,
+          tags: [],
+          sources: [],
+          confidence: "high",
+          rationale: "Older turn had a stale live read."
+        }]
+      })
+    });
+
+    assert.deepEqual(result.applied, []);
+    assert.equal(result.captures[0].decisions[0].reason, "stale-existing-memory");
+
+    const matters = await loadMatters(profile);
+    const dominic = matters.matters.find((matter) => matter.id === "rma-dominic-20260611-01");
+    assert.match(dominic.summary, /PKG-00102 exists/);
+    assert.match(dominic.nextAction, /Wait for shipment/);
   } finally {
     delete process.env.WAKEFIELD_HOME;
   }

@@ -22,7 +22,7 @@ import { formatImessagePoll, pollImessageChatDb } from "./imessage-chatdb.mjs";
 import { installWakefield } from "./install.mjs";
 import { formatManifest, wakefieldManifest } from "./manifest.mjs";
 import { configureManagedConnector, formatManagedConnectorConfigInit, formatManagedConnectorMcpInstall, formatManagedConnectorSetup, formatManagedConnectorStatuses, formatManagedConnectorTest, formatManagedConnectorWizard, formatManagedLaunchAgentResult, formatManagedLaunchAgentStatus, importManagedConnectors, initializeManagedConnectorConfig, installManagedConnectorMcp, managedConnectorLaunchAgentPlist, managedConnectorLaunchAgentStatus, managedConnectorStatus, managedConnectorStatuses, managedConnectorWizard, managedConnectorWizards, printManagedConnectorMcp, runManagedConnectorProcess, setupManagedConnector, testManagedConnector, installManagedConnectorLaunchAgent, loadManagedConnectorLaunchAgent, unloadManagedConnectorLaunchAgent, uninstallManagedConnectorLaunchAgent } from "./managed-connectors.mjs";
-import { formatMemoryCaptureResult, processMemoryCaptures } from "./memory-capture.mjs";
+import { formatMemoryCaptureResult, listMemoryCaptureAudit, processMemoryCaptures } from "./memory-capture.mjs";
 import { formatMemoryMcpInstall, formatMemoryMcpStatus, installMemoryMcp, memoryMcpStatus, printMemoryMcp } from "./memory-mcp.mjs";
 import { formatMenuSnapshot, menuSnapshot } from "./menu-snapshot.mjs";
 import { compact, formatDreamResult, memoryContext, processDreams, recordMemory } from "./memory.mjs";
@@ -947,6 +947,15 @@ async function main(argv = process.argv.slice(2)) {
       return;
     }
 
+    if (group === "capture-log" || group === "capture-audit") {
+      const options = parseOptions(rest.slice(1));
+      const entries = await listMemoryCaptureAudit(agent, {
+        limit: Number(options.limit || 20)
+      });
+      console.log(options.json ? JSON.stringify(entries, null, 2) : formatMemoryCaptureAudit(entries));
+      return;
+    }
+
     throw new Error(`Unknown memory command: ${rest.join(" ") || "(missing)"}`);
   }
 
@@ -1147,6 +1156,7 @@ function usage() {
     "  wakefield memory forget note|matter ID",
     "  wakefield memory recall [--query TEXT] [--person ID] [--task ID] [--topic TOPIC] [--json]",
     "  wakefield memory capture [--limit N] [--dry-run] [--json]",
+    "  wakefield memory capture-log [--limit N] [--json]",
     "  wakefield remember --text TEXT [--kind KIND] [--channel journal|inbox|dreams]",
     "  wakefield recall --query TEXT [--limit N]",
     "  wakefield dream [--limit N] [--dry-run] [--no-capture] [--json]",
@@ -1256,6 +1266,19 @@ function quoteEnvValue(value) {
   const text = String(value);
   if (/^[A-Za-z0-9_./:@+-]+$/.test(text)) return text;
   return JSON.stringify(text);
+}
+
+function formatMemoryCaptureAudit(entries) {
+  if (entries.length === 0) return "No Wakefield memory capture log entries.";
+  return entries.map((entry) => {
+    const turn = entry.review?.turn?.turnId || entry.review?.turn?.sourceDreamId || entry.summaryKey || entry.key || "unknown";
+    const decisions = (entry.decisions || [])
+      .map((decision) => `${decision.action || "delta"}:${decision.status || "unknown"}:${decision.reason || "none"}`)
+      .join(", ") || "no deltas";
+    const applied = (entry.applied || []).map((item) => item.id).join(", ") || "none";
+    const error = entry.error ? ` error=${entry.error}` : "";
+    return `${entry.at || "unknown time"} ${turn} decisions=${decisions} applied=${applied}${error}`;
+  }).join("\n");
 }
 
 function formatAgentStatus(result) {
