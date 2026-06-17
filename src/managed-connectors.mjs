@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { ensureDir, pathExists, readJson, writeJson } from "./json-store.mjs";
+import { nodeExecutable } from "./node-runtime.mjs";
 import { appHome, connectorConfigPath, expandHome, launchAgentsDir, logsDir, managedConnectorsConfigPath, serviceConfigPath } from "./paths.mjs";
 import { loadEnvFile } from "./service-env.mjs";
 import { connectorSkill, connectorSkillPrompt } from "./connector-skills.mjs";
@@ -481,6 +482,9 @@ export function formatManagedConnectorSetup(result) {
     lines.push(`state: ${state}`);
     if (!result.status.ready && result.nextAction?.reason) lines.push(`next: ${result.nextAction.reason}`);
   }
+  if (result.mcp?.changed) {
+    lines.push("restart Codex once before using these connector tools in the selected chat.");
+  }
   return lines.join("\n");
 }
 
@@ -694,7 +698,8 @@ export async function testManagedConnector(id, {
     const script = path.join(status.package.path, "src/codex-follower-probe.mjs");
     const targetId = status.connectorConfig.targetId || status.connectorConfig.targets[0]?.id;
     if (!targetId) throw new Error("Follower probe needs a target id.");
-    const result = await execFileJson(execFileImpl, "node", [script, "--config", status.connectorConfig.path, "--target", targetId], {
+    const nodePath = nodeExecutable();
+    const result = await execFileJson(execFileImpl, nodePath, [script, "--config", status.connectorConfig.path, "--target", targetId], {
       cwd: status.package.path,
       timeout: 45000,
       tolerateExitCodes: [0, 3]
@@ -703,7 +708,7 @@ export async function testManagedConnector(id, {
       ok: result.code === 0,
       kind,
       connector: status.id,
-      command: ["node", script, "--config", status.connectorConfig.path, "--target", targetId],
+      command: [nodePath, script, "--config", status.connectorConfig.path, "--target", targetId],
       result: result.json || result.text,
       code: result.code
     };
@@ -1626,7 +1631,7 @@ async function loadManagedEnvironment({ home }) {
 function mcpCommand(adapter, config) {
   if (!config.packagePath || !config.configPath) return null;
   return [
-    "node",
+    nodeExecutable(),
     path.join(config.packagePath, adapter.mcp.script),
     "--config",
     config.configPath
@@ -1635,7 +1640,7 @@ function mcpCommand(adapter, config) {
 
 function processCommand(processDef, config) {
   return {
-    command: process.execPath,
+    command: nodeExecutable(),
     args: [
       path.join(config.packagePath, processDef.script),
       "--config",
@@ -1761,7 +1766,7 @@ function managedConnectorSmokePlan(adapter, status, kind) {
       return {
         summary: "Run the local-first Spectrum diagnostic CLI when receive-loop health is suspect.",
         items: [
-          `Command: node ${path.join(status.package.path, "scripts/diagnose-spectrum-bridge.mjs")} --config ${status.connectorConfig.path}`,
+          `Command: ${nodeExecutable()} ${path.join(status.package.path, "scripts/diagnose-spectrum-bridge.mjs")} --config ${status.connectorConfig.path}`,
           "Cloud-only check: add --deep --skip-local-history when local imsg is unavailable or you only need Photon auth/data-plane evidence.",
           "Optional: add --deep only when a human has approved Photon cloud/API probes.",
           "Optional: add --active-imsg-probe only when a human has approved a synthetic local iMessage probe.",

@@ -12,6 +12,7 @@ import { dispatchExternalMessage } from "./inbox-dispatch.mjs";
 import { pollImessageChatDb } from "./imessage-chatdb.mjs";
 import { listExternalMessages } from "./external-messages.mjs";
 import { processDreams } from "./memory.mjs";
+import { nodeExecutable } from "./node-runtime.mjs";
 import { appHome, expandHome, launchAgentsDir, logsDir, serviceConfigPath } from "./paths.mjs";
 import { loadAgent } from "./profile.mjs";
 
@@ -678,7 +679,7 @@ function launchctlResult({
 
 function launchAgentCommand() {
   const cliPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "cli.mjs");
-  return [process.execPath, cliPath, "service", "run-once"];
+  return [nodeExecutable(), cliPath, "service", "run-once"];
 }
 
 function plist(value) {

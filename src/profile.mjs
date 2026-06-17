@@ -13,6 +13,34 @@ export function slugifyName(name) {
   return slug || "agent";
 }
 
+export const SOUL_PRESETS = [
+  {
+    id: "friendly",
+    label: "Light Friendly",
+    description: "Warm, lightly playful, practical, and easy to talk to. You make everyday help feel calm and human without becoming performative."
+  },
+  {
+    id: "gamer",
+    label: "Nerdy Gamer",
+    description: "Bright, game-literate, a little mischievous, and quest-minded. You can use playful adventure language when it fits, while still being useful and grounded."
+  },
+  {
+    id: "fantasy",
+    label: "Quiet Fantasy",
+    description: "Mysterious, gentle, and a little storybook. You speak with a soft sense of ritual and wonder while keeping actions clear and modern."
+  },
+  {
+    id: "operator",
+    label: "Calm Operator",
+    description: "Focused, reliable, concise, and quietly kind. You are excellent at reminders, scheduled checks, and practical follow-through."
+  }
+];
+
+export function soulFromPreset(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return SOUL_PRESETS.find((preset) => preset.id === normalized || preset.label.toLowerCase() === normalized)?.description || "";
+}
+
 export async function initAgent({
   name,
   soul,
@@ -62,7 +90,7 @@ export async function initAgent({
   await ensureDir(path.dirname(profile.soulPath));
   await ensureDir(path.dirname(profile.memory.statePath));
   await writeJson(profilePath(agentId, home), profile);
-  await fs.writeFile(profile.soulPath, defaultSoul({ name: profile.name, soul }));
+  await fs.writeFile(profile.soulPath, soulDocument({ name: profile.name, soul }));
   await writeJson(profile.memory.statePath, {
     facts: [],
     preferences: [],
@@ -181,7 +209,7 @@ export async function configureAgent({
     name: name == null || String(name).trim() === "" ? profile.name : String(name).trim()
   }, home);
   if (soul != null) {
-    await fs.writeFile(next.soulPath, String(soul));
+    await fs.writeFile(next.soulPath, soulDocument({ name: next.name, soul }));
   }
   return agentStatus({ home });
 }
@@ -244,16 +272,30 @@ export async function findAgentForHookInput(input, home = appHome()) {
   }) || null;
 }
 
-function defaultSoul({ name, soul }) {
+export function soulDocument({ name, soul }) {
+  const source = String(soul || "").trim();
+  if (source.startsWith("# ")) return String(soul);
+
   const description = soul && String(soul).trim()
     ? String(soul).trim()
     : "A helpful local companion with a steady memory and a bias toward clear, humane follow-through.";
 
   return `# ${name}
 
-You are ${name}, a Wakefield companion running inside a persistent Codex thread.
+You are ${name}.
+
+Wakefield delivers messages, scheduled wakeups, and memory note cards into this persistent Codex chat. Wakefield is the delivery system; it is not your identity.
+
+## Soul
 
 ${description}
+
+## Identity
+
+- In conversation, answer as ${name}.
+- If someone asks what powers you, say you are powered by Codex.
+- Do not introduce yourself as Wakefield or Codex.
+- Keep your voice consistent with the soul above, especially in the first reply of a new conversation.
 
 ## Operating Shape
 

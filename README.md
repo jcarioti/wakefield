@@ -42,10 +42,13 @@ wakefield --` in the same position. With Yarn, use `yarn exec wakefield`.
 
 Create or reuse a local agent by giving it a name, a soul, and a Codex chat:
 
+Use a built-in soul preset (`friendly`, `gamer`, `fantasy`, or `operator`) or
+write a custom `--soul`.
+
 ```bash
 pnpm exec wakefield setup run \
   --name Mira \
-  --soul "A calm personal research companion." \
+  --soul-preset friendly \
   --latest-thread \
   --enable-service
 ```
@@ -59,6 +62,14 @@ pnpm exec wakefield doctor
 
 The selected Codex chat is the personality. Wakefield does not replace the
 Codex app; it routes work into that same conversation.
+
+For a new assistant, open Codex in the agent workspace shown by
+`wakefield setup status`, start the chat there, then select it with
+`wakefield select-thread --latest`. That workspace contains the generated
+`AGENTS.md` soul.
+
+After Wakefield installs hooks or Codex tools, restart Codex once, then continue
+the selected agent chat. Codex loads new hooks and MCP tools at app startup.
 
 ## Connectors
 
@@ -85,7 +96,7 @@ Setup:
 
 ```bash
 pnpm exec wakefield setup connector discord \
-  --env-file .env.wakefield \
+  --envFile .env.wakefield \
   --set tokenEnv=DISCORD_BOT_TOKEN \
   --set allowedChannelIds=<discord-channel-id>
 ```
@@ -106,7 +117,7 @@ Setup:
 
 ```bash
 pnpm exec wakefield setup connector imessage \
-  --env-file .env.wakefield \
+  --envFile .env.wakefield \
   --set projectIdEnv=PHOTON_PROJECT_ID \
   --set projectSecretEnv=PHOTON_SECRET_KEY \
   --set allowedAddresses=<phone-or-email>
@@ -254,7 +265,7 @@ Configure it:
 pnpm exec wakefield service configure \
   --enable \
   --interval-minutes 15 \
-  --env-file ~/.wakefield.env
+  --envFile ~/.wakefield.env
 
 pnpm exec wakefield service run-once
 pnpm exec wakefield service launch-agent install --load
@@ -327,6 +338,9 @@ pnpm exec wakefield pack install --file ./wakefield-pack.json --thread-id <codex
 
 Wakefield includes a native macOS menu bar app. It is a thin client over the
 same CLI and JSON surfaces.
+
+On first launch, it opens the control window so you can name the agent and pick
+a soul style before connecting channels.
 
 From a Wakefield checkout:
 

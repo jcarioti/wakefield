@@ -129,6 +129,7 @@ private struct AgentPane: View {
     @ObservedObject var model: WakefieldModel
     @State private var name = ""
     @State private var soul = ""
+    @State private var selectedPreset = wakefieldSoulPresets[0].id
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -153,10 +154,25 @@ private struct AgentPane: View {
                 Button {
                     model.saveAgent(name: name, soul: soul)
                 } label: {
-                    Label("Save", systemImage: "checkmark.circle")
+                    Label(model.agentDetails?.profile == nil ? "Create" : "Save", systemImage: "checkmark.circle")
                 }
                 .disabled(model.busy || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
+
+            LabeledControl("Soul Style") {
+                Picker("", selection: $selectedPreset) {
+                    ForEach(wakefieldSoulPresets) { preset in
+                        Text(preset.label).tag(preset.id)
+                    }
+                    Text("Custom").tag("custom")
+                }
+                .pickerStyle(.menu)
+                .onChange(of: selectedPreset) { _, value in
+                    guard let preset = wakefieldSoulPresets.first(where: { $0.id == value }) else { return }
+                    soul = preset.text
+                }
+            }
+            .frame(maxWidth: 360)
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Soul")
@@ -164,12 +180,13 @@ private struct AgentPane: View {
                     .foregroundStyle(.secondary)
                 TextEditor(text: $soul)
                     .font(.body)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(maxWidth: .infinity, minHeight: 120, maxHeight: 190)
                     .padding(6)
                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 7))
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .layoutPriority(1)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+
+            Spacer(minLength: 0)
         }
         .padding(22)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -180,8 +197,43 @@ private struct AgentPane: View {
 
     private func load() {
         name = model.agentDetails?.profile?.name ?? model.snapshot?.agent?.name ?? ""
-        soul = model.agentDetails?.soul ?? ""
+        let currentSoul = model.agentDetails?.soul ?? ""
+        soul = currentSoul.isEmpty ? wakefieldSoulPresets[0].text : currentSoul
+        selectedPreset = wakefieldPresetId(for: soul)
     }
+}
+
+private struct SoulPreset: Identifiable {
+    let id: String
+    let label: String
+    let text: String
+}
+
+private let wakefieldSoulPresets = [
+    SoulPreset(
+        id: "friendly",
+        label: "Light Friendly",
+        text: "Warm, lightly playful, practical, and easy to talk to. You make everyday help feel calm and human without becoming performative."
+    ),
+    SoulPreset(
+        id: "gamer",
+        label: "Nerdy Gamer",
+        text: "Bright, game-literate, a little mischievous, and quest-minded. You can use playful adventure language when it fits, while still being useful and grounded."
+    ),
+    SoulPreset(
+        id: "fantasy",
+        label: "Quiet Fantasy",
+        text: "Mysterious, gentle, and a little storybook. You speak with a soft sense of ritual and wonder while keeping actions clear and modern."
+    ),
+    SoulPreset(
+        id: "operator",
+        label: "Calm Operator",
+        text: "Focused, reliable, concise, and quietly kind. You are excellent at reminders, scheduled checks, and practical follow-through."
+    )
+]
+
+private func wakefieldPresetId(for soul: String) -> String {
+    wakefieldSoulPresets.first(where: { $0.text == soul })?.id ?? "custom"
 }
 
 private struct ConnectorsPane: View {

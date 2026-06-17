@@ -17,6 +17,7 @@ final class WakefieldModel: ObservableObject {
     private var timer: Timer?
     private var controlWindow: NSWindow?
     private var controlWindowDelegate: WindowDelegate?
+    private var openedFirstRun = false
 
     var menuBarSymbol: String {
         guard let snapshot else { return "waveform.path.ecg" }
@@ -52,6 +53,10 @@ final class WakefieldModel: ObservableObject {
             wizards = try await wizardsResult.wizards
             agentDetails = try? await WakefieldCLI.json(["agent", "status"])
             lastError = ""
+            if !openedFirstRun, snapshot?.agent == nil {
+                openedFirstRun = true
+                openControlWindow(tab: .agent)
+            }
         } catch {
             lastError = error.localizedDescription
         }
@@ -60,10 +65,12 @@ final class WakefieldModel: ObservableObject {
     func openControlWindow(tab: ControlTab = .agent) {
         controlTab = tab
         if let controlWindow {
+            NSApp.setActivationPolicy(.regular)
             controlWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
+        NSApp.setActivationPolicy(.regular)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 780, height: 580),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -77,6 +84,7 @@ final class WakefieldModel: ObservableObject {
         let delegate = WindowDelegate { [weak self] in
             self?.controlWindow = nil
             self?.controlWindowDelegate = nil
+            NSApp.setActivationPolicy(.accessory)
         }
         controlWindowDelegate = delegate
         window.delegate = delegate
@@ -108,9 +116,12 @@ final class WakefieldModel: ObservableObject {
     }
 
     func saveAgent(name: String, soul: String) {
+        let command = agentDetails?.profile == nil
+            ? ["init", "--name", name, "--soul", soul]
+            : ["agent", "configure", "--name", name, "--soul", soul]
         perform(
-            "Saving agent",
-            args: ["agent", "configure", "--name", name, "--soul", soul],
+            agentDetails?.profile == nil ? "Creating agent" : "Saving agent",
+            args: command,
             timeout: 90
         )
     }
@@ -149,7 +160,7 @@ final class WakefieldModel: ObservableObject {
         let envFile = values["envFile"].flatMap(trimmedNonEmpty) ?? "~/.wakefield.env"
         var args = [
             "setup", "connector", alias,
-            "--env-file", envFile,
+            "--envFile", envFile,
             "--overwrite",
             "--yes"
         ]

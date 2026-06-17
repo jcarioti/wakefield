@@ -60,7 +60,7 @@ const REQUIRED_JSON_COMMANDS = [
   "wakefield mcp memory install --json",
   "wakefield managed-connectors test $connectorId --kind status --json",
   "wakefield managed-connectors launch-agent status $connectorId --json",
-  "wakefield service configure --env-file $envFile --json",
+  "wakefield service configure --envFile $envFile --json",
   "wakefield service launch-agent install --load --json"
 ];
 

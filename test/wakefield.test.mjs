@@ -32,6 +32,7 @@ import { installMemoryMcp, memoryMcpStatus } from "../src/memory-mcp.mjs";
 import { registerWakefieldMemoryTools } from "../src/mcp-memory-server.mjs";
 import { menuSnapshot } from "../src/menu-snapshot.mjs";
 import { memoryContext, processDreams, recordMemory } from "../src/memory.mjs";
+import { nodeExecutable } from "../src/node-runtime.mjs";
 import { initAgent, loadAgent, selectThread } from "../src/profile.mjs";
 import { configureService, installLaunchAgent, launchAgentPlist, launchAgentStatus, loadLaunchAgent, runServiceOnce, serviceStatus, uninstallLaunchAgent, unloadLaunchAgent } from "../src/service.mjs";
 import { runSelfTest } from "../src/self-test.mjs";
@@ -238,6 +239,7 @@ test("memory MCP installs Codex tool config for the selected agent", async () =>
 
   const configText = await fs.readFile(path.join(cwd, ".codex", "config.toml"), "utf8");
   assert.match(configText, /mcp_servers\.wakefield-memory/);
+  assert.match(configText, new RegExp(`command = "${escapeRegExp(nodeExecutable())}"`));
   assert.match(configText, /wakefield_memory_upsert_matter/);
   assert.match(configText, /--home/);
   assert.match(configText, new RegExp(escapeRegExp(home)));
@@ -342,6 +344,7 @@ test("install creates an agent and idempotent Codex hook config", async () => {
   assert.equal(status.configured, true);
   assert.equal(status.commands.length, 1);
   assert.match(status.commands[0], /WAKEFIELD_HOME=/);
+  assert.match(status.commands[0], new RegExp(escapeRegExp(nodeExecutable())));
   assert.match(status.commands[0], /hook$/);
   assert.equal((await wakefieldSkillsStatus({ codexHomePath })).configured, true);
 
@@ -897,7 +900,9 @@ test("managed connectors initialize local configs and install MCP entries for Di
 
     const discordMcp = await installManagedConnectorMcp("discord-codex", { home, agent });
     assert.equal(discordMcp.changed, true);
-    assert.match(await fs.readFile(path.join(agent.cwd, ".codex", "config.toml"), "utf8"), /discord_send_message/);
+    const discordMcpText = await fs.readFile(path.join(agent.cwd, ".codex", "config.toml"), "utf8");
+    assert.match(discordMcpText, /discord_send_message/);
+    assert.match(discordMcpText, new RegExp(`command = "${escapeRegExp(nodeExecutable())}"`));
     assert.equal((await managedConnectorStatus("discord-codex", { home, agent })).mcp.ok, true);
 
     const imessageInit = await initializeManagedConnectorConfig("imessage-spectrum", {
@@ -993,6 +998,45 @@ test("managed connector setup installs config, MCP tools, launch agent, and env 
   } finally {
     delete process.env.WAKEFIELD_TEST_SETUP_DISCORD_TOKEN;
   }
+});
+
+test("connector setup keeps non-interactive secrets and writes the env file", async () => {
+  const home = await tempHome();
+  const cwd = path.join(home, "agent");
+  await initAgent({
+    name: "Secret Setup",
+    soul: "",
+    threadId: "thread-secret-setup",
+    cwd,
+    home
+  });
+  const envFile = path.join(home, "wakefield.env");
+  const env = { ...process.env, WAKEFIELD_HOME: home };
+
+  const { stdout } = await execFileAsync(process.execPath, [
+    "src/cli.mjs",
+    "setup",
+    "connector",
+    "imessage",
+    "--envFile",
+    envFile,
+    "--set",
+    "projectIdEnv=WAKEFIELD_TEST_PHOTON_ID",
+    "--set",
+    "projectSecretEnv=WAKEFIELD_TEST_PHOTON_SECRET",
+    "--secret",
+    "WAKEFIELD_TEST_PHOTON_ID=project-123",
+    "--secret",
+    "WAKEFIELD_TEST_PHOTON_SECRET=secret-456",
+    "--dry-run",
+    "--yes",
+    "--json"
+  ], { cwd: path.resolve("."), env });
+
+  assert.equal(JSON.parse(stdout).dryRun, true);
+  const envText = await fs.readFile(envFile, "utf8");
+  assert.match(envText, /WAKEFIELD_TEST_PHOTON_ID=project-123/);
+  assert.match(envText, /WAKEFIELD_TEST_PHOTON_SECRET=secret-456/);
 });
 
 test("runSelfTest exercises clone-install paths in temporary state", async () => {
@@ -2028,7 +2072,7 @@ test("manifest describes package, core features, setup commands, and connector s
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield memory recall --query $query --json"));
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield memory capture --dry-run --json"));
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield dream --json"));
-  assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield service configure --env-file $envFile --json"));
+  assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield service configure --envFile $envFile --json"));
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield service run-once --json"));
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield service launch-agent status --json"));
   assert.equal(

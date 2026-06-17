@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { hookConfig } from "./hooks.mjs";
 import { ensureDir, pathExists, readJson, writeJson } from "./json-store.mjs";
+import { nodeExecutable } from "./node-runtime.mjs";
 import { appHome } from "./paths.mjs";
 
 const WAKEFIELD_STATUS = "Wakefield memory";
@@ -18,7 +19,7 @@ export function hooksPath(home = codexHome()) {
 
 export function wakefieldHookCommand({ home = appHome() } = {}) {
   const commandPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "cli.mjs");
-  return `env WAKEFIELD_HOME=${shellQuote(home)} node ${JSON.stringify(commandPath)} hook`;
+  return `env WAKEFIELD_HOME=${shellQuote(home)} ${shellQuote(nodeExecutable())} ${shellQuote(commandPath)} hook`;
 }
 
 export async function installHooks({
@@ -116,7 +117,7 @@ function isWakefieldHook(hook) {
 }
 
 async function hookCommandExists(command) {
-  const match = String(command).match(/\bnode\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+hook\b/);
+  const match = String(command).match(/(?:"([^"]+cli\.mjs)"|'([^']+cli\.mjs)'|(\S+cli\.mjs))\s+hook\b/);
   if (!match) return true;
   const commandPath = match[1] || match[2] || match[3];
   try {

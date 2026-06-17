@@ -27,7 +27,7 @@ import { formatMemoryMcpInstall, formatMemoryMcpStatus, installMemoryMcp, memory
 import { formatMenuSnapshot, menuSnapshot } from "./menu-snapshot.mjs";
 import { compact, formatDreamResult, memoryContext, processDreams, recordMemory } from "./memory.mjs";
 import { appHome, expandHome } from "./paths.mjs";
-import { agentStatus, configureAgent, ensureAgentMemory, initAgent, loadAgent, selectThread } from "./profile.mjs";
+import { agentStatus, configureAgent, ensureAgentMemory, initAgent, loadAgent, selectThread, SOUL_PRESETS, soulFromPreset } from "./profile.mjs";
 import { configureService, formatLaunchAgentResult, formatLaunchAgentStatus, formatServiceRun, formatServiceStatus, installLaunchAgent, launchAgentPlist, launchAgentStatus, loadLaunchAgent, runServiceOnce, serviceStatus, uninstallLaunchAgent, unloadLaunchAgent } from "./service.mjs";
 import { formatSelfTest, runSelfTest } from "./self-test.mjs";
 import { formatActions, formatConnectors, formatNextSteps, formatSetupStatus, setupStatus } from "./setup.mjs";
@@ -45,7 +45,7 @@ async function main(argv = process.argv.slice(2)) {
   if (command === "init") {
     const options = parseOptions(rest);
     const name = options.name || await ask("Agent name");
-    const soul = options.soul || await ask("Soul, in one sentence", { fallback: "" });
+    const soul = await resolveSoulInput(options);
     const profile = await initAgent({
       name,
       soul,
@@ -101,7 +101,7 @@ async function main(argv = process.argv.slice(2)) {
     const options = parseOptions(rest);
     const hasAgent = await loadAgent();
     const name = options.name || (hasAgent ? null : await ask("Agent name", { fallback: "Wakefield" }));
-    const soul = options.soul || (hasAgent ? "" : await ask("Soul, in one sentence", { fallback: "" }));
+    const soul = hasAgent ? "" : await resolveSoulInput(options);
     const result = await installWakefield({
       name: name || "Wakefield",
       soul,
@@ -118,6 +118,9 @@ async function main(argv = process.argv.slice(2)) {
     if (result.skillResult) {
       const changed = result.skillResult.installed.filter((skill) => skill.changed).length;
       console.log(`Wakefield base skills: ${changed > 0 ? "installed" : "already installed"} (${result.skillResult.installed.length}) at ${result.skillResult.skillsRoot}`);
+    }
+    if (result.hookResult?.changed || result.skillResult?.installed?.some((skill) => skill.changed)) {
+      console.log("Restart Codex once, then continue the selected agent chat so hooks and tools reload cleanly.");
     }
     console.log("");
     console.log(formatDoctor(result.doctor));
@@ -198,7 +201,9 @@ async function main(argv = process.argv.slice(2)) {
     const hasAgent = await loadAgent();
     const nonInteractive = Boolean(options.json || options.yes);
     const name = options.name || (hasAgent || nonInteractive ? "Wakefield" : await ask("Agent name", { fallback: "Wakefield" }));
-    const soul = options.soul || (hasAgent || nonInteractive ? "" : await ask("Soul, in one sentence", { fallback: "" }));
+    const soul = hasAgent || (nonInteractive && !options.soul && !options.soulPreset)
+      ? ""
+      : await resolveSoulInput(options, { prompt: !nonInteractive });
     const result = await runSetup({
       name,
       soul,
@@ -1087,8 +1092,8 @@ async function main(argv = process.argv.slice(2)) {
 function usage() {
   return [
     "Usage:",
-    "  wakefield install [--name NAME] [--soul TEXT] [--thread-id ID|--latest-thread] [--cwd PATH]",
-    "  wakefield init [--name NAME] [--soul TEXT] [--thread-id ID] [--cwd PATH]",
+    "  wakefield install [--name NAME] [--soul TEXT|--soul-preset friendly|gamer|fantasy|operator] [--thread-id ID|--latest-thread] [--cwd PATH]",
+    "  wakefield init [--name NAME] [--soul TEXT|--soul-preset friendly|gamer|fantasy|operator] [--thread-id ID] [--cwd PATH]",
     "  wakefield agent status [--json]",
     "  wakefield agent configure [--name NAME] [--soul TEXT] [--json]",
     "  wakefield select-thread --thread-id ID|--latest [--cwd PATH]",
@@ -1100,8 +1105,8 @@ function usage() {
     "  wakefield setup status [--json]",
     "  wakefield setup next [--json]",
     "  wakefield setup actions [--json]",
-    "  wakefield setup run [--name NAME] [--soul TEXT] [--thread-id ID|--latest-thread] [--enable-service] [--enable-dispatch] [--env-file PATH] [--install-launch-agent] [--load-launch-agent] [--json]",
-    "  wakefield setup connector discord|imessage [--set key=value] [--secret KEY=value] [--env-file PATH] [--overwrite] [--no-load] [--yes] [--json]",
+    "  wakefield setup run [--name NAME] [--soul TEXT|--soul-preset friendly|gamer|fantasy|operator] [--thread-id ID|--latest-thread] [--enable-service] [--enable-dispatch] [--envFile PATH] [--install-launch-agent] [--load-launch-agent] [--json]",
+    "  wakefield setup connector discord|imessage [--set key=value] [--secret KEY=value] [--envFile PATH] [--overwrite] [--no-load] [--yes] [--json]",
     "  wakefield pack inspect --file pack.json [--json]",
     "  wakefield pack install --file pack.json [--thread-id ID|--latest-thread] [--enable-service] [--dry-run] [--json]",
     "  wakefield menu snapshot [--json]",
@@ -1111,7 +1116,7 @@ function usage() {
     "  wakefield connectors wizards [--json]",
     "  wakefield connectors configure CONNECTOR [--enable|--disable] [--set key=value] [--unset key] [--json]",
     "  wakefield managed-connectors status [ID] [--json]",
-    "  wakefield managed-connectors setup ID [--set key=value] [--secret KEY=value] [--env-file PATH] [--overwrite] [--no-load] [--yes] [--json]",
+    "  wakefield managed-connectors setup ID [--set key=value] [--secret KEY=value] [--envFile PATH] [--overwrite] [--no-load] [--yes] [--json]",
     "  wakefield managed-connectors wizard ID [--json]",
     "  wakefield managed-connectors wizards [--json]",
     "  wakefield managed-connectors configure ID --adapter ADAPTER [--enable|--disable] [--set key=value] [--json]",
@@ -1161,7 +1166,7 @@ function usage() {
     "  wakefield recall --query TEXT [--limit N]",
     "  wakefield dream [--limit N] [--dry-run] [--no-capture] [--json]",
     "  wakefield service status [--json]",
-    "  wakefield service configure [--enable|--disable] [--interval-minutes N] [--enable-dispatch|--disable-dispatch] [--dispatch-mode MODE] [--dispatch-limit N] [--env-file PATH|--clear-env-file] [--json]",
+    "  wakefield service configure [--enable|--disable] [--interval-minutes N] [--enable-dispatch|--disable-dispatch] [--dispatch-mode MODE] [--dispatch-limit N] [--envFile PATH|--clearEnvFile] [--json]",
     "  wakefield service run-once [--limit N] [--no-capture] [--json]",
     "  wakefield service launch-agent status [--json]",
     "  wakefield service launch-agent print",
@@ -1204,7 +1209,7 @@ async function connectorSetupInput(connectorId, options) {
   const envFile = options.envFile || (!options.clearEnvFile && shouldPrompt
     ? await ask("Env file path for connector secrets", { fallback: ".env.wakefield" })
     : null);
-  if (!shouldPrompt) return { settings, envFile };
+  if (!shouldPrompt) return { settings, envFile, secrets };
 
   if (connectorId === "discord-codex") {
     if (!settings.tokenEnv && !settings.tokenFile) {
@@ -1237,7 +1242,7 @@ async function connectorSetupInput(connectorId, options) {
 async function writeEnvSecrets(envFile, secrets = {}) {
   const entries = Object.entries(secrets).filter(([key, value]) => key && value != null);
   if (entries.length === 0) return null;
-  if (!envFile) throw new Error("--secret requires --env-file PATH.");
+  if (!envFile) throw new Error("--secret requires --envFile PATH.");
   const resolved = path.resolve(expandHome(envFile));
   let lines = [];
   try {
@@ -1299,6 +1304,25 @@ async function ask(label, { fallback = null } = {}) {
   } finally {
     rl.close();
   }
+}
+
+async function resolveSoulInput(options = {}, { prompt = true } = {}) {
+  if (options.soul) return options.soul;
+  if (options.soulPreset) {
+    const preset = soulFromPreset(options.soulPreset);
+    if (!preset) throw new Error(`Unknown soul preset: ${options.soulPreset}`);
+    return preset;
+  }
+  if (!prompt) return "";
+
+  const choices = SOUL_PRESETS.map((preset) => `${preset.id} (${preset.label})`).join(", ");
+  const selected = await ask(`Soul preset: ${choices}, custom`, { fallback: "friendly" });
+  if (String(selected || "").trim().toLowerCase() === "custom") {
+    return ask("Custom soul, in one sentence", { fallback: "" });
+  }
+  const preset = soulFromPreset(selected);
+  if (!preset) throw new Error(`Unknown soul preset: ${selected}`);
+  return preset;
 }
 
 function parseOptions(args) {

@@ -67,14 +67,21 @@ enum WakefieldCLI {
     private static func resolveInvocation(_ args: [String]) -> (executable: String, arguments: [String]) {
         if let configured = configuredCLIPath(), FileManager.default.fileExists(atPath: configured) {
             if configured.hasSuffix(".mjs") {
-                return ("/usr/bin/env", ["node", configured] + args)
+                return nodeInvocation(script: configured, args: args)
             }
             return (configured, args)
         }
         if let dev = developmentCLIPath(), FileManager.default.fileExists(atPath: dev) {
-            return ("/usr/bin/env", ["node", dev] + args)
+            return nodeInvocation(script: dev, args: args)
         }
         return ("/usr/bin/env", ["wakefield"] + args)
+    }
+
+    private static func nodeInvocation(script: String, args: [String]) -> (executable: String, arguments: [String]) {
+        if let node = configuredNodePath(), FileManager.default.fileExists(atPath: node) {
+            return (node, [script] + args)
+        }
+        return ("/usr/bin/env", ["node", script] + args)
     }
 
     private static func configuredCLIPath() -> String? {
@@ -95,6 +102,24 @@ enum WakefieldCLI {
         return FileManager.default.fileExists(atPath: candidate) ? candidate : nil
     }
 
+    private static func configuredNodePath() -> String? {
+        let env = ProcessInfo.processInfo.environment
+        if let value = env["WAKEFIELD_NODE"], !value.isEmpty { return expandHome(value) }
+        if let value = env["WAKEFIELD_NODE_PATH"], !value.isEmpty { return expandHome(value) }
+        if let value = Bundle.main.object(forInfoDictionaryKey: "WakefieldNodePath") as? String, !value.isEmpty {
+            return expandHome(value)
+        }
+        for candidate in [
+            "\(NSHomeDirectory())/.local/share/mise/shims/node",
+            "/opt/homebrew/bin/node",
+            "/usr/local/bin/node",
+            "/usr/bin/node"
+        ] where FileManager.default.fileExists(atPath: candidate) {
+            return candidate
+        }
+        return nil
+    }
+
     private static func processEnvironment() -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
         let currentPath = environment["PATH"] ?? ""
@@ -107,6 +132,9 @@ enum WakefieldCLI {
             "/bin",
             currentPath
         ].filter { !$0.isEmpty }.joined(separator: ":")
+        if environment["WAKEFIELD_NODE"] == nil, let node = configuredNodePath() {
+            environment["WAKEFIELD_NODE"] = node
+        }
         return environment
     }
 }

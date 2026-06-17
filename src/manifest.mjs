@@ -74,7 +74,7 @@ export async function wakefieldManifest({
         ["wakefield", "memory", "capture", "--dry-run", "--json"],
         ["wakefield", "dream", "--json"],
         ["wakefield", "service", "status", "--json"],
-        ["wakefield", "service", "configure", "--env-file", "$envFile", "--json"],
+        ["wakefield", "service", "configure", "--envFile", "$envFile", "--json"],
         ["wakefield", "service", "run-once", "--json"],
         ["wakefield", "service", "launch-agent", "status", "--json"],
         ["wakefield", "service", "launch-agent", "install", "--load", "--json"],

@@ -10,6 +10,12 @@ MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
 EXECUTABLE="$MACOS/WakefieldMenuBar"
 CLI_PATH="$ROOT/src/cli.mjs"
+NODE_PATH="${WAKEFIELD_NODE:-${WAKEFIELD_NODE_PATH:-${npm_node_execpath:-}}}"
+if [[ -z "$NODE_PATH" ]]; then
+  NODE_PATH="$(command -v node || true)"
+fi
+
+pkill -x WakefieldMenuBar >/dev/null 2>&1 || true
 
 swift build --package-path "$PACKAGE" -c release
 
@@ -42,6 +48,8 @@ cat > "$CONTENTS/Info.plist" <<PLIST
   <true/>
   <key>WakefieldCLIPath</key>
   <string>${CLI_PATH}</string>
+  <key>WakefieldNodePath</key>
+  <string>${NODE_PATH}</string>
 </dict>
 </plist>
 PLIST

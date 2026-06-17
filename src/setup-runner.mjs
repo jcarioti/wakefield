@@ -159,6 +159,9 @@ export function formatSetupRun(result) {
     lines.push(`${action.status}: ${action.id} - ${action.detail}`);
   }
   lines.push("", `state: ${result.phase}`);
+  if (result.actions.some((action) => ["install-hooks", "install-base-skills"].includes(action.id) && action.status === "applied")) {
+    lines.push("", "Restart Codex once, then continue the selected agent chat so hooks and tools reload cleanly.");
+  }
   if (!result.ok && result.status.nextSteps.length > 0) {
     lines.push("", "Next steps:");
     for (const step of result.status.nextSteps) lines.push(`- ${step}`);

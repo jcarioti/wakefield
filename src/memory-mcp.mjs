@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureDir, pathExists } from "./json-store.mjs";
+import { nodeExecutable } from "./node-runtime.mjs";
 import { appHome, expandHome } from "./paths.mjs";
 
 export const MEMORY_MCP_SERVER_NAME = "wakefield-memory";
@@ -30,7 +31,7 @@ export function memoryMcpCommand({
     home
   ];
   if (agentId) args.push("--agent-id", agentId);
-  return ["node", ...args];
+  return [nodeExecutable(), ...args];
 }
 
 export async function memoryMcpStatus({
@@ -134,9 +135,12 @@ export function formatMemoryMcpStatus(status) {
 
 export function formatMemoryMcpInstall(result) {
   if (result.dryRun) return `Wakefield memory MCP dry run: ${result.codexConfigPath}`;
-  return result.changed
+  const line = result.changed
     ? `Installed Wakefield memory MCP server ${result.serverName}: ${result.codexConfigPath}`
     : `Wakefield memory MCP server ${result.serverName} already configured: ${result.codexConfigPath}`;
+  return result.changed
+    ? `${line}\nRestart Codex once before using the Wakefield memory tools in the selected chat.`
+    : line;
 }
 
 function memoryMcpBlock({ home, agentId = null }) {

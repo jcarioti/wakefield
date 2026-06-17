@@ -216,7 +216,7 @@ export function setupActions({ report, agent, threads, connectors = [], managedC
       kind: "command",
       label: "Choose service secrets file",
       enabled: Boolean(agent && serviceEnvFileNeedsAttention(service?.environment)),
-      command: ["wakefield", "service", "configure", "--env-file", "$envFile"],
+      command: ["wakefield", "service", "configure", "--envFile", "$envFile"],
       fields: [
         { id: "envFile", label: "Service secrets file", required: true, placeholder: "~/.wakefield.env" }
       ],
@@ -337,14 +337,13 @@ function nextSetupSteps({ report, agent, threads }) {
     if (threads.length > 0) {
       steps.push("Select the newest local Codex thread: pnpm wakefield select-thread --latest");
     } else {
-      steps.push("Open or create the Codex thread that should be this agent's personality, then run: pnpm wakefield select-thread --latest");
+      steps.push(`Open Codex in the agent workspace (${agent.cwd}), create the chat that should be this agent's personality, then run: pnpm wakefield select-thread --latest`);
     }
   }
 
   if (check("Codex hook config")?.ok) {
     steps.push("In Codex, run /hooks and trust the Wakefield hook if Codex asks for review.");
   }
-
   return [...new Set(steps)];
 }
 
