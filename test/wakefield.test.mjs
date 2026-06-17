@@ -10,7 +10,7 @@ import { routePromptToCodex } from "../src/codex-ipc.mjs";
 import { listRecentThreads, threadIdFromFilename } from "../src/codex-sessions.mjs";
 import { configureConnector, connectorWizard, connectorWizards, CONNECTOR_SETUP_SLOTS, connectorStatuses } from "../src/connectors.mjs";
 import { importContactsFile, loadContacts, resolveContact } from "../src/contacts.mjs";
-import { archiveMatter, formatContextMemory, recallContext, upsertMatter, upsertNote } from "../src/context-memory.mjs";
+import { archiveMatter, formatContextMemory, loadMatters, recallContext, upsertMatter, upsertNote } from "../src/context-memory.mjs";
 import { discordMessageAllowed, ingestDiscordGatewayMessage, normalizeDiscordMessage } from "../src/discord-gateway.mjs";
 import { doctor } from "../src/doctor.mjs";
 import { configureDuty, configureWakeup, dutyStatuses, runDueDuties } from "../src/duties.mjs";
@@ -1955,6 +1955,7 @@ test("manifest describes package, core features, setup commands, and connector s
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield memory notes list --json"));
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield memory matters list --json"));
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield memory recall --query $query --json"));
+  assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield memory capture --dry-run --json"));
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield dream --json"));
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield service configure --env-file $envFile --json"));
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield service run-once --json"));
@@ -2206,6 +2207,88 @@ test("dreamer processes queued hook events into durable state once", async () =>
     const second = await processDreams(profile);
     assert.equal(second.processed, 0);
     assert.equal(JSON.parse(await fs.readFile(profile.memory.statePath, "utf8")).recentTurns.length, 1);
+  } finally {
+    delete process.env.WAKEFIELD_HOME;
+  }
+});
+
+test("dreamer captures passive operational incidents into active context", async () => {
+  const home = await tempHome();
+  process.env.WAKEFIELD_HOME = home;
+  try {
+    const profile = await initAgent({ name: "Incident Memory", soul: "", threadId: "session-1", home });
+    let providerPayload = null;
+
+    await handleHookInput({
+      hook_event_name: "UserPromptSubmit",
+      session_id: "session-1",
+      turn_id: "turn-photon",
+      cwd: profile.cwd,
+      prompt: "Small context: the Photon/Spectrum iMessage path still seems down, so Discord is probably the safe channel for now."
+    });
+    await handleHookInput({
+      hook_event_name: "Stop",
+      session_id: "session-1",
+      turn_id: "turn-photon",
+      cwd: profile.cwd,
+      last_assistant_message: "Got it. I will treat Discord as the reliable path while Photon/Spectrum looks unhealthy."
+    });
+
+    const result = await processDreams(profile, {
+      captureProvider: async (payload) => {
+        providerPayload = payload;
+        return {
+          deltas: [{
+            action: "create_active_context",
+            id: "incident-photon-spectrum-imessage",
+            title: "Photon/Spectrum iMessage delivery degraded",
+            text: null,
+            summary: "Photon/Spectrum iMessage delivery appears unreliable; Discord is currently the reliable external channel.",
+            status: "active",
+            statusReason: null,
+            scope: {
+              people: [],
+              rooms: [],
+              channels: ["imessage", "discord"],
+              tasks: [],
+              topics: ["photon", "spectrum", "connector-outage"],
+              cases: [],
+              connectors: ["imessage"],
+              senders: [],
+              conversations: []
+            },
+            nextAction: "Retest iMessage receive/send before relying on it.",
+            notifyWhen: null,
+            tags: ["incident", "connector"],
+            sources: [],
+            confidence: "high",
+            rationale: "The turn states an unresolved connector reliability issue."
+          }]
+        };
+      }
+    });
+
+    assert.equal(result.processed, 1);
+    assert.match(providerPayload.turn.summary, /Photon\/Spectrum iMessage path still seems down/);
+    assert.equal(result.capture.applied[0].id, "incident-photon-spectrum-imessage");
+
+    const matters = await loadMatters(profile);
+    const incident = matters.matters.find((matter) => matter.id === "incident-photon-spectrum-imessage");
+    assert.equal(incident.status, "active");
+    assert.match(incident.summary, /Discord is currently the reliable external channel/);
+
+    const recalled = await recallContext(profile, {
+      query: "photon spectrum imessage",
+      limitMatters: 1
+    });
+    assert.equal(recalled.matters[0].id, "incident-photon-spectrum-imessage");
+
+    const second = await processDreams(profile, {
+      captureProvider: async () => {
+        throw new Error("capture should not run twice for the same summary");
+      }
+    });
+    assert.equal(second.capture.reviewed, 0);
   } finally {
     delete process.env.WAKEFIELD_HOME;
   }

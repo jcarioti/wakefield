@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { appendJsonl, readJson, readJsonl, writeJson } from "./json-store.mjs";
+import { processMemoryCaptures } from "./memory-capture.mjs";
 
 export async function recordMemory(agent, {
   channel = "journal",
@@ -46,7 +47,11 @@ export async function updateState(agent, patch) {
 export async function processDreams(agent, {
   limit = 10,
   dryRun = false,
-  now = new Date()
+  now = new Date(),
+  capture = true,
+  captureProvider = null,
+  env = process.env,
+  fetchImpl = fetch
 } = {}) {
   if (!agent) throw new Error("processDreams needs an agent profile.");
   const state = await readJson(agent.memory.statePath, {
@@ -64,7 +69,8 @@ export async function processDreams(agent, {
     .filter((entry) => isPendingDream(entry, processedIds))
     .slice(0, Number(limit || 10));
   const journal = pending.length > 0 ? await readJsonl(agent.memory.journalPath) : [];
-  const summaries = summarizePendingDreams(pending, journal, now);
+  const inbox = pending.length > 0 ? await readJsonl(agent.memory.inboxPath) : [];
+  const summaries = summarizePendingDreams(pending, [...journal, ...inbox], now);
   const nextProcessedIds = mergeProcessedIds(processedIds, summaries);
 
   if (!dryRun && summaries.length > 0) {
@@ -96,11 +102,24 @@ export async function processDreams(agent, {
     });
   }
 
+  const captureResult = capture === false
+    ? null
+    : await processMemoryCaptures(agent, {
+      summaries: summaries.length > 0 ? summaries : null,
+      limit,
+      dryRun,
+      now,
+      captureProvider,
+      env,
+      fetchImpl
+    });
+
   return {
     processed: summaries.length,
     pending: dreams.filter((entry) => isPendingDream(entry, new Set(nextProcessedIds))).length,
     dryRun: Boolean(dryRun),
-    summaries
+    summaries,
+    capture: captureResult
   };
 }
 
@@ -156,6 +175,9 @@ export function compact(value, max = 500) {
 
 export function formatDreamResult(result) {
   if (result.processed === 0) {
+    if (result.capture?.enabled && result.capture.reviewed > 0) {
+      return formatCaptureLine(result.capture);
+    }
     return result.pending > 0
       ? `No dreams processed in this batch. ${result.pending} still pending.`
       : "No pending dreams.";
@@ -166,8 +188,19 @@ export function formatDreamResult(result) {
     lines.push(`- ${compact(summary.summary, 220)}`);
   }
   if (result.pending > 0) lines.push(`${result.pending} still pending.`);
+  if (result.capture?.enabled && result.capture.applied.length > 0) {
+    lines.push(`Memory capture applied ${result.capture.applied.length} delta${result.capture.applied.length === 1 ? "" : "s"}.`);
+  } else if (result.capture && !result.capture.enabled) {
+    lines.push(`Memory capture skipped: ${result.capture.skippedReason}`);
+  }
   if (result.dryRun) lines.push("Dry run; no memory was written.");
   return lines.join("\n");
+}
+
+function formatCaptureLine(capture) {
+  const base = `Memory capture reviewed ${capture.reviewed} dream summar${capture.reviewed === 1 ? "y" : "ies"}.`;
+  if (capture.applied.length === 0) return `${base} No deltas applied.`;
+  return `${base} Applied ${capture.applied.length} delta${capture.applied.length === 1 ? "" : "s"}.`;
 }
 
 function memoryFile(agent, channel) {
@@ -250,12 +283,17 @@ function summarizeTurnDream(entry, sourceEntries, journal, now) {
   const stop = related.findLast?.((item) => item.kind === "turn-stop")
     || [...related].reverse().find((item) => item.kind === "turn-stop")
     || null;
+  const prompts = related.filter((item) => item.kind === "user-prompt");
   const tools = related.filter((item) => item.kind === "tool-use");
   const changes = tools.map((item) => compact(item.text, 180));
   const subject = turnId ? `Turn ${turnId}` : entry.kind === "dream-queued" ? "A Codex turn" : "A compaction edge";
-  const base = stop?.text
-    ? compact(stop.text, 360)
+  const promptText = prompts.length > 0
+    ? `Prompt: ${compact(prompts.map((item) => item.text).join(" "), 360)}. `
+    : "";
+  const responseText = stop?.text
+    ? `Response: ${compact(stop.text, 360)}`
     : compact(entry.text, 360);
+  const base = `${promptText}${responseText}`;
   const toolText = changes.length > 0
     ? ` Tool activity: ${changes.slice(-4).join("; ")}.`
     : "";

@@ -356,7 +356,7 @@ Wakefield installs Codex lifecycle hooks and uses routed-turn metadata:
 - `SessionStart`: records a lifecycle edge without injecting the soul or memory
 - `PostToolUse`: records meaningful tool activity for change-based memory
 - `PreCompact` / `PostCompact`: records compaction boundaries for bookkeeping only
-- `Stop`: records the latest assistant output and queues a dream
+- `Stop`: records the latest assistant output and queues background memory review
 
 Inspect and edit scoped memory:
 
@@ -374,6 +374,15 @@ pnpm exec wakefield memory matters upsert \
 pnpm exec wakefield memory recall --query "tracking package" --person joe
 pnpm exec wakefield memory matters archive joe-package --reason "Tracking sent."
 ```
+
+Run background memory processing:
+
+```bash
+pnpm exec wakefield dream
+pnpm exec wakefield memory capture --dry-run --json
+```
+
+`wakefield dream` first builds deterministic turn summaries from hook evidence. If `OPENAI_API_KEY` is configured, Wakefield then runs a small structured capture pass that can create or update notes and active-context matters. The default capture model is `gpt-5.4-mini`; set `WAKEFIELD_MEMORY_MODEL` to use a different model. Set `WAKEFIELD_OPENAI_API_KEY` if you want Wakefield to use a key that is separate from the rest of your shell.
 
 Install Wakefield memory tools into the selected Codex config:
 
@@ -397,14 +406,14 @@ This exposes:
 
 Use these tools when Codex needs to deliberately inspect or maintain memory beyond the tiny note card Wakefield injects automatically. The app-support JSON files are Wakefield's storage layer, not the agent-facing API.
 
-The older journal/dreamer path still exists for hook telemetry and future provider integration:
+The journal/dreamer path is the background layer:
 
 ```bash
 pnpm exec wakefield dream
 pnpm exec wakefield recall --query "morning summaries"
 ```
 
-The local dreamer is deterministic and does not call a model. It summarizes queued hook events into local state so a future Honcho-style provider can be added without changing the rest of the runtime contract.
+Without an API key, it still summarizes queued hook events into local state. With an API key, it also reviews those summaries for meaningful memory deltas. The reviewer is deliberately stingy: it should save unresolved incidents, cross-channel continuity, changed statuses, and durable preferences, while skipping ordinary chat and completed one-off work.
 
 ## Service Tick
 

@@ -21,6 +21,7 @@ import { formatImessagePoll, pollImessageChatDb } from "./imessage-chatdb.mjs";
 import { installWakefield } from "./install.mjs";
 import { formatManifest, wakefieldManifest } from "./manifest.mjs";
 import { configureManagedConnector, formatManagedConnectorConfigInit, formatManagedConnectorMcpInstall, formatManagedConnectorStatuses, formatManagedConnectorTest, formatManagedConnectorWizard, formatManagedLaunchAgentResult, formatManagedLaunchAgentStatus, importManagedConnectors, initializeManagedConnectorConfig, installManagedConnectorMcp, managedConnectorLaunchAgentPlist, managedConnectorLaunchAgentStatus, managedConnectorStatus, managedConnectorStatuses, managedConnectorWizard, managedConnectorWizards, printManagedConnectorMcp, runManagedConnectorProcess, testManagedConnector, installManagedConnectorLaunchAgent, loadManagedConnectorLaunchAgent, unloadManagedConnectorLaunchAgent, uninstallManagedConnectorLaunchAgent } from "./managed-connectors.mjs";
+import { formatMemoryCaptureResult, processMemoryCaptures } from "./memory-capture.mjs";
 import { formatMemoryMcpInstall, formatMemoryMcpStatus, installMemoryMcp, memoryMcpStatus, printMemoryMcp } from "./memory-mcp.mjs";
 import { formatMenuSnapshot, menuSnapshot } from "./menu-snapshot.mjs";
 import { compact, formatDreamResult, memoryContext, processDreams, recordMemory } from "./memory.mjs";
@@ -865,6 +866,16 @@ async function main(argv = process.argv.slice(2)) {
       return;
     }
 
+    if (group === "capture") {
+      const options = parseOptions(rest.slice(1));
+      const result = await processMemoryCaptures(agent, {
+        limit: Number(options.limit || 5),
+        dryRun: Boolean(options.dryRun)
+      });
+      console.log(options.json ? JSON.stringify(result, null, 2) : formatMemoryCaptureResult(result));
+      return;
+    }
+
     throw new Error(`Unknown memory command: ${rest.join(" ") || "(missing)"}`);
   }
 
@@ -873,7 +884,8 @@ async function main(argv = process.argv.slice(2)) {
     const agent = await requireAgent();
     const result = await processDreams(agent, {
       limit: Number(options.limit || 10),
-      dryRun: Boolean(options.dryRun)
+      dryRun: Boolean(options.dryRun),
+      capture: !Boolean(options.noCapture)
     });
     console.log(options.json ? JSON.stringify(result, null, 2) : formatDreamResult(result));
     return;
@@ -1058,9 +1070,10 @@ function usage() {
     "  wakefield memory matters archive ID [--reason TEXT] [--json]",
     "  wakefield memory forget note|matter ID",
     "  wakefield memory recall [--query TEXT] [--person ID] [--task ID] [--topic TOPIC] [--json]",
+    "  wakefield memory capture [--limit N] [--dry-run] [--json]",
     "  wakefield remember --text TEXT [--kind KIND] [--channel journal|inbox|dreams]",
     "  wakefield recall --query TEXT [--limit N]",
-    "  wakefield dream [--limit N] [--dry-run] [--json]",
+    "  wakefield dream [--limit N] [--dry-run] [--no-capture] [--json]",
     "  wakefield service status [--json]",
     "  wakefield service configure [--enable|--disable] [--interval-minutes N] [--enable-dispatch|--disable-dispatch] [--dispatch-mode MODE] [--dispatch-limit N] [--env-file PATH|--clear-env-file] [--json]",
     "  wakefield service run-once [--limit N] [--json]",
