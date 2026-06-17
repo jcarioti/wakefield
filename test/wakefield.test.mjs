@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import { inspectAgentPack, installAgentPack } from "../src/agent-packs.mjs";
+import { codexDreamerConfig } from "../src/codex-dreamer.mjs";
 import { routePromptToCodex } from "../src/codex-ipc.mjs";
 import { listRecentThreads, threadIdFromFilename } from "../src/codex-sessions.mjs";
 import { configureConnector, connectorWizard, connectorWizards, CONNECTOR_SETUP_SLOTS, connectorStatuses } from "../src/connectors.mjs";
@@ -2514,6 +2515,14 @@ test("memory capture uses Codex exec as the default reviewer", async () => {
   } finally {
     delete process.env.WAKEFIELD_HOME;
   }
+});
+
+test("Codex dreamer config honors explicit path and has a default executable", () => {
+  assert.equal(codexDreamerConfig({
+    WAKEFIELD_DREAM_CODEX_PATH: "/tmp/custom-codex"
+  }).codexPath, "/tmp/custom-codex");
+  assert.equal(typeof codexDreamerConfig({}).codexPath, "string");
+  assert.ok(codexDreamerConfig({}).codexPath.length > 0);
 });
 
 test("memory capture updates an existing active matter when one blocker clears", async () => {

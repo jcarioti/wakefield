@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,13 +7,18 @@ import { expandHome } from "./paths.mjs";
 
 const DEFAULT_TIMEOUT_MS = 300000;
 const DEFAULT_DREAM_MODEL = "gpt-5.4-mini";
+const DEFAULT_CODEX_PATHS = [
+  "/Applications/Codex.app/Contents/Resources/codex",
+  "/opt/homebrew/bin/codex",
+  "/usr/local/bin/codex"
+];
 
 export function codexDreamerConfig(env = process.env) {
   const provider = String(env.WAKEFIELD_MEMORY_PROVIDER || "codex").trim().toLowerCase();
   return {
     provider,
     enabled: provider === "codex",
-    codexPath: env.WAKEFIELD_DREAM_CODEX_PATH || env.WAKEFIELD_CODEX_PATH || "codex",
+    codexPath: env.WAKEFIELD_DREAM_CODEX_PATH || env.WAKEFIELD_CODEX_PATH || defaultCodexPath(),
     codexHome: env.WAKEFIELD_DREAM_CODEX_HOME || null,
     model: env.WAKEFIELD_DREAM_MODEL || env.WAKEFIELD_MEMORY_MODEL || DEFAULT_DREAM_MODEL,
     reasoningEffort: env.WAKEFIELD_DREAM_REASONING_EFFORT || "low",
@@ -20,6 +26,10 @@ export function codexDreamerConfig(env = process.env) {
     ignoreUserConfig: env.WAKEFIELD_DREAM_CODEX_IGNORE_USER_CONFIG !== "false",
     timeoutMs: positiveInteger(env.WAKEFIELD_DREAM_CODEX_TIMEOUT_MS, DEFAULT_TIMEOUT_MS)
   };
+}
+
+function defaultCodexPath() {
+  return DEFAULT_CODEX_PATHS.find((candidate) => existsSync(candidate)) || "codex";
 }
 
 export async function createCodexStructuredMemoryResponse({
