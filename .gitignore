@@ -13,6 +13,7 @@ outputs/
 
 # Package/build artifacts
 *.tgz
+.build/
 coverage/
 dist/
 

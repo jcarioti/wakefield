@@ -1,106 +1,46 @@
 # Wakefield
 
-Turn one persistent Codex thread into a local, always-reachable agent.
+Turn a Codex chat into an always-on personal AI assistant.
 
-Wakefield is a small local runtime for people who want a personal or team agent that can be reached through Discord, iMessage, email, local scripts, and scheduled wakeups while still working inside the visible Codex app conversation.
+Wakefield makes a Codex conversation reachable through familiar channels like
+iMessage and Discord, then gives it scheduled wakeups and repeatable duties so
+it can keep working even when you are not sitting in front of Codex.
 
-It is built around a simple idea: pick one long-lived Codex thread as the personality, give it a name and operating context, then let Wakefield handle connectors, memory hooks, schedules, and background service wiring around it.
+Wakefield is built for macOS. Runtime files live in Application Support, and
+secret values stay in env files or ignored local files.
 
-## Highlights
+## Installation
 
-- **Persistent personality**: select a Codex thread and keep using it as the agent's ongoing mind.
-- **Local-first state**: profiles, inbox, memory, dreams, contacts, and schedule state live in normal app support storage.
-- **Connector-ready**: Discord, Photon/Spectrum iMessage, email, local HTTP intake, and a transport-neutral inbox are included.
-- **Scheduled wakeups**: define named wakeups like `08:00 morning-ops`, then attach reusable duties to each wakeup.
-- **Skill-backed duties**: keep scheduled prompts compact by pointing duties at Codex skills instead of pasting large prompt blobs.
-- **Scoped memory**: stable notes plus temporary active context are recalled only when they match the current person, room, task, case, or topic.
-- **Installer-friendly API**: JSON commands, setup actions, wizards, and a local HTTP API make it practical to build a menu bar or desktop setup flow.
-- **No secret storage by default**: Wakefield stores environment variable names and local file references, not raw tokens.
-
-## Mental Model
-
-Wakefield has a few first-class objects:
-
-| Object | Purpose |
-| --- | --- |
-| **Agent** | Name, soul, selected Codex thread, and workspace. |
-| **Thread** | The persistent Codex chat that carries the personality over time. |
-| **Contacts** | Deterministic identity records for Discord users, phone numbers, email addresses, roles, and reply preferences. |
-| **Skills** | Reusable instruction packs installed into Codex. |
-| **Duties** | Reusable units of scheduled work, usually backed by one or more skills. |
-| **Wakeups** | Local clock events that run one or more duties together in a single Codex turn. |
-| **Connectors** | Inbound and outbound bridges for Discord, iMessage, email, HTTP, and local scripts. |
-| **Memory** | Durable notes, temporary active context, local journals, dreams, and hook-produced state. |
-| **Service** | A background tick that runs dreams, due wakeups, connector polls, and optional pending-message dispatch. |
-| **Agent Packs** | Portable recipes that install an agent profile, contacts, skills, duties, wakeups, connectors, and service defaults. |
-
-## Requirements
-
-- Node.js 20 or newer
-- pnpm for Wakefield development
-- npm, pnpm, or yarn for projects that consume Wakefield as a dependency
-- Codex desktop app for IPC-routed turns and visible conversation sync
-- macOS for LaunchAgent helpers and local Messages database polling
-- Optional connector credentials:
-  - Discord bot token
-  - Photon/Spectrum iMessage project credentials
-  - IMAP credentials for email polling
-
-Wakefield can still run local verification, memory, HTTP intake, dry-run dispatch, and pack inspection without live connector credentials.
-
-## Quick Start
+Install Wakefield as a dev dependency inside an agent project:
 
 ```bash
-git clone git@github.com:jcarioti/wakefield.git
-cd wakefield
-pnpm install
-pnpm verify
+pnpm add -D wakefield
+npm install --save-dev wakefield
+yarn add --dev wakefield
 ```
 
-Use this path when you want to contribute to Wakefield itself. In a checkout of this repo, run the CLI through the local script:
+Add connector packages only for the channels you plan to use:
 
 ```bash
-pnpm wakefield manifest --json
-pnpm wakefield setup status
+pnpm add -D @wakefield/discord-codex @wakefield/imessage-spectrum
+npm install --save-dev @wakefield/discord-codex @wakefield/imessage-spectrum
+yarn add --dev @wakefield/discord-codex @wakefield/imessage-spectrum
 ```
 
-## Use In An Agent Project
-
-You do not need to clone Wakefield to build a new agent. Create a small agent repo that carries the agent pack, soul, contacts, and skills, then install Wakefield as a dependency.
-
-```json
-{
-  "dependencies": {
-    "wakefield": "^0.1.0"
-  },
-  "optionalDependencies": {
-    "@wakefield/discord-codex": "^0.1.0",
-    "@wakefield/imessage-spectrum": "^0.1.0"
-  },
-  "scripts": {
-    "wakefield": "wakefield",
-    "verify": "wakefield verify",
-    "install-agent": "wakefield pack install --file wakefield-pack.json"
-  }
-}
-```
-
-Then run Wakefield through your package manager:
+Run Wakefield with your package manager's exec command:
 
 ```bash
-pnpm wakefield setup status
+pnpm exec wakefield setup status
 npm exec wakefield -- setup status
-yarn wakefield setup status
+yarn exec wakefield setup status
 ```
 
-The core `wakefield` package is intentionally light. Managed connector packages are optional:
+The examples below use `pnpm exec wakefield`. With npm, use `npm exec
+wakefield --` in the same position. With Yarn, use `yarn exec wakefield`.
 
-- `@wakefield/discord-codex` for the Discord Gateway/MCP connector
-- `@wakefield/imessage-spectrum` for the Photon/Spectrum iMessage connector
+## Create An Agent
 
-The Photon/Spectrum package includes native/transitive provider dependencies. npm and yarn run those builds as part of install; pnpm may ask you to approve the native builds before first use.
-
-Create or reuse a local agent:
+Create or reuse a local agent by giving it a name, a soul, and a Codex chat:
 
 ```bash
 pnpm exec wakefield setup run \
@@ -115,38 +55,229 @@ Check the install:
 ```bash
 pnpm exec wakefield setup status
 pnpm exec wakefield doctor
-pnpm exec wakefield menu snapshot --json
 ```
 
-If you are building an installer or menu bar, prefer JSON commands:
+The selected Codex chat is the personality. Wakefield does not replace the
+Codex app; it routes work into that same conversation.
+
+## Connectors
+
+Wakefield has three primary connectors: Discord, iMessage, and email.
+
+Check current connector state at any time:
 
 ```bash
-pnpm exec wakefield manifest --json
-pnpm exec wakefield setup actions --json
-pnpm exec wakefield connectors wizards --json
-pnpm exec wakefield managed-connectors wizards --json
+pnpm exec wakefield managed-connectors status
+pnpm exec wakefield connectors status
 ```
 
-## State Layout
+### Discord
 
-Wakefield stores runtime state outside the project:
+Use Discord when you want the agent in a server channel or DM.
 
-- macOS: `~/Library/Application Support/Wakefield`
-- Linux: `$XDG_DATA_HOME/wakefield` or `~/.local/share/wakefield`
-- Windows: `%APPDATA%/Wakefield`
+You will need:
 
-Use `WAKEFIELD_HOME` only for tests, isolated experiments, or advanced relocation.
+- a Discord application and bot from the Discord Developer Portal
+- the bot token, exposed as an environment variable such as `DISCORD_BOT_TOKEN`
+- the channel IDs and/or DM user IDs the agent is allowed to read and reply to
 
-Each agent gets an app-support folder with:
+Setup:
 
-- `AGENTS.md` for the generated soul
-- local memory files: `notes.json`, `matters.json`, `inbox.jsonl`, `journal.jsonl`, `dreams.jsonl`, `external-messages.jsonl`, `state.json`
-- profile and selected thread metadata
-- schedule, contacts, connector, and service state
+```bash
+pnpm exec wakefield setup connector discord \
+  --env-file .env.wakefield \
+  --set tokenEnv=DISCORD_BOT_TOKEN \
+  --set allowedChannelIds=<discord-channel-id>
+```
 
-## Agent Packs
+### iMessage
 
-An agent pack is the portable recipe for a Wakefield-powered agent.
+Use iMessage when you want the agent reachable from Messages through
+Photon/Spectrum.
+
+You will need:
+
+- a Photon project
+- a Spectrum bridge for the iMessage account
+- `PHOTON_PROJECT_ID` and `PHOTON_SECRET_KEY` environment variables
+- allowed phone numbers, email addresses, or Spectrum space IDs
+
+Setup:
+
+```bash
+pnpm exec wakefield setup connector imessage \
+  --env-file .env.wakefield \
+  --set projectIdEnv=PHOTON_PROJECT_ID \
+  --set projectSecretEnv=PHOTON_SECRET_KEY \
+  --set allowedAddresses=<phone-or-email>
+```
+
+### Email
+
+Use email when you want inbound messages to become agent context. Email is an
+intake connector; it does not make Wakefield send email replies by default.
+
+You will need:
+
+- an IMAP host and username
+- an app-specific password, exposed through an environment variable such as `WAKEFIELD_EMAIL_PASSWORD`
+- optional allowed senders such as `person@example.com` or `@example.com`
+
+Setup:
+
+```bash
+pnpm exec wakefield connectors configure email \
+  --enable \
+  --set imapHost=imap.example.com \
+  --set username=agent@example.com \
+  --set passwordEnv=WAKEFIELD_EMAIL_PASSWORD \
+  --set allowedSenders=@example.com
+
+pnpm exec wakefield email poll --json
+```
+
+You can also import a single message:
+
+```bash
+pnpm exec wakefield email ingest --file message.eml
+```
+
+## Duties And Wakeups
+
+Once the agent is reachable, give it recurring work.
+
+Duties are reusable work definitions. Wakeups are scheduled events that run
+groups of duties together in one Codex turn.
+
+```bash
+pnpm exec wakefield duties configure inbox-review --skill inbox-review
+pnpm exec wakefield duties configure followups --skill followup-check
+
+pnpm exec wakefield wakeups configure morning-ops \
+  --enable \
+  --time 08:00 \
+  --dispatch-mode ipc \
+  --duty inbox-review \
+  --duty followups
+
+pnpm exec wakefield wakeups list
+pnpm exec wakefield wakeups run morning-ops --force
+```
+
+The generated Codex prompt stays compact and points at skills instead of pasting
+large duty instructions. When the operating rules change, update the skill, not
+every schedule entry.
+
+## Memory
+
+Wakefield memory is intentionally small. Codex keeps the conversation; Wakefield
+keeps a couple of side lists it can mention when they are relevant.
+
+The two memory types are:
+
+- `notes`: stable facts, preferences, and standing policies.
+- `matters`: active situations for a person, room, task, case, or topic.
+
+Inspect and edit memory:
+
+```bash
+pnpm exec wakefield memory notes list
+pnpm exec wakefield memory notes add --id reply-style --text "Use concise package updates." --person joe --topic package
+
+pnpm exec wakefield memory matters list --all
+pnpm exec wakefield memory matters upsert \
+  --id joe-package \
+  --summary "Joe is waiting for a package tracking follow-up." \
+  --person joe \
+  --topic package
+
+pnpm exec wakefield memory recall --query "tracking package" --person joe
+pnpm exec wakefield memory matters archive joe-package --reason "Tracking sent."
+```
+
+### Hooks, Summaries, And Dreaming
+
+Wakefield installs Codex lifecycle hooks for bookkeeping:
+
+- `UserPromptSubmit` records prompts and can add relevant memory.
+- `PostToolUse` records tool activity.
+- `Stop` records the assistant response and queues a turn summary.
+- `PreCompact` and `PostCompact` record compaction boundaries only.
+- `SessionStart` records startup/resume/compact edges.
+
+Turn summaries are routine post-turn bookkeeping. They are not the same thing as
+Codex compaction, and they are not all "dreams" in the human sense.
+
+The slower memory-review path is:
+
+```text
+turn ends -> summary queued -> service writes a turn summary -> capture decides whether notes/matters should change
+```
+
+Run the background review manually:
+
+```bash
+pnpm exec wakefield dream
+pnpm exec wakefield memory capture --dry-run --json
+```
+
+`wakefield dream` builds deterministic turn summaries from hook evidence, then
+optionally runs a small structured capture pass through `codex exec
+--ephemeral`. That capture worker uses the user's existing Codex auth, runs
+read-only, disables hooks, and returns strict JSON deltas for notes and matters.
+
+Useful capture worker overrides:
+
+```bash
+export WAKEFIELD_DREAM_CODEX_PATH="/absolute/path/to/codex"
+export WAKEFIELD_DREAM_MODEL="gpt-5.4-mini"
+export WAKEFIELD_DREAM_REASONING_EFFORT="low"
+export WAKEFIELD_DREAM_CODEX_HOME="$HOME/.codex"
+```
+
+For LaunchAgent use, put these in the Wakefield service env file if `codex` is
+not available on the launchd `PATH`.
+
+## Service
+
+The Wakefield service tick is the background loop:
+
+1. process queued turn summaries and memory capture
+2. run due wakeups
+3. poll ready connector transports
+4. optionally dispatch pending external messages
+5. record service status
+
+Configure it:
+
+```bash
+pnpm exec wakefield service configure \
+  --enable \
+  --interval-minutes 15 \
+  --env-file ~/.wakefield.env
+
+pnpm exec wakefield service run-once
+pnpm exec wakefield service launch-agent install --load
+pnpm exec wakefield service launch-agent status
+```
+
+External message dispatch is opt-in:
+
+```bash
+pnpm exec wakefield service configure \
+  --enable-dispatch \
+  --dispatch-mode ipc \
+  --dispatch-limit 3
+```
+
+Use `dry-run` or `manual` while testing. Use `ipc` when the Codex app is running
+and the selected Codex chat is available.
+
+## Package For Reuse
+
+After an agent has a useful soul, contacts, skills, duties, and wakeups, turn it
+into an agent pack. A pack is the portable recipe for recreating the same
+Wakefield-powered agent in another checkout or on another machine.
 
 ```json
 {
@@ -185,298 +316,38 @@ An agent pack is the portable recipe for a Wakefield-powered agent.
 }
 ```
 
-Inspect and install:
+Inspect and install a pack:
 
 ```bash
 pnpm exec wakefield pack inspect --file ./wakefield-pack.json
-pnpm exec wakefield pack install --file ./wakefield-pack.json --thread-id <codex-thread-id>
+pnpm exec wakefield pack install --file ./wakefield-pack.json --thread-id <codex-chat-id>
 ```
 
-Packs should contain app-specific identity and policy. Wakefield itself stays generic.
+## Menu Bar
 
-## Duties And Wakeups
+Wakefield includes a native macOS menu bar app. It is a thin client over the
+same CLI and JSON surfaces.
 
-Duties are reusable work definitions. Wakeups are the scheduled events that decide when groups of duties run together.
+From a Wakefield checkout:
 
 ```bash
-pnpm exec wakefield duties configure inbox-review \
-  --skill inbox-review
-
-pnpm exec wakefield duties configure followups \
-  --skill followup-check
-
-pnpm exec wakefield wakeups configure morning-ops \
-  --enable \
-  --time 08:00 \
-  --dispatch-mode dry-run \
-  --duty inbox-review \
-  --duty followups
-
-pnpm exec wakefield wakeups list
-pnpm exec wakefield wakeups run morning-ops --force
+pnpm run menubar:install
 ```
 
-The generated Codex prompt stays compact:
-
-```text
-Scheduled Wakefield wakeup: Morning Ops
-Use $wakefield-scheduled-wakeup.
-
-Wakeup ID: morning-ops
-Wake schedule: 08:00 local
-Duties: inbox-review, followups
-Duty skills: $inbox-review, $followup-check
-
-Run these scheduled duties in this turn:
-- inbox-review: $inbox-review
-- followups: $followup-check
-```
-
-This keeps long-running agents easy to maintain: update the skill when the operating rules change, not every schedule entry.
-
-## Connectors
-
-Wakefield supports two connector levels.
-
-**Simple connectors** are built into the core CLI:
-
-- Discord Gateway listener
-- read-only macOS Messages database poller
-- RFC 822 email import
-- IMAP email polling
-- local HTTP intake
-- transport-neutral external inbox
-
-**Managed connector packages** are supervised connector runtimes with MCP reply tools and LaunchAgent wiring:
-
-- `@wakefield/discord-codex` (`discord-codex` adapter id)
-- `@wakefield/imessage-spectrum` (`imessage-spectrum` adapter id)
-
-Check connector state:
+For development:
 
 ```bash
-pnpm exec wakefield connectors status
-pnpm exec wakefield managed-connectors status
+pnpm run menubar:build
+pnpm run menubar:run
 ```
 
-Run setup wizards:
-
-```bash
-pnpm exec wakefield connectors wizards --json
-pnpm exec wakefield managed-connectors wizard discord-codex --json
-pnpm exec wakefield managed-connectors wizard imessage-spectrum --json
-```
-
-Install MCP entries for managed connectors:
-
-```bash
-pnpm exec wakefield managed-connectors mcp install discord-codex --json
-pnpm exec wakefield managed-connectors mcp install imessage-spectrum --json
-```
-
-Install background connector daemons on macOS:
-
-```bash
-pnpm exec wakefield managed-connectors launch-agent install discord-codex --load
-pnpm exec wakefield managed-connectors launch-agent install imessage-spectrum --load
-```
-
-### Discord
-
-Wakefield stores the Discord token environment variable name or token-file path, not the token itself.
-
-```bash
-export DISCORD_BOT_TOKEN="..."
-
-pnpm exec wakefield connectors configure discord \
-  --enable \
-  --set botTokenEnv=DISCORD_BOT_TOKEN \
-  --set allowedTargets=channel-id \
-  --set allowedUsers=user-id
-
-pnpm exec wakefield discord listen
-```
-
-The managed `discord-codex` package adds production-style Gateway routing, Codex follower probing, typing indicators, presence during compaction, and MCP tools for replies.
-
-### iMessage
-
-Wakefield includes:
-
-- a read-only local Messages database poller for simple inbound intake
-- a managed Photon/Spectrum iMessage connector for production-style receive, reply, reaction, typing, recent-context, and read-receipt behavior
-
-Photon/Spectrum credentials should come from environment variables or ignored local config:
-
-```bash
-export PHOTON_PROJECT_ID="..."
-export PHOTON_SECRET_KEY="..."
-
-pnpm exec wakefield managed-connectors init-config imessage-spectrum --json
-pnpm exec wakefield managed-connectors test imessage-spectrum --kind spectrum-bridge --json
-```
-
-### Email
-
-Import `.eml` files:
-
-```bash
-pnpm exec wakefield email ingest --file message.eml
-cat message.eml | pnpm exec wakefield email ingest --json
-```
-
-Poll IMAP:
-
-```bash
-export WAKEFIELD_EMAIL_PASSWORD="app-specific-password"
-
-pnpm exec wakefield connectors configure email \
-  --enable \
-  --set imapHost=imap.example.com \
-  --set username=agent@example.com \
-  --set passwordEnv=WAKEFIELD_EMAIL_PASSWORD
-
-pnpm exec wakefield email poll --json
-```
-
-## Memory And Dreaming
-
-Wakefield treats Codex as the owner of the persistent chat, compaction, and personality. It does not rewrite transcripts, replay old messages, or refresh the soul during compaction. Instead, it keeps a small local memory ledger and hands Codex a relevant note card only when a turn needs outside context.
-
-The two first-class memory types are:
-
-- `notes`: stable durable facts and preferences.
-- `matters`: temporary active context for a person, room, task, case, or topic. Matters can be `active`, `waiting`, `resolved`, or `archived`.
-
-Wakefield installs Codex lifecycle hooks and uses routed-turn metadata:
-
-- `UserPromptSubmit`: records user prompts and injects only memory that matches the current request
-- external Discord, iMessage, email, and HTTP turns: recall by connector, contact, room, sender, conversation, and likely topic
-- scheduled wakeups: recall by wakeup, duty, skill, task, and topic
-- `SessionStart`: records a lifecycle edge without injecting the soul or memory
-- `PostToolUse`: records meaningful tool activity for change-based memory
-- `PreCompact` / `PostCompact`: records compaction boundaries for bookkeeping only
-- `Stop`: records the latest assistant output and queues background memory review
-
-Inspect and edit scoped memory:
-
-```bash
-pnpm exec wakefield memory notes list
-pnpm exec wakefield memory notes add --id reply-style --text "Use concise package updates." --person joe --topic package
-
-pnpm exec wakefield memory matters list
-pnpm exec wakefield memory matters upsert \
-  --id joe-package \
-  --summary "Joe is waiting for a package tracking follow-up." \
-  --person joe \
-  --topic package
-
-pnpm exec wakefield memory recall --query "tracking package" --person joe
-pnpm exec wakefield memory matters archive joe-package --reason "Tracking sent."
-```
-
-Run background memory processing:
-
-```bash
-pnpm exec wakefield dream
-pnpm exec wakefield memory capture --dry-run --json
-```
-
-`wakefield dream` first builds deterministic turn summaries from hook evidence. It then runs a small structured capture pass through `codex exec --ephemeral`, so it uses the user's existing Codex auth instead of requiring an OpenAI API key. The Codex worker runs read-only, with approvals disabled, hooks disabled, and a strict JSON schema for notes and active-context deltas.
-
-Useful dreamer overrides:
-
-```bash
-export WAKEFIELD_DREAM_CODEX_PATH="/Applications/Codex.app/Contents/Resources/codex"
-export WAKEFIELD_DREAM_MODEL="gpt-5.4-mini"
-export WAKEFIELD_DREAM_REASONING_EFFORT="low"
-export WAKEFIELD_DREAM_CODEX_HOME="$HOME/.codex"
-export WAKEFIELD_DREAM_CODEX_EPHEMERAL="true"
-export WAKEFIELD_DREAM_CODEX_IGNORE_USER_CONFIG="true"
-```
-
-By default, Wakefield uses `gpt-5.4-mini`, low reasoning effort, ephemeral sessions, hooks disabled, and user config ignored for the Codex worker.
-
-Use a separate `WAKEFIELD_DREAM_CODEX_HOME` only if you have logged that Codex home in separately or provided trusted Codex automation auth. The default uses the normal Codex home and ephemeral sessions, which keeps dreamer work out of the main visible Rickbot thread.
-
-Install Wakefield memory tools into the selected Codex config:
-
-```bash
-pnpm exec wakefield mcp memory install
-pnpm exec wakefield mcp memory status
-```
-
-This exposes:
-
-- `wakefield_memory_recall`
-- `wakefield_memory_list_notes`
-- `wakefield_memory_get_note`
-- `wakefield_memory_upsert_note`
-- `wakefield_memory_list_matters`
-- `wakefield_memory_get_matter`
-- `wakefield_memory_upsert_matter`
-- `wakefield_memory_archive_matter`
-- `wakefield_memory_forget`
-- `wakefield_memory_status`
-
-Use these tools when Codex needs to deliberately inspect or maintain memory beyond the tiny note card Wakefield injects automatically. The app-support JSON files are Wakefield's storage layer, not the agent-facing API.
-
-The journal/dreamer path is the background layer:
-
-```bash
-pnpm exec wakefield dream
-pnpm exec wakefield recall --query "morning summaries"
-```
-
-If Codex is unavailable, Wakefield still summarizes queued hook events into local state and reports capture errors without changing notes or matters. When Codex is available, the reviewer is deliberately stingy: it should save unresolved incidents, cross-channel continuity, changed statuses, and durable preferences, while skipping ordinary chat and completed one-off work.
-
-## Service Tick
-
-The service tick is the background loop:
-
-1. load the configured env file
-2. process queued dreams
-3. run due wakeups
-4. poll ready connector transports
-5. optionally dispatch pending external messages
-6. record service status
-
-Configure it:
-
-```bash
-pnpm exec wakefield service configure \
-  --enable \
-  --interval-minutes 15 \
-  --env-file ~/.wakefield.env
-```
-
-Run once:
-
-```bash
-pnpm exec wakefield service run-once
-```
-
-Install as a macOS LaunchAgent:
-
-```bash
-pnpm exec wakefield service launch-agent install --load
-pnpm exec wakefield service launch-agent status
-```
-
-External message dispatch is opt-in:
-
-```bash
-pnpm exec wakefield service configure \
-  --enable-dispatch \
-  --dispatch-mode ipc \
-  --dispatch-limit 3
-```
-
-Use `dry-run` or `manual` while testing. Use `ipc` when the Codex app is running and the selected persistent thread is available.
+The menu bar can show runtime and connector status, start and stop the runtime,
+start and stop managed connectors, launch connector setup, edit wakeup times and
+duty selections, and select a recent Codex chat.
 
 ## Local HTTP API
 
-Wakefield can expose the same setup and intake surfaces over localhost:
+Wakefield can expose setup, status, and intake over localhost:
 
 ```bash
 pnpm exec wakefield http serve --port 8787
@@ -503,26 +374,67 @@ Useful endpoints:
 - `POST /email/poll`
 - `POST /imessage/poll`
 
-The server binds to `127.0.0.1` by default. If you bind outside localhost, pass `--token-env ENV_NAME`; requests must include `Authorization: Bearer <token>`.
+The server binds to `127.0.0.1` by default. If you bind outside localhost, pass
+`--token-env ENV_NAME`; requests must include `Authorization: Bearer <token>`.
+
+## State Layout
+
+Wakefield stores runtime state outside the project:
+
+`~/Library/Application Support/Wakefield`
+
+Use `WAKEFIELD_HOME` for tests, isolated experiments, or advanced relocation.
+
+Each agent gets its own folder there with the generated soul, profile, selected
+chat, contacts, connectors, schedules, and memory files.
+
+## Concepts
+
+The terms are intentionally small:
+
+| Object | Purpose |
+| --- | --- |
+| Agent | Name, soul, selected Codex chat, and workspace. |
+| Codex Chat | The conversation Wakefield sends work into. |
+| Contacts | People, rooms, channels, and reply preferences. |
+| Skills | Reusable instruction packs for Codex. |
+| Duties | Reusable jobs the agent can run. |
+| Wakeups | Times that run one or more duties. |
+| Connectors | Discord, iMessage, email, HTTP, and scripts. |
+| Memory | Notes and active situations Wakefield can bring up when relevant. |
+| Service | The background runner for summaries, wakeups, and connector polling. |
+| Agent Packs | Shareable recipes for recreating an agent. |
+
+Wakefield is the reusable runtime. Agent packs carry the personality, contacts,
+domain skills, duties, wakeups, and operating policy.
+
+## Requirements
+
+- macOS
+- Node.js 20 or newer
+- Codex desktop app
+- npm, pnpm, or yarn
+- Optional connector credentials for Discord, Photon/Spectrum, or IMAP
+
+Wakefield can still run pack inspection, local memory, HTTP intake, dry-run
+dispatch, and verification without live connector credentials.
 
 ## Security Posture
-
-Wakefield is intentionally conservative:
 
 - Connector settings store secret references, not raw secrets.
 - Service env files are checked for missing or overly broad permissions.
 - HTTP intake requires a bearer token outside localhost.
-- Managed connector wizards report factual readiness instead of optimistic migration state.
-- IPC dispatch fails loudly when the visible Codex app thread is unavailable.
+- IPC dispatch fails loudly when the selected Codex chat is unavailable.
 - External messages stay pending when dispatch fails, so they can be retried.
 
-## Project Status
+## Status
 
-Wakefield is an early local-first runtime. The core profile, hooks, scoped memory, wakeups, service tick, connector setup contracts, Discord connector, Photon/Spectrum iMessage connector, email intake, HTTP API, and macOS LaunchAgent paths are implemented.
+Wakefield is an early macOS runtime. Agent setup, hooks, memory, wakeups, the
+background service, connector setup, Discord, Photon/Spectrum iMessage, email,
+the local HTTP API, LaunchAgents, and the menu bar are implemented.
 
 Still intentionally out of scope for this slice:
 
-- native menu bar UI
 - Honcho provider sync
 - packaged installer
 - public agent-pack registry

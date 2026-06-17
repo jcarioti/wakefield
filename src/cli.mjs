@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
+import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { formatAgentPackInspection, formatAgentPackInstall, inspectAgentPack, installAgentPack } from "./agent-packs.mjs";
@@ -20,13 +21,13 @@ import { dispatchExternalMessage, formatDispatchResult } from "./inbox-dispatch.
 import { formatImessagePoll, pollImessageChatDb } from "./imessage-chatdb.mjs";
 import { installWakefield } from "./install.mjs";
 import { formatManifest, wakefieldManifest } from "./manifest.mjs";
-import { configureManagedConnector, formatManagedConnectorConfigInit, formatManagedConnectorMcpInstall, formatManagedConnectorStatuses, formatManagedConnectorTest, formatManagedConnectorWizard, formatManagedLaunchAgentResult, formatManagedLaunchAgentStatus, importManagedConnectors, initializeManagedConnectorConfig, installManagedConnectorMcp, managedConnectorLaunchAgentPlist, managedConnectorLaunchAgentStatus, managedConnectorStatus, managedConnectorStatuses, managedConnectorWizard, managedConnectorWizards, printManagedConnectorMcp, runManagedConnectorProcess, testManagedConnector, installManagedConnectorLaunchAgent, loadManagedConnectorLaunchAgent, unloadManagedConnectorLaunchAgent, uninstallManagedConnectorLaunchAgent } from "./managed-connectors.mjs";
+import { configureManagedConnector, formatManagedConnectorConfigInit, formatManagedConnectorMcpInstall, formatManagedConnectorSetup, formatManagedConnectorStatuses, formatManagedConnectorTest, formatManagedConnectorWizard, formatManagedLaunchAgentResult, formatManagedLaunchAgentStatus, importManagedConnectors, initializeManagedConnectorConfig, installManagedConnectorMcp, managedConnectorLaunchAgentPlist, managedConnectorLaunchAgentStatus, managedConnectorStatus, managedConnectorStatuses, managedConnectorWizard, managedConnectorWizards, printManagedConnectorMcp, runManagedConnectorProcess, setupManagedConnector, testManagedConnector, installManagedConnectorLaunchAgent, loadManagedConnectorLaunchAgent, unloadManagedConnectorLaunchAgent, uninstallManagedConnectorLaunchAgent } from "./managed-connectors.mjs";
 import { formatMemoryCaptureResult, processMemoryCaptures } from "./memory-capture.mjs";
 import { formatMemoryMcpInstall, formatMemoryMcpStatus, installMemoryMcp, memoryMcpStatus, printMemoryMcp } from "./memory-mcp.mjs";
 import { formatMenuSnapshot, menuSnapshot } from "./menu-snapshot.mjs";
 import { compact, formatDreamResult, memoryContext, processDreams, recordMemory } from "./memory.mjs";
-import { appHome } from "./paths.mjs";
-import { ensureAgentMemory, initAgent, loadAgent, selectThread } from "./profile.mjs";
+import { appHome, expandHome } from "./paths.mjs";
+import { agentStatus, configureAgent, ensureAgentMemory, initAgent, loadAgent, selectThread } from "./profile.mjs";
 import { configureService, formatLaunchAgentResult, formatLaunchAgentStatus, formatServiceRun, formatServiceStatus, installLaunchAgent, launchAgentPlist, launchAgentStatus, loadLaunchAgent, runServiceOnce, serviceStatus, uninstallLaunchAgent, unloadLaunchAgent } from "./service.mjs";
 import { formatSelfTest, runSelfTest } from "./self-test.mjs";
 import { formatActions, formatConnectors, formatNextSteps, formatSetupStatus, setupStatus } from "./setup.mjs";
@@ -135,6 +136,24 @@ async function main(argv = process.argv.slice(2)) {
     return;
   }
 
+  if (command === "agent" && (rest[0] === "status" || !rest[0])) {
+    const options = parseOptions(rest[0] ? rest.slice(1) : rest);
+    const result = await agentStatus();
+    console.log(options.json ? JSON.stringify(result, null, 2) : formatAgentStatus(result));
+    process.exitCode = result.ok ? 0 : 1;
+    return;
+  }
+
+  if (command === "agent" && rest[0] === "configure") {
+    const options = parseOptions(rest.slice(1));
+    const result = await configureAgent({
+      name: options.name || null,
+      soul: options.soul || null
+    });
+    console.log(options.json ? JSON.stringify(result, null, 2) : formatAgentStatus(result));
+    return;
+  }
+
   if (command === "threads" && (rest[0] === "list" || !rest[0])) {
     const options = parseOptions(rest[0] === "list" ? rest.slice(1) : rest);
     const threads = await listRecentThreads({ limit: Number(options.limit || 10) });
@@ -198,6 +217,32 @@ async function main(argv = process.argv.slice(2)) {
       reloadScheduler: Boolean(options.reloadLaunchAgent || options.reloadScheduler)
     });
     console.log(options.json ? JSON.stringify(result, null, 2) : formatSetupRun(result));
+    process.exitCode = result.ok ? 0 : 1;
+    return;
+  }
+
+  if (command === "setup" && (rest[0] === "connector" || rest[0] === "connectors")) {
+    const connectorArg = rest[1] && !rest[1].startsWith("--") ? rest[1] : null;
+    const options = parseOptions(connectorArg ? rest.slice(2) : rest.slice(1));
+    const connectorId = setupConnectorId(connectorArg || options.id || options.connector);
+    const setupInput = await connectorSetupInput(connectorId, options);
+    await writeEnvSecrets(setupInput.envFile, setupInput.secrets);
+    const agent = await requireAgent();
+    const result = await setupManagedConnector(connectorId, {
+      agent,
+      adapter: options.adapter || null,
+      settings: setupInput.settings,
+      packagePath: options.packagePath || null,
+      configPath: options.configPath || null,
+      codexConfigPath: options.codexConfig || options.codexConfigPath || null,
+      envFile: setupInput.envFile,
+      clearEnvFile: Boolean(options.clearEnvFile),
+      overwrite: Boolean(options.overwrite),
+      load: !options.noLoad,
+      reload: Boolean(options.reload),
+      dryRun: Boolean(options.dryRun)
+    });
+    console.log(options.json ? JSON.stringify(result, null, 2) : formatManagedConnectorSetup(result));
     process.exitCode = result.ok ? 0 : 1;
     return;
   }
@@ -290,6 +335,32 @@ async function main(argv = process.argv.slice(2)) {
     console.log(options.json
       ? JSON.stringify(Array.isArray(result) ? { connectors: result } : result, null, 2)
       : Array.isArray(result) ? formatManagedConnectorStatuses(result) : formatManagedConnectorStatuses([result]));
+    return;
+  }
+
+  if (command === "managed-connectors" && rest[0] === "setup") {
+    const connectorArg = rest[1] && !rest[1].startsWith("--") ? rest[1] : null;
+    const options = parseOptions(connectorArg ? rest.slice(2) : rest.slice(1));
+    const connectorId = setupConnectorId(connectorArg || options.id);
+    const setupInput = await connectorSetupInput(connectorId, options);
+    await writeEnvSecrets(setupInput.envFile, setupInput.secrets);
+    const agent = await requireAgent();
+    const result = await setupManagedConnector(connectorId, {
+      agent,
+      adapter: options.adapter || null,
+      settings: setupInput.settings,
+      packagePath: options.packagePath || null,
+      configPath: options.configPath || null,
+      codexConfigPath: options.codexConfig || options.codexConfigPath || null,
+      envFile: setupInput.envFile,
+      clearEnvFile: Boolean(options.clearEnvFile),
+      overwrite: Boolean(options.overwrite),
+      load: !options.noLoad,
+      reload: Boolean(options.reload),
+      dryRun: Boolean(options.dryRun)
+    });
+    console.log(options.json ? JSON.stringify(result, null, 2) : formatManagedConnectorSetup(result));
+    process.exitCode = result.ok ? 0 : 1;
     return;
   }
 
@@ -1009,6 +1080,8 @@ function usage() {
     "Usage:",
     "  wakefield install [--name NAME] [--soul TEXT] [--thread-id ID|--latest-thread] [--cwd PATH]",
     "  wakefield init [--name NAME] [--soul TEXT] [--thread-id ID] [--cwd PATH]",
+    "  wakefield agent status [--json]",
+    "  wakefield agent configure [--name NAME] [--soul TEXT] [--json]",
     "  wakefield select-thread --thread-id ID|--latest [--cwd PATH]",
     "  wakefield threads list [--json] [--limit N]",
     "  wakefield manifest [--json]",
@@ -1019,6 +1092,7 @@ function usage() {
     "  wakefield setup next [--json]",
     "  wakefield setup actions [--json]",
     "  wakefield setup run [--name NAME] [--soul TEXT] [--thread-id ID|--latest-thread] [--enable-service] [--enable-dispatch] [--env-file PATH] [--install-launch-agent] [--load-launch-agent] [--json]",
+    "  wakefield setup connector discord|imessage [--set key=value] [--secret KEY=value] [--env-file PATH] [--overwrite] [--no-load] [--yes] [--json]",
     "  wakefield pack inspect --file pack.json [--json]",
     "  wakefield pack install --file pack.json [--thread-id ID|--latest-thread] [--enable-service] [--dry-run] [--json]",
     "  wakefield menu snapshot [--json]",
@@ -1028,6 +1102,7 @@ function usage() {
     "  wakefield connectors wizards [--json]",
     "  wakefield connectors configure CONNECTOR [--enable|--disable] [--set key=value] [--unset key] [--json]",
     "  wakefield managed-connectors status [ID] [--json]",
+    "  wakefield managed-connectors setup ID [--set key=value] [--secret KEY=value] [--env-file PATH] [--overwrite] [--no-load] [--yes] [--json]",
     "  wakefield managed-connectors wizard ID [--json]",
     "  wakefield managed-connectors wizards [--json]",
     "  wakefield managed-connectors configure ID --adapter ADAPTER [--enable|--disable] [--set key=value] [--json]",
@@ -1094,6 +1169,103 @@ async function requireAgent() {
   const agent = await loadAgent();
   if (!agent) throw new Error("No Wakefield agent is initialized yet. Run wakefield init first.");
   return ensureAgentMemory(agent);
+}
+
+function setupConnectorId(value) {
+  if (!value) throw new Error("setup connector needs a connector id: discord or imessage.");
+  const normalized = String(value).trim().toLowerCase();
+  const aliases = {
+    discord: "discord-codex",
+    "discord-codex": "discord-codex",
+    imessage: "imessage-spectrum",
+    "i-message": "imessage-spectrum",
+    messages: "imessage-spectrum",
+    photon: "imessage-spectrum",
+    spectrum: "imessage-spectrum",
+    "imessage-spectrum": "imessage-spectrum"
+  };
+  return aliases[normalized] || value;
+}
+
+async function connectorSetupInput(connectorId, options) {
+  const settings = parseSettings(options.set);
+  const secrets = parseSettings(options.secret);
+  const shouldPrompt = Boolean(input.isTTY && !options.json && !options.yes);
+  const envFile = options.envFile || (!options.clearEnvFile && shouldPrompt
+    ? await ask("Env file path for connector secrets", { fallback: ".env.wakefield" })
+    : null);
+  if (!shouldPrompt) return { settings, envFile };
+
+  if (connectorId === "discord-codex") {
+    if (!settings.tokenEnv && !settings.tokenFile) {
+      settings.tokenEnv = await ask("Discord bot token env var", { fallback: "DISCORD_BOT_TOKEN" });
+    }
+    if (!settings.allowedChannelIds && !settings.allowedDmUserIds) {
+      settings.allowedChannelIds = await ask("Allowed Discord channel IDs, comma-separated", { fallback: "" });
+    }
+    if (!settings.allowedDmUserIds) {
+      settings.allowedDmUserIds = await ask("Allowed Discord DM user IDs, optional", { fallback: "" });
+    }
+  } else if (connectorId === "imessage-spectrum") {
+    if (!settings.projectIdEnv) {
+      settings.projectIdEnv = await ask("Photon project id env var", { fallback: "PHOTON_PROJECT_ID" });
+    }
+    if (!settings.projectSecretEnv) {
+      settings.projectSecretEnv = await ask("Photon secret env var", { fallback: "PHOTON_SECRET_KEY" });
+    }
+    if (!settings.allowedAddresses && !settings.allowedSpaceIds) {
+      settings.allowedAddresses = await ask("Allowed phone numbers or emails, comma-separated", { fallback: "" });
+    }
+    if (!settings.allowedSpaceIds) {
+      settings.allowedSpaceIds = await ask("Allowed Spectrum space IDs, optional", { fallback: "" });
+    }
+  }
+
+  return { settings, envFile, secrets };
+}
+
+async function writeEnvSecrets(envFile, secrets = {}) {
+  const entries = Object.entries(secrets).filter(([key, value]) => key && value != null);
+  if (entries.length === 0) return null;
+  if (!envFile) throw new Error("--secret requires --env-file PATH.");
+  const resolved = path.resolve(expandHome(envFile));
+  let lines = [];
+  try {
+    lines = (await fs.readFile(resolved, "utf8")).split(/\r?\n/);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  const replacements = new Map(entries.map(([key, value]) => [key, `${key}=${quoteEnvValue(value)}`]));
+  const seen = new Set();
+  const next = lines.map((line) => {
+    const key = String(line).match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=/)?.[1];
+    if (!key || !replacements.has(key)) return line;
+    seen.add(key);
+    return replacements.get(key);
+  }).filter((line, index, array) => line !== "" || index < array.length - 1);
+  for (const [key, line] of replacements) {
+    if (!seen.has(key)) next.push(line);
+  }
+  await fs.mkdir(path.dirname(resolved), { recursive: true });
+  await fs.writeFile(resolved, `${next.join("\n")}\n`, { mode: 0o600 });
+  await fs.chmod(resolved, 0o600).catch(() => {});
+  return resolved;
+}
+
+function quoteEnvValue(value) {
+  const text = String(value);
+  if (/^[A-Za-z0-9_./:@+-]+$/.test(text)) return text;
+  return JSON.stringify(text);
+}
+
+function formatAgentStatus(result) {
+  if (!result.ok || !result.profile) return "No Wakefield agent is initialized.";
+  return [
+    `${result.profile.name}`,
+    `Codex chat: ${result.profile.threadId || "not selected"}`,
+    `Workspace: ${result.profile.cwd || "not set"}`,
+    `Soul: ${result.profile.soulPath || "not set"}`
+  ].join("\n");
 }
 
 async function ask(label, { fallback = null } = {}) {

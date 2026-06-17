@@ -146,6 +146,41 @@ export async function saveAgent(profile, home = appHome()) {
   return next;
 }
 
+export async function agentStatus({
+  home = appHome()
+} = {}) {
+  const profile = await loadAgent(null, home);
+  if (!profile) {
+    return {
+      ok: false,
+      profile: null,
+      soul: ""
+    };
+  }
+  return {
+    ok: true,
+    profile,
+    soul: await fs.readFile(profile.soulPath, "utf8").catch(() => "")
+  };
+}
+
+export async function configureAgent({
+  home = appHome(),
+  name = null,
+  soul = null
+} = {}) {
+  const profile = await loadAgent(null, home);
+  if (!profile) throw new Error("No Wakefield agent is initialized yet.");
+  const next = await saveAgent({
+    ...profile,
+    name: name == null || String(name).trim() === "" ? profile.name : String(name).trim()
+  }, home);
+  if (soul != null) {
+    await fs.writeFile(next.soulPath, String(soul));
+  }
+  return agentStatus({ home });
+}
+
 export async function selectThread({
   agentId = null,
   threadId,

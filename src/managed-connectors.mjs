@@ -7,7 +7,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { ensureDir, pathExists, readJson, writeJson } from "./json-store.mjs";
-import { appHome, expandHome, launchAgentsDir, logsDir, managedConnectorsConfigPath, serviceConfigPath } from "./paths.mjs";
+import { appHome, connectorConfigPath, expandHome, launchAgentsDir, logsDir, managedConnectorsConfigPath, serviceConfigPath } from "./paths.mjs";
 import { loadEnvFile } from "./service-env.mjs";
 import { connectorSkill, connectorSkillPrompt } from "./connector-skills.mjs";
 
@@ -170,6 +170,7 @@ export async function managedConnectorStatus(id, {
   home = appHome(),
   agent = null,
   codexConfigPath = null,
+  launchAgentsPath = launchAgentsDir(),
   now = new Date()
 } = {}) {
   await loadManagedEnvironment({ home });
@@ -181,7 +182,7 @@ export async function managedConnectorStatus(id, {
     agent,
     codexConfigPath
   });
-  const launchAgent = await managedConnectorLaunchAgentStatus(id, { home });
+  const launchAgent = await managedConnectorLaunchAgentStatus(id, { home, launchAgentsPath });
   const checks = [
     ...packageInspection.checks,
     ...connectorConfig.checks,
@@ -255,6 +256,134 @@ export async function configureManagedConnector(id, {
   return managedConnectorStatus(id, { home });
 }
 
+export async function setupManagedConnector(id, {
+  home = appHome(),
+  agent = null,
+  adapter = null,
+  settings = {},
+  packagePath = null,
+  configPath = null,
+  codexConfigPath = null,
+  envFile = null,
+  clearEnvFile = false,
+  overwrite = false,
+  load = true,
+  reload = false,
+  dryRun = false,
+  launchAgentsPath = launchAgentsDir(),
+  launchctlRunner = execFileAsync
+} = {}) {
+  const adapterDef = managedConnectorAdapter(adapter || id);
+  const resolvedConfigPath = configPath || settings.configPath || connectorConfigPath(id, home);
+  const resolvedPackagePath = packagePath || settings.packagePath || null;
+  const resolvedCodexConfigPath = codexConfigPath || settings.codexConfigPath || settings["mcp.codexConfigPath"] || null;
+  const serviceEnvironment = await configureManagedConnectorEnvironment({
+    home,
+    envFile,
+    clearEnvFile,
+    dryRun
+  });
+  const managedSettings = {
+    ...settings,
+    configPath: resolvedConfigPath
+  };
+  if (resolvedPackagePath) managedSettings.packagePath = resolvedPackagePath;
+  if (resolvedCodexConfigPath) managedSettings["mcp.codexConfigPath"] = resolvedCodexConfigPath;
+
+  const configured = dryRun
+    ? null
+    : await configureManagedConnector(id, {
+      home,
+      adapter: adapterDef.id,
+      enabled: true,
+      settings: managedSettings
+    });
+  const initialized = dryRun
+    ? {
+      ok: true,
+      action: "init-config",
+      dryRun,
+      changed: false,
+      skipped: "dry-run",
+      path: resolvedConfigPath,
+      status: null
+    }
+    : await initializeManagedConnectorConfig(id, {
+      home,
+      agent,
+      settings,
+      overwrite
+    });
+  const mcp = dryRun
+    ? {
+      ok: true,
+      action: "mcp-install",
+      dryRun,
+      changed: false,
+      codexConfigPath: resolvedCodexConfigPath || null,
+      serverName: adapterDef.mcp.serverName,
+      tools: adapterDef.mcp.tools,
+      block: null,
+      status: null
+    }
+    : await installManagedConnectorMcp(id, {
+      home,
+      agent,
+      codexConfigPath: resolvedCodexConfigPath,
+      dryRun
+    });
+  const launchAgent = dryRun
+    ? {
+      ok: true,
+      dryRun,
+      action: "install",
+      plistPath: path.join(launchAgentsPath, `${launchAgentLabel({ id, launchAgent: {} })}.plist`),
+      label: launchAgentLabel({ id, launchAgent: {} }),
+      plist: null,
+      loadResult: null,
+      status: await managedConnectorLaunchAgentStatus(id, { home, launchAgentsPath })
+    }
+    : await installManagedConnectorLaunchAgent(id, {
+      home,
+      launchAgentsPath,
+      dryRun,
+      load,
+      reload,
+      launchctlRunner
+    });
+  const status = dryRun
+    ? null
+    : await managedConnectorStatus(id, {
+      home,
+      agent,
+      codexConfigPath: resolvedCodexConfigPath,
+      launchAgentsPath
+    });
+  return {
+    ok: true,
+    ready: Boolean(status?.ready),
+    running: Boolean(status?.running),
+    action: "setup",
+    connectorId: id,
+    adapter: adapterDef.id,
+    name: adapterDef.name,
+    dryRun,
+    paths: {
+      home,
+      configPath: resolvedConfigPath,
+      packagePath: resolvedPackagePath,
+      codexConfigPath: resolvedCodexConfigPath
+    },
+    serviceEnvironment,
+    configured,
+    initialized,
+    mcp,
+    launchAgent,
+    status,
+    nextAction: status?.nextAction || null
+  };
+}
+
 export async function importManagedConnectors(connectors = [], {
   home = appHome(),
   source = null
@@ -325,6 +454,34 @@ export async function initializeManagedConnectorConfig(id, {
 export function formatManagedConnectorConfigInit(result) {
   if (result.skipped === "exists") return `Managed connector config already exists: ${result.path}`;
   return `Wrote managed connector config: ${result.path}`;
+}
+
+export function formatManagedConnectorSetup(result) {
+  const lines = [
+    `${result.name} setup`,
+    `config: ${result.initialized?.skipped === "exists" ? "already exists" : result.dryRun ? "would write" : "wrote"} ${result.initialized?.path || result.paths.configPath}`,
+    result.serviceEnvironment
+      ? `env file: ${result.serviceEnvironment.envFile || "cleared"}`
+      : null,
+    result.mcp?.dryRun
+      ? `Codex tools: would install ${result.mcp.serverName}`
+      : result.mcp?.changed
+        ? `Codex tools: installed ${result.mcp.serverName}`
+        : `Codex tools: already configured ${result.mcp?.serverName || ""}`.trim(),
+    result.launchAgent?.dryRun
+      ? `background service: would install ${result.launchAgent.label}`
+      : result.launchAgent?.loadResult
+        ? `background service: installed and ${result.launchAgent.loadResult.skipped === "already-loaded" ? "already running" : "loaded"} ${result.launchAgent.label}`
+        : `background service: installed ${result.launchAgent?.label || ""}`.trim()
+  ].filter(Boolean);
+  if (result.status) {
+    const state = result.status.ready
+      ? result.status.running ? "ready and running" : "ready, not running"
+      : "needs attention";
+    lines.push(`state: ${state}`);
+    if (!result.status.ready && result.nextAction?.reason) lines.push(`next: ${result.nextAction.reason}`);
+  }
+  return lines.join("\n");
 }
 
 export async function installManagedConnectorMcp(id, {
@@ -888,6 +1045,29 @@ async function writeManagedConnectorStore(store, { home }) {
     schemaVersion: CONFIG_SCHEMA_VERSION,
     connectors: store.connectors || {}
   });
+}
+
+async function configureManagedConnectorEnvironment({
+  home,
+  envFile = null,
+  clearEnvFile = false,
+  dryRun = false
+} = {}) {
+  if (envFile == null && !clearEnvFile) return null;
+  const current = await readJson(serviceConfigPath(home), {});
+  const nextEnvFile = clearEnvFile ? null : resolveConfigPath(envFile, { cwd: process.cwd() });
+  if (!dryRun) {
+    await writeJson(serviceConfigPath(home), {
+      ...current,
+      envFile: nextEnvFile,
+      updatedAt: new Date().toISOString()
+    });
+  }
+  return {
+    dryRun,
+    changed: current.envFile !== nextEnvFile,
+    envFile: nextEnvFile
+  };
 }
 
 function managedConnectorConfigTemplate(adapter, config, agent, settings, { home }) {

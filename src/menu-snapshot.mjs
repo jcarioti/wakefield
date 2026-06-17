@@ -188,6 +188,7 @@ function actionSummary(action) {
 function threadSummary(thread) {
   return {
     threadId: thread.threadId,
+    title: thread.title || null,
     updatedAt: thread.updatedAt,
     cwd: thread.cwd || null
   };

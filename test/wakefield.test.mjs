@@ -24,7 +24,7 @@ import { dispatchExternalMessage } from "../src/inbox-dispatch.mjs";
 import { appleMessageDateToIso, imessageMessageAllowed, normalizeImessageRow, pollImessageChatDb } from "../src/imessage-chatdb.mjs";
 import { isPhotonBackpressureError, shouldUsePhotonNativeFallback } from "../packages/imessage-spectrum/src/spectrum-client.mjs";
 import { installWakefield } from "../src/install.mjs";
-import { configureManagedConnector, importManagedConnectors, initializeManagedConnectorConfig, installManagedConnectorMcp, managedConnectorLaunchAgentPlist, managedConnectorLaunchAgentStatus, managedConnectorStatus, managedConnectorWizard, testManagedConnector } from "../src/managed-connectors.mjs";
+import { configureManagedConnector, importManagedConnectors, initializeManagedConnectorConfig, installManagedConnectorMcp, managedConnectorLaunchAgentPlist, managedConnectorLaunchAgentStatus, managedConnectorStatus, managedConnectorWizard, setupManagedConnector, testManagedConnector } from "../src/managed-connectors.mjs";
 import { wakefieldManifest } from "../src/manifest.mjs";
 import { processMemoryCaptures } from "../src/memory-capture.mjs";
 import { installMemoryMcp, memoryMcpStatus } from "../src/memory-mcp.mjs";
@@ -366,13 +366,22 @@ test("listRecentThreads returns local Codex transcripts newest first", async () 
   const older = path.join(sessions, "rollout-2026-06-14T10-00-00-019ecaaa-0000-7000-8000-000000000001.jsonl");
   const newer = path.join(sessions, "rollout-2026-06-14T11-00-00-019ecaaa-0000-7000-8000-000000000002.jsonl");
   await fs.writeFile(older, `${JSON.stringify({ type: "session_meta", payload: { cwd: "/tmp/older", timestamp: "2026-06-14T10:00:00Z" } })}\n`);
-  await fs.writeFile(newer, `${JSON.stringify({ type: "session_meta", payload: { cwd: "/tmp/newer", timestamp: "2026-06-14T11:00:00Z" } })}\n`);
+  await fs.writeFile(newer, [
+    JSON.stringify({ type: "session_meta", payload: { cwd: "/tmp/newer", timestamp: "2026-06-14T11:00:00Z" } }),
+    JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "# AGENTS.md instructions for /tmp/newer\n\nIgnore bootstrap." }] } }),
+    JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: "Set up Wakefield connector testing for the new menu bar." } })
+  ].join("\n"));
+  await fs.writeFile(path.join(codexHomePath, "session_index.jsonl"), [
+    JSON.stringify({ id: "019ecaaa-0000-7000-8000-000000000002", thread_name: "Original Generated Name", updated_at: "2026-06-14T11:02:00Z" }),
+    JSON.stringify({ id: "019ecaaa-0000-7000-8000-000000000002", thread_name: "RickBot", updated_at: "2026-06-14T11:03:00Z" })
+  ].join("\n"));
   await fs.utimes(older, new Date("2026-06-14T10:00:00Z"), new Date("2026-06-14T10:00:00Z"));
   await fs.utimes(newer, new Date("2026-06-14T11:00:00Z"), new Date("2026-06-14T11:00:00Z"));
 
   const threads = await listRecentThreads({ codexHomePath, limit: 2 });
   assert.equal(threads[0].threadId, "019ecaaa-0000-7000-8000-000000000002");
   assert.equal(threads[0].cwd, "/tmp/newer");
+  assert.equal(threads[0].title, "RickBot");
   assert.equal(threads[1].threadId, "019ecaaa-0000-7000-8000-000000000001");
   assert.equal(threadIdFromFilename(path.basename(newer)), "019ecaaa-0000-7000-8000-000000000002");
 });
@@ -922,6 +931,64 @@ test("managed connectors initialize local configs and install MCP entries for Di
     delete process.env.WAKEFIELD_TEST_INIT_DISCORD_TOKEN;
     delete process.env.WAKEFIELD_TEST_INIT_PHOTON_ID;
     delete process.env.WAKEFIELD_TEST_INIT_PHOTON_SECRET;
+  }
+});
+
+test("managed connector setup installs config, MCP tools, launch agent, and env file in one pass", async () => {
+  const home = await tempHome();
+  const root = await tempHome();
+  const agent = {
+    id: "installer-agent",
+    name: "Installer Agent",
+    threadId: "thread-installer",
+    cwd: path.join(root, "target")
+  };
+  const discord = await createFakeManagedConnector(path.join(root, "discord"), "discord-codex", {
+    targetCwd: agent.cwd,
+    threadId: agent.threadId,
+    withConfig: false,
+    withMcp: false
+  });
+  const envFile = path.join(root, "wakefield.env");
+  await fs.writeFile(envFile, "WAKEFIELD_TEST_SETUP_DISCORD_TOKEN=discord-token\n", { mode: 0o600 });
+  delete process.env.WAKEFIELD_TEST_SETUP_DISCORD_TOKEN;
+  try {
+    const result = await setupManagedConnector("discord-codex", {
+      home,
+      agent,
+      packagePath: discord.packagePath,
+      configPath: discord.configPath,
+      codexConfigPath: discord.codexConfigPath,
+      envFile,
+      load: false,
+      launchAgentsPath: path.join(root, "LaunchAgents"),
+      settings: {
+        targetId: "setup",
+        "launchAgent.label": "com.wakefield.test.setup.discord",
+        tokenEnv: "WAKEFIELD_TEST_SETUP_DISCORD_TOKEN",
+        allowedChannelIds: "channel-setup"
+      }
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.ready, true);
+    assert.equal(result.running, false);
+    assert.equal(result.serviceEnvironment.envFile, envFile);
+    assert.equal(result.initialized.changed, true);
+    assert.equal(result.mcp.changed, true);
+    assert.equal(result.launchAgent.status.installed, true);
+    assert.notEqual(result.launchAgent.status.loaded, true);
+
+    const connectorConfig = JSON.parse(await fs.readFile(discord.configPath, "utf8"));
+    assert.equal(connectorConfig.targets[0].threadId, agent.threadId);
+    assert.deepEqual(connectorConfig.discord.allowedOutboundChannelIds, ["channel-setup"]);
+    const codexText = await fs.readFile(discord.codexConfigPath, "utf8");
+    assert.match(codexText, /discord_send_message/);
+    const plist = await fs.readFile(result.launchAgent.plistPath, "utf8");
+    assert.match(plist, /WAKEFIELD_ENV_FILE/);
+    assert.match(plist, new RegExp(escapeRegExp(envFile)));
+  } finally {
+    delete process.env.WAKEFIELD_TEST_SETUP_DISCORD_TOKEN;
   }
 });
 
