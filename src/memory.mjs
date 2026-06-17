@@ -51,7 +51,7 @@ export async function processDreams(agent, {
   capture = true,
   captureProvider = null,
   env = process.env,
-  fetchImpl = fetch
+  execFileImpl = null
 } = {}) {
   if (!agent) throw new Error("processDreams needs an agent profile.");
   const state = await readJson(agent.memory.statePath, {
@@ -111,7 +111,7 @@ export async function processDreams(agent, {
       now,
       captureProvider,
       env,
-      fetchImpl
+      execFileImpl
     });
 
   return {

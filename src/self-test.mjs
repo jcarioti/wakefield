@@ -90,7 +90,7 @@ export async function runSelfTest({
     });
     steps.push(pass("hook-memory", "queued dream"));
 
-    const service = await runServiceOnce({ home, now });
+    const service = await runServiceOnce({ home, capture: false, now });
     steps.push(check("service-run", service.ok && service.dreamer.processed === 1, `dreams=${service.dreamer.processed}`));
     steps.push(check(
       "service-dispatch-dry-run",
@@ -266,6 +266,7 @@ export async function runSelfTest({
     await configureService({ home, enabled: true, envFile });
     const envFileService = await runServiceOnce({
       home,
+      capture: false,
       connectorClients: {
         email: fakeMailbox([
           { id: "self-test-env-file-imap-1", raw: imapEnvFileSelfTestEmail() }

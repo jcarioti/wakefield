@@ -1,6 +1,6 @@
 import { archiveMatter, loadMatters, loadNotes, upsertMatter, upsertNote } from "./context-memory.mjs";
+import { codexDreamerConfig, createCodexStructuredMemoryResponse } from "./codex-dreamer.mjs";
 import { readJson, readJsonl, writeJson } from "./json-store.mjs";
-import { createStructuredMemoryResponse, memoryLlmConfig } from "./llm.mjs";
 
 const CAPTURE_PROCESSED_MAX = 1000;
 const CAPTURE_CONFIDENCE = new Set(["medium", "high"]);
@@ -12,21 +12,21 @@ export async function processMemoryCaptures(agent, {
   now = new Date(),
   captureProvider = null,
   env = process.env,
-  fetchImpl = fetch
+  execFileImpl = null
 } = {}) {
   if (!agent) throw new Error("processMemoryCaptures needs an agent profile.");
-  const config = memoryLlmConfig(env);
+  const config = codexDreamerConfig(env);
   const provider = captureProvider || (config.enabled
-    ? (payload) => openAiCaptureProvider(payload, { config, fetchImpl })
+    ? (payload) => codexCaptureProvider(payload, { config, execFileImpl })
     : null);
-  const model = captureProvider ? "injected-test-provider" : config.model;
+  const model = captureProvider ? "injected-test-provider" : config.model || "codex-default";
 
   if (!provider) {
     return {
       enabled: false,
       provider: config.provider,
       model,
-      skippedReason: "OPENAI_API_KEY is not configured.",
+      skippedReason: `Wakefield memory provider is disabled or unsupported: ${config.provider}.`,
       reviewed: 0,
       applied: [],
       captures: []
@@ -204,24 +204,18 @@ export function formatMemoryCaptureResult(result) {
   return lines.join("\n");
 }
 
-async function openAiCaptureProvider(payload, { config, fetchImpl }) {
-  const messages = [
-    {
-      role: "system",
-      content: MEMORY_CAPTURE_SYSTEM_PROMPT
-    },
-    {
-      role: "user",
-      content: JSON.stringify(payload, null, 2)
-    }
-  ];
-  return createStructuredMemoryResponse({
-    messages,
+async function codexCaptureProvider(payload, { config, execFileImpl }) {
+  return createCodexStructuredMemoryResponse({
+    prompt: [
+      MEMORY_CAPTURE_SYSTEM_PROMPT,
+      "",
+      "Review this Wakefield turn summary and existing memory. Return only JSON matching the schema.",
+      "",
+      JSON.stringify(payload, null, 2)
+    ].join("\n"),
     schema: memoryCaptureSchema(),
-    model: config.model,
-    apiKey: config.apiKey,
-    baseUrl: config.baseUrl,
-    fetchImpl
+    config,
+    ...(execFileImpl ? { execFileImpl } : {})
   });
 }
 

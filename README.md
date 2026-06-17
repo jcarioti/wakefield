@@ -382,7 +382,22 @@ pnpm exec wakefield dream
 pnpm exec wakefield memory capture --dry-run --json
 ```
 
-`wakefield dream` first builds deterministic turn summaries from hook evidence. If `OPENAI_API_KEY` is configured, Wakefield then runs a small structured capture pass that can create or update notes and active-context matters. The default capture model is `gpt-5.4-mini`; set `WAKEFIELD_MEMORY_MODEL` to use a different model. Set `WAKEFIELD_OPENAI_API_KEY` if you want Wakefield to use a key that is separate from the rest of your shell.
+`wakefield dream` first builds deterministic turn summaries from hook evidence. It then runs a small structured capture pass through `codex exec --ephemeral`, so it uses the user's existing Codex auth instead of requiring an OpenAI API key. The Codex worker runs read-only, with approvals disabled, hooks disabled, and a strict JSON schema for notes and active-context deltas.
+
+Useful dreamer overrides:
+
+```bash
+export WAKEFIELD_DREAM_CODEX_PATH="/Applications/Codex.app/Contents/Resources/codex"
+export WAKEFIELD_DREAM_MODEL="gpt-5.4-mini"
+export WAKEFIELD_DREAM_REASONING_EFFORT="low"
+export WAKEFIELD_DREAM_CODEX_HOME="$HOME/.codex"
+export WAKEFIELD_DREAM_CODEX_EPHEMERAL="true"
+export WAKEFIELD_DREAM_CODEX_IGNORE_USER_CONFIG="true"
+```
+
+By default, Wakefield uses `gpt-5.4-mini`, low reasoning effort, ephemeral sessions, hooks disabled, and user config ignored for the Codex worker.
+
+Use a separate `WAKEFIELD_DREAM_CODEX_HOME` only if you have logged that Codex home in separately or provided trusted Codex automation auth. The default uses the normal Codex home and ephemeral sessions, which keeps dreamer work out of the main visible Rickbot thread.
 
 Install Wakefield memory tools into the selected Codex config:
 
@@ -413,7 +428,7 @@ pnpm exec wakefield dream
 pnpm exec wakefield recall --query "morning summaries"
 ```
 
-Without an API key, it still summarizes queued hook events into local state. With an API key, it also reviews those summaries for meaningful memory deltas. The reviewer is deliberately stingy: it should save unresolved incidents, cross-channel continuity, changed statuses, and durable preferences, while skipping ordinary chat and completed one-off work.
+If Codex is unavailable, Wakefield still summarizes queued hook events into local state and reports capture errors without changing notes or matters. When Codex is available, the reviewer is deliberately stingy: it should save unresolved incidents, cross-channel continuity, changed statuses, and durable preferences, while skipping ordinary chat and completed one-off work.
 
 ## Service Tick
 

@@ -96,6 +96,7 @@ export async function configureService({
 export async function runServiceOnce({
   home = appHome(),
   limit = 10,
+  capture = true,
   connectorClients = {},
   dispatchClient = null,
   dispatchSocketPath = null,
@@ -117,7 +118,7 @@ export async function runServiceOnce({
     };
   }
 
-  const dreamer = await processDreams(agent, { limit, now });
+  const dreamer = await processDreams(agent, { limit, capture, now });
   const duties = await runDueDuties(agent, {
     home,
     dispatchClient,

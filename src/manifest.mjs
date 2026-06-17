@@ -98,7 +98,7 @@ export async function wakefieldManifest({
       feature("active-context-matters", "available", "Track temporary person, room, task, and case context that can resolve or archive."),
       feature("scoped-memory-recall", "available", "Inject small relevant memory cards into connector, wakeup, and prompt turns."),
       feature("memory-mcp-tools", "available", "Expose scoped memory recall, notes, and matters as MCP tools for deliberate agent lookup and maintenance."),
-      feature("local-dreamer", "available", "Process queued hook events into summaries and optional model-assisted memory capture."),
+      feature("local-dreamer", "available", "Process queued hook events into summaries and Codex-assisted memory capture."),
       feature("external-message-ingest", "available", "Queue normalized connector messages and return Codex routing metadata."),
       feature("discord-gateway", "available", "Listen for configured Discord bot messages and queue them into Wakefield."),
       feature("email-rfc822-ingest", "available", "Import RFC 822 email messages from .eml files or stdin."),

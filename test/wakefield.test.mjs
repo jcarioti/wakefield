@@ -26,6 +26,7 @@ import { isPhotonBackpressureError, shouldUsePhotonNativeFallback } from "../pac
 import { installWakefield } from "../src/install.mjs";
 import { configureManagedConnector, importManagedConnectors, initializeManagedConnectorConfig, installManagedConnectorMcp, managedConnectorLaunchAgentPlist, managedConnectorLaunchAgentStatus, managedConnectorStatus, managedConnectorWizard, testManagedConnector } from "../src/managed-connectors.mjs";
 import { wakefieldManifest } from "../src/manifest.mjs";
+import { processMemoryCaptures } from "../src/memory-capture.mjs";
 import { installMemoryMcp, memoryMcpStatus } from "../src/memory-mcp.mjs";
 import { registerWakefieldMemoryTools } from "../src/mcp-memory-server.mjs";
 import { menuSnapshot } from "../src/menu-snapshot.mjs";
@@ -2192,7 +2193,7 @@ test("dreamer processes queued hook events into durable state once", async () =>
       last_assistant_message: "Updated the schema migration setup."
     });
 
-    const first = await processDreams(profile);
+    const first = await processDreams(profile, { capture: false });
     assert.equal(first.processed, 1);
     assert.match(first.summaries[0].summary, /schema migration/);
 
@@ -2204,7 +2205,7 @@ test("dreamer processes queued hook events into durable state once", async () =>
     const context = await memoryContext(profile, "schema migration");
     assert.match(context, /schema migration/);
 
-    const second = await processDreams(profile);
+    const second = await processDreams(profile, { capture: false });
     assert.equal(second.processed, 0);
     assert.equal(JSON.parse(await fs.readFile(profile.memory.statePath, "utf8")).recentTurns.length, 1);
   } finally {
@@ -2294,6 +2295,92 @@ test("dreamer captures passive operational incidents into active context", async
   }
 });
 
+test("memory capture uses Codex exec as the default reviewer", async () => {
+  const home = await tempHome();
+  process.env.WAKEFIELD_HOME = home;
+  try {
+    const profile = await initAgent({ name: "Codex Dreamer", soul: "", threadId: "session-1", home });
+    await recordMemory(profile, {
+      channel: "dreams",
+      kind: "dream-summary",
+      text: "Turn turn-photon: Prompt: Photon/Spectrum iMessage appears degraded. Response: Discord is reliable for now.",
+      source: "test",
+      data: {
+        sourceDreamId: "dream-photon",
+        sourceDreamIds: ["dream-photon"],
+        sessionId: "session-1",
+        turnId: "turn-photon",
+        changes: []
+      }
+    });
+
+    let call = null;
+    const result = await processMemoryCaptures(profile, {
+      env: {
+        ...process.env,
+        WAKEFIELD_MEMORY_PROVIDER: "codex",
+        WAKEFIELD_DREAM_CODEX_PATH: "codex-test-bin",
+        WAKEFIELD_DREAM_MODEL: "test-codex-model"
+      },
+      execFileImpl: async (file, args, options) => {
+        call = { file, args, options };
+        const schemaPath = args[args.indexOf("--output-schema") + 1];
+        const schema = JSON.parse(await fs.readFile(schemaPath, "utf8"));
+        assert.equal(schema.properties.deltas.type, "array");
+        assert.deepEqual(args.slice(0, 4), ["-s", "read-only", "-a", "never"]);
+        assert.ok(args.indexOf("--disable") < args.indexOf("exec"));
+        assert.equal(args[args.indexOf("-c") + 1], 'model_reasoning_effort="low"');
+        assert.ok(args.includes("--disable"));
+        assert.ok(args.includes("hooks"));
+        assert.ok(args.includes("--ephemeral"));
+        assert.ok(args.includes("--ignore-user-config"));
+        assert.ok(args.includes("--ignore-rules"));
+        assert.ok(args.includes("--skip-git-repo-check"));
+        assert.equal(args[args.indexOf("--model") + 1], "test-codex-model");
+        assert.equal(options.env.WAKEFIELD_CODEX_DREAMER, "1");
+        return {
+          stdout: JSON.stringify({
+            deltas: [{
+              action: "create_active_context",
+              id: "incident-photon-spectrum-imessage",
+              title: "Photon/Spectrum iMessage delivery degraded",
+              text: null,
+              summary: "Photon/Spectrum iMessage delivery appears unreliable; Discord is currently the reliable external channel.",
+              status: "active",
+              statusReason: null,
+              scope: {
+                people: [],
+                rooms: [],
+                channels: ["imessage", "discord"],
+                tasks: [],
+                topics: ["photon", "spectrum"],
+                cases: [],
+                connectors: ["imessage"],
+                senders: [],
+                conversations: []
+              },
+              nextAction: "Retest iMessage receive/send before relying on it.",
+              notifyWhen: null,
+              tags: ["incident", "connector"],
+              sources: [],
+              confidence: "high",
+              rationale: "The dream summary describes an unresolved connector issue."
+            }]
+          })
+        };
+      }
+    });
+
+    assert.equal(call.file, "codex-test-bin");
+    assert.equal(result.provider, "codex");
+    assert.equal(result.applied[0].id, "incident-photon-spectrum-imessage");
+    const matters = await loadMatters(profile);
+    assert.equal(matters.matters.find((matter) => matter.id === "incident-photon-spectrum-imessage").status, "active");
+  } finally {
+    delete process.env.WAKEFIELD_HOME;
+  }
+});
+
 test("dreamer folds compact start and finish into one durable memory", async () => {
   const home = await tempHome();
   process.env.WAKEFIELD_HOME = home;
@@ -2314,7 +2401,7 @@ test("dreamer folds compact start and finish into one durable memory", async () 
       trigger: "manual"
     });
 
-    const first = await processDreams(profile);
+    const first = await processDreams(profile, { capture: false });
     assert.equal(first.processed, 1);
     assert.equal(first.pending, 0);
     assert.match(first.summaries[0].summary, /Manual compaction completed/);
@@ -2325,7 +2412,7 @@ test("dreamer folds compact start and finish into one durable memory", async () 
     assert.match(state.recentTurns[0].summary, /Manual compaction completed/);
     assert.equal(state.dreamer.processedIds.length, 2);
 
-    const second = await processDreams(profile);
+    const second = await processDreams(profile, { capture: false });
     assert.equal(second.processed, 0);
   } finally {
     delete process.env.WAKEFIELD_HOME;
@@ -2553,7 +2640,7 @@ test("service tick can be configured and run the local dreamer once", async () =
       last_assistant_message: "Prepared a scheduled memory run."
     });
 
-    const result = await runServiceOnce({ home, now: new Date("2026-06-14T12:00:00Z") });
+    const result = await runServiceOnce({ home, capture: false, now: new Date("2026-06-14T12:00:00Z") });
     assert.equal(result.ok, true);
     assert.equal(result.dreamer.processed, 1);
     assert.equal(result.externalDispatch.enabled, false);
@@ -2599,6 +2686,7 @@ test("service tick can dispatch pending external messages when explicitly enable
     const calls = [];
     const result = await runServiceOnce({
       home,
+      capture: false,
       now: new Date("2026-06-14T17:00:00Z"),
       dispatchClient: {
         async steerThreadFollowerTurn(params) {
@@ -2654,6 +2742,7 @@ test("service tick polls ready email connectors before dispatch", async () => {
 
     const result = await runServiceOnce({
       home,
+      capture: false,
       now: new Date("2026-06-14T18:30:00Z"),
       connectorClients: {
         email: fakeMailbox([
@@ -2721,6 +2810,7 @@ test("service env file feeds connector readiness and scheduled email polling", a
 
     const result = await runServiceOnce({
       home,
+      capture: false,
       now: new Date("2026-06-14T18:35:00Z"),
       connectorClients: {
         email: fakeMailbox([
@@ -2772,6 +2862,7 @@ test("service tick polls ready iMessage connectors before dispatch", async () =>
 
     const result = await runServiceOnce({
       home,
+      capture: false,
       now: new Date("2026-06-14T18:45:00Z"),
       connectorClients: {
         imessageRows: [

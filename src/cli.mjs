@@ -916,7 +916,8 @@ async function main(argv = process.argv.slice(2)) {
   if (command === "service" && rest[0] === "run-once") {
     const options = parseOptions(rest.slice(1));
     const result = await runServiceOnce({
-      limit: Number(options.limit || 10)
+      limit: Number(options.limit || 10),
+      capture: !Boolean(options.noCapture)
     });
     console.log(options.json ? JSON.stringify(result, null, 2) : formatServiceRun(result));
     process.exitCode = result.ok ? 0 : 1;
@@ -1076,7 +1077,7 @@ function usage() {
     "  wakefield dream [--limit N] [--dry-run] [--no-capture] [--json]",
     "  wakefield service status [--json]",
     "  wakefield service configure [--enable|--disable] [--interval-minutes N] [--enable-dispatch|--disable-dispatch] [--dispatch-mode MODE] [--dispatch-limit N] [--env-file PATH|--clear-env-file] [--json]",
-    "  wakefield service run-once [--limit N] [--json]",
+    "  wakefield service run-once [--limit N] [--no-capture] [--json]",
     "  wakefield service launch-agent status [--json]",
     "  wakefield service launch-agent print",
     "  wakefield service launch-agent install [--interval-minutes N] [--load|--reload] [--dry-run] [--json]",
