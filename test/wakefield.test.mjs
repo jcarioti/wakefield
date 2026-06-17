@@ -2081,6 +2081,70 @@ test("UserPromptSubmit hook suppresses repeated memory until compaction", async 
   }
 });
 
+test("UserPromptSubmit hook skips same-thread source memories until compaction", async () => {
+  const home = await tempHome();
+  process.env.WAKEFIELD_HOME = home;
+  try {
+    const profile = await initAgent({ name: "Morrow", soul: "", threadId: "session-1", home });
+    await recordMemory(profile, {
+      channel: "inbox",
+      kind: "user-prompt",
+      text: "Photon/Spectrum iMessage appears down right now.",
+      source: "test",
+      data: {
+        sessionId: "session-1",
+        turnId: "turn-photon"
+      },
+      now: new Date("2026-06-17T02:18:00.000Z")
+    });
+    await upsertMatter(profile, {
+      id: "photon-spectrum-imessage-outage",
+      title: "Photon/Spectrum iMessage down",
+      summary: "Photon/Spectrum iMessage is down; Discord is fallback.",
+      status: "waiting",
+      scope: {
+        topics: ["photon", "spectrum", "imessage", "discord"]
+      },
+      sources: ["codex-turn:turn-photon"]
+    });
+
+    const beforeCompact = await handleHookInput({
+      hook_event_name: "UserPromptSubmit",
+      session_id: "session-1",
+      turn_id: "turn-followup",
+      cwd: profile.cwd,
+      prompt: "What should we do about iMessage followups while Photon is down?"
+    });
+    assert.equal(beforeCompact, null);
+
+    await handleHookInput({
+      hook_event_name: "PreCompact",
+      session_id: "session-1",
+      turn_id: "turn-compact",
+      cwd: profile.cwd,
+      trigger: "manual"
+    });
+    await handleHookInput({
+      hook_event_name: "PostCompact",
+      session_id: "session-1",
+      turn_id: "turn-compact",
+      cwd: profile.cwd,
+      trigger: "manual"
+    });
+
+    const afterCompact = await handleHookInput({
+      hook_event_name: "UserPromptSubmit",
+      session_id: "session-1",
+      turn_id: "turn-after-compact",
+      cwd: profile.cwd,
+      prompt: "What should we do about iMessage followups while Photon is down?"
+    });
+    assert.match(afterCompact.hookSpecificOutput.additionalContext, /photon-spectrum-imessage-outage/);
+  } finally {
+    delete process.env.WAKEFIELD_HOME;
+  }
+});
+
 test("SessionStart and compaction hooks record lifecycle edges without injecting context", async () => {
   const home = await tempHome();
   process.env.WAKEFIELD_HOME = home;

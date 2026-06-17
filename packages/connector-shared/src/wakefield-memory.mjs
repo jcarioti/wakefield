@@ -208,19 +208,25 @@ async function filterInjectableMemory(agent, recalled, {
   record = true,
   now = new Date()
 } = {}) {
-  if (!record) return recalled;
-
   const ledgerPath = injectionLedgerPathForAgent(agent);
   if (!ledgerPath) return recalled;
 
   const compactEpoch = await compactEpochForAgent(agent);
-  const explicit = Boolean(force) || isExplicitRecallRequest(query);
+  const forced = Boolean(force);
+  const explicit = forced || isExplicitRecallRequest(query);
+  const normalizedThreadId = normalizeLedgerValue(threadId || agent.threadId || agent.id || "default-thread");
+  const currentEpochTurnIds = await currentEpochTurnIdsForAgent(agent, {
+    threadId: normalizedThreadId,
+    compactEpoch
+  });
   const ledger = await readInjectionLedger(ledgerPath);
   const context = {
-    threadId: normalizeLedgerValue(threadId || agent.threadId || agent.id || "default-thread"),
+    threadId: normalizedThreadId,
     lane: normalizeLedgerValue(lane || "default"),
     compactEpoch,
+    currentEpochTurnIds,
     explicit,
+    forced,
     now
   };
 
@@ -233,7 +239,7 @@ async function filterInjectableMemory(agent, recalled, {
     if (shouldInjectMemoryItem(ledger, matter, { ...context, type: "matter" })) matters.push(matter);
   }
 
-  if (notes.length > 0 || matters.length > 0) {
+  if (record && (notes.length > 0 || matters.length > 0)) {
     await writeInjectionLedger(ledgerPath, ledger, { now });
   }
 
@@ -245,11 +251,16 @@ function shouldInjectMemoryItem(ledger, item, {
   threadId,
   lane,
   compactEpoch,
+  currentEpochTurnIds,
   explicit,
+  forced,
   now
 }) {
   const itemId = item.id || "";
   if (!itemId) return false;
+  if (!forced && memorySourceTurnIds(item).some((turnId) => currentEpochTurnIds.has(turnId))) {
+    return false;
+  }
   const ledgerKey = [threadId, lane, type, itemId].map(normalizeLedgerValue).join("|");
   const contentHash = memoryItemHash(item);
   const previous = ledger.entries[ledgerKey];
@@ -275,6 +286,43 @@ function injectionReason(previous, { compactEpoch, contentHash, explicit }) {
   if (previous.compactEpoch !== compactEpoch) return "after-compaction";
   if (previous.contentHash !== contentHash) return "memory-changed";
   return null;
+}
+
+function memorySourceTurnIds(item) {
+  const ids = [];
+  for (const source of uniqueStrings(item?.sources || item?.source || [])) {
+    const match = String(source).match(/^(?:codex-)?turn:([a-z0-9_.-]+)/i);
+    if (match?.[1]) ids.push(normalizeLedgerValue(match[1]));
+  }
+  return ids;
+}
+
+async function currentEpochTurnIdsForAgent(agent, {
+  threadId,
+  compactEpoch
+} = {}) {
+  const turnIds = new Set();
+  const entries = [
+    ...await readJsonl(agent.memory?.inboxPath),
+    ...await readJsonl(agent.memory?.journalPath),
+    ...await readJsonl(agent.memory?.dreamsPath)
+  ];
+  for (const entry of entries) {
+    if (!entryInCompactEpoch(entry, compactEpoch)) continue;
+    const turnId = entry?.data?.turnId || entry?.data?.turn_id || null;
+    if (!turnId) continue;
+    const sessionId = entry?.data?.sessionId || entry?.data?.session_id || null;
+    if (!sessionId || normalizeLedgerValue(sessionId) !== threadId) continue;
+    turnIds.add(normalizeLedgerValue(turnId));
+  }
+  return turnIds;
+}
+
+function entryInCompactEpoch(entry, compactEpoch) {
+  if (!entry) return false;
+  if (!compactEpoch || compactEpoch === "initial") return true;
+  const at = entry.at || entry.data?.at || null;
+  return Boolean(at && String(at) > String(compactEpoch));
 }
 
 function isExplicitRecallRequest(query) {

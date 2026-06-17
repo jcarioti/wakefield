@@ -102,6 +102,68 @@ test("connector memory keeps topic matches narrow for broad sender-scoped follow
   assert.doesNotMatch(memory, /rma-earle-20260514-01/);
 });
 
+test("connector memory skips same-thread source turns until compaction", async () => {
+  const { home, cwd, memoryDir } = await createMemoryHome();
+  const mattersPath = path.join(memoryDir, "matters.json");
+  const matters = JSON.parse(await fs.readFile(mattersPath, "utf8"));
+  const outage = matters.matters.find((matter) => matter.id === "photon-spectrum-imessage-outage");
+  outage.sources = ["codex-turn:turn-photon"];
+  await writeJson(mattersPath, matters);
+  await fs.appendFile(path.join(memoryDir, "inbox.jsonl"), `${JSON.stringify({
+    id: "prompt-photon",
+    at: "2026-06-17T02:18:00.000Z",
+    kind: "user-prompt",
+    data: {
+      sessionId: "thread-rick",
+      turnId: "turn-photon"
+    }
+  })}\n`, "utf8");
+
+  const target = {
+    id: "rick",
+    threadId: "thread-rick",
+    cwd
+  };
+  const scope = {
+    connector: "discord",
+    sender: "1362496879681732688",
+    conversation: "dm-joe"
+  };
+  const query = "What should we do about iMessage followups while Photon is down?";
+
+  const beforeCompact = await wakefieldMemoryForConnectorMessage({
+    home,
+    target,
+    query,
+    scope,
+    injection: {
+      record: false
+    }
+  });
+  assert.equal(beforeCompact, "");
+
+  await fs.appendFile(path.join(memoryDir, "dreams.jsonl"), `${JSON.stringify({
+    id: "compact-after-photon",
+    at: "2026-06-17T03:00:00.000Z",
+    kind: "post-compact",
+    data: {
+      sessionId: "thread-rick",
+      turnId: "turn-compact"
+    }
+  })}\n`, "utf8");
+
+  const afterCompact = await wakefieldMemoryForConnectorMessage({
+    home,
+    target,
+    query,
+    scope,
+    injection: {
+      record: false
+    }
+  });
+  assert.match(afterCompact, /photon-spectrum-imessage-outage/);
+});
+
 test("connector memory uses Wakefield contacts for vague same-person follow-ups", async () => {
   const { home, cwd } = await createMemoryHome();
   const memory = await wakefieldMemoryForConnectorMessage({
