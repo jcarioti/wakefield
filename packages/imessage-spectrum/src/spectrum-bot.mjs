@@ -234,6 +234,8 @@ async function runReceiveLoop() {
   try {
     for await (const [space, message] of currentApp.messages) {
       receiveLoop.lastActivityAt = new Date().toISOString();
+      receiveLoop.lastError = null;
+      receiveLoop.lastErrorAt = null;
       knownSpaces.set(space.id, space);
       lastInboundAt = receiveLoop.lastActivityAt;
       lastInboundMessage = statusMessageSummary({ space, message, seenAt: lastInboundAt });
@@ -640,6 +642,7 @@ async function enqueueStartupHistoryReplay({ previousStatus: status }) {
             clientSet
           });
         } catch (error) {
+          recordReceiveLoopDegraded(`startup_replay_${target.id}`, error);
           console.warn(`Photon/Spectrum startup replay could not read ${spaceId}: ${error.message}`);
           continue;
         }
@@ -772,7 +775,7 @@ function targetForDelivery(record) {
 async function handleBridgeRequest(request) {
   if (request.method === "status") {
     return {
-      status: "online",
+      status: currentBridgeStatus(),
       knownSpaceIds: [...knownSpaces.keys()],
       lastInboundAt,
       lastMatchedInboundAt,
@@ -1229,7 +1232,23 @@ async function writeStatus(status) {
 }
 
 async function writeCurrentStatus() {
-  await writeStatus(spectrumServiceStatusForReceiveLoop(receiveLoop.state));
+  await writeStatus(currentBridgeStatus());
+}
+
+function currentBridgeStatus() {
+  if (receiveLoop.lastError) {
+    return "receive-loop-degraded";
+  }
+  return spectrumServiceStatusForReceiveLoop(receiveLoop.state);
+}
+
+function recordReceiveLoopDegraded(reason, error) {
+  receiveLoop.lastErrorAt = new Date().toISOString();
+  receiveLoop.lastError = error.stack || error.message;
+  receiveLoop.lastRestartReason = reason;
+  writeStatus("receive-loop-degraded").catch((statusError) => {
+    console.warn(`Photon/Spectrum status update failed after ${reason}: ${statusError.message}`);
+  });
 }
 
 async function runProviderOperation(label, operation) {

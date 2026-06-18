@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -989,6 +990,56 @@ test("managed iMessage status prefers live Spectrum users over stale config cach
   assert.equal(status.connectorConfig.spectrum.projectUsers.total, 2);
   assert.equal(status.connectorConfig.spectrum.projectUsers.users[0].displayName, "Live Owner");
   assert.equal(status.connectorConfig.spectrum.projectUsers.users[0].assignedPhoneNumber, "+15550001111");
+});
+
+test("managed connector Spectrum bridge check reports recent receive-loop errors", async () => {
+  const home = await tempHome();
+  const root = await tempHome();
+  const connector = await createFakeManagedConnector(root, "imessage-spectrum", {
+    withConfig: true,
+    withMcp: true
+  });
+  await importManagedConnectors([
+    {
+      id: "imessage-spectrum",
+      adapter: "imessage-spectrum",
+      enabled: true,
+      packagePath: connector.packagePath,
+      configPath: connector.configPath,
+      targetId: "self-test",
+      mcp: {
+        codexConfigPath: connector.codexConfigPath
+      }
+    }
+  ], { home });
+
+  const server = net.createServer((socket) => {
+    socket.once("data", () => {
+      socket.end(`${JSON.stringify({
+        id: "wakefield-status",
+        ok: true,
+        result: {
+          status: "receive-loop-degraded",
+          receiveLoop: {
+            state: "running",
+            lastErrorAt: new Date().toISOString(),
+            lastError: "Received HTTP status code 502"
+          }
+        }
+      })}\n`);
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(path.join(root, "spectrum.sock"), resolve);
+  });
+  try {
+    const result = await testManagedConnector("imessage-spectrum", { home, kind: "spectrum-bridge" });
+    assert.equal(result.ok, false);
+    assert.match(result.bridge.detail, /Recent bridge error: Received HTTP status code 502/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 test("managed connectors resolve installed package dependencies without packagePath", async () => {
