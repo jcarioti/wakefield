@@ -112,14 +112,48 @@ export async function configureDuty(id, {
   return importDuties([next], { home, source: current.source });
 }
 
+export async function deleteWakeup(id, {
+  home = appHome()
+} = {}) {
+  const current = await loadDuties({ home });
+  const normalizedId = normalizeId(id);
+  return saveDuties({
+    ...current,
+    wakeups: current.wakeups.filter((wakeup) => wakeup.id !== normalizedId)
+  }, { home });
+}
+
+export async function deleteDuty(id, {
+  home = appHome(),
+  removeReferences = false
+} = {}) {
+  const current = await loadDuties({ home });
+  const normalizedId = normalizeId(id);
+  const references = current.wakeups.filter((wakeup) => dutyIds(wakeup).includes(normalizedId));
+  if (references.length > 0 && !removeReferences) {
+    throw new Error(`Duty ${normalizedId} is used by wakeup(s): ${references.map((wakeup) => wakeup.id).join(", ")}. Re-run with --remove-references to delete it anyway.`);
+  }
+  return saveDuties({
+    ...current,
+    duties: current.duties.filter((duty) => duty.id !== normalizedId),
+    wakeups: removeReferences
+      ? current.wakeups.map((wakeup) => ({
+        ...wakeup,
+        duties: dutyIds(wakeup).filter((dutyId) => dutyId !== normalizedId)
+      }))
+      : current.wakeups
+  }, { home });
+}
+
 export async function dutyStatuses({
   home = appHome(),
-  now = new Date()
+  now = new Date(),
+  includeCompatibilityWakeups = true
 } = {}) {
   const document = await loadDuties({ home });
   return {
     ...document,
-    wakeups: wakeupStatuses(document, { now })
+    wakeups: wakeupStatuses(document, { now, includeCompatibilityWakeups })
   };
 }
 
@@ -133,7 +167,7 @@ export async function runDueDuties(agent, {
 } = {}) {
   if (!agent) throw new Error("runDueDuties needs an agent profile.");
   const document = await loadDuties({ home });
-  const selected = wakeupStatuses(document, { now })
+  const selected = wakeupStatuses(document, { now, includeCompatibilityWakeups: true })
     .filter((duty) => !only || duty.id === only)
     .filter((duty) => duty.enabled && (force || duty.due));
   const results = [];
@@ -335,18 +369,20 @@ function normalizeWakeup(wakeup) {
   };
 }
 
-function wakeupStatuses(document, { now }) {
+function wakeupStatuses(document, { now, includeCompatibilityWakeups = true }) {
   const dutiesById = new Map(document.duties.map((duty) => [duty.id, duty]));
   const explicitWakeups = document.wakeups.map((wakeup) => resolveWakeup(wakeup, dutiesById, {
     stateKind: "wakeup",
     stateId: wakeup.id
   }));
-  const compatibilityWakeups = document.duties
-    .filter(hasInlineSchedule)
-    .map((duty) => resolveWakeup(legacyWakeupFromDuty(duty), dutiesById, {
-      stateKind: "duty",
-      stateId: duty.id
-    }));
+  const compatibilityWakeups = includeCompatibilityWakeups
+    ? document.duties
+      .filter(hasInlineSchedule)
+      .map((duty) => resolveWakeup(legacyWakeupFromDuty(duty), dutiesById, {
+        stateKind: "duty",
+        stateId: duty.id
+      }))
+    : [];
   return [...explicitWakeups, ...compatibilityWakeups]
     .map((wakeup) => wakeupStatus(wakeup, { now }))
     .sort((left, right) => left.id.localeCompare(right.id));

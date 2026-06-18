@@ -33,9 +33,12 @@ export async function setupStatus({
     agent: agent ? {
       id: agent.id,
       name: agent.name,
+      ownerName: agent.ownerName || null,
+      agentHome: agent.agentHome || null,
       threadId: agent.threadId || null,
       cwd: agent.cwd || null,
-      soulPath: agent.soulPath || null
+      soulPath: agent.soulPath || null,
+      bootstrapPromptPath: agent.bootstrapPromptPath || null
     } : null,
     doctor: report,
     recentThreads: threads,

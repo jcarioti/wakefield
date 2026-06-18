@@ -14,7 +14,7 @@ import { importContactsFile, loadContacts, resolveContact } from "../src/contact
 import { archiveMatter, formatContextMemory, loadMatters, recallContext, upsertMatter, upsertNote } from "../src/context-memory.mjs";
 import { discordMessageAllowed, ingestDiscordGatewayMessage, normalizeDiscordMessage } from "../src/discord-gateway.mjs";
 import { doctor } from "../src/doctor.mjs";
-import { configureDuty, configureWakeup, dutyStatuses, runDueDuties } from "../src/duties.mjs";
+import { configureDuty, configureWakeup, deleteDuty, deleteWakeup, dutyStatuses, runDueDuties } from "../src/duties.mjs";
 import { pollEmailImap } from "../src/email-imap.mjs";
 import { ingestEmailRfc822, parseRfc822 } from "../src/email-rfc822.mjs";
 import { acknowledgeExternalMessage, ingestExternalMessage, listExternalMessages } from "../src/external-messages.mjs";
@@ -25,7 +25,7 @@ import { dispatchExternalMessage } from "../src/inbox-dispatch.mjs";
 import { appleMessageDateToIso, imessageMessageAllowed, normalizeImessageRow, pollImessageChatDb } from "../src/imessage-chatdb.mjs";
 import { isPhotonBackpressureError, shouldUsePhotonNativeFallback } from "../packages/imessage-spectrum/src/spectrum-client.mjs";
 import { installWakefield } from "../src/install.mjs";
-import { configureManagedConnector, importManagedConnectors, initializeManagedConnectorConfig, installManagedConnectorMcp, managedConnectorLaunchAgentPlist, managedConnectorLaunchAgentStatus, managedConnectorStatus, managedConnectorWizard, setupManagedConnector, testManagedConnector } from "../src/managed-connectors.mjs";
+import { configureManagedConnector, importManagedConnectors, initializeManagedConnectorConfig, installManagedConnectorMcp, managedConnectorLaunchAgentPlist, managedConnectorLaunchAgentStatus, managedConnectorStatus, managedConnectorWizard, retargetManagedConnectorConfigs, setupManagedConnector, testManagedConnector } from "../src/managed-connectors.mjs";
 import { wakefieldManifest } from "../src/manifest.mjs";
 import { listMemoryCaptureAudit, processMemoryCaptures } from "../src/memory-capture.mjs";
 import { installMemoryMcp, memoryMcpStatus } from "../src/memory-mcp.mjs";
@@ -70,6 +70,34 @@ test("init creates a normal app-support profile and memory files", async () => {
   assert.match(await fs.readFile(profile.memory.capturePath, "utf8"), /^$/);
   assert.deepEqual(JSON.parse(await fs.readFile(profile.memory.notesPath, "utf8")).notes, []);
   assert.deepEqual(JSON.parse(await fs.readFile(profile.memory.mattersPath, "utf8")).matters, []);
+});
+
+test("init can create a project-backed agent home with local memory", async () => {
+  const home = await tempHome();
+  const agentHome = path.join(await tempHome(), "bmo");
+  const profile = await initAgent({
+    name: "BMO",
+    ownerName: "Finn",
+    soul: "A tiny helpful game console friend.",
+    agentHome,
+    home
+  });
+
+  assert.equal(profile.id, "bmo");
+  assert.equal(profile.ownerName, "Finn");
+  assert.equal(profile.agentHome, agentHome);
+  assert.equal(profile.cwd, agentHome);
+  assert.equal(profile.soulPath, path.join(agentHome, "AGENTS.md"));
+  assert.equal(profile.localDir, path.join(agentHome, ".wakefield"));
+  assert.equal(profile.bootstrapPromptPath, path.join(agentHome, ".wakefield", "bootstrap-prompt.md"));
+  assert.equal(profile.memory.notesPath, path.join(agentHome, ".wakefield", "memories", "notes.json"));
+  assert.equal(profile.memory.externalMessagesPath, path.join(agentHome, ".wakefield", "memories", "external-messages.jsonl"));
+  assert.equal((await loadAgent(null, home)).id, profile.id);
+  assert.equal(JSON.parse(await fs.readFile(path.join(agentHome, ".wakefield", "profile.json"), "utf8")).id, profile.id);
+  assert.match(await fs.readFile(path.join(agentHome, ".gitignore"), "utf8"), /^\.wakefield\/$/m);
+  assert.match(await fs.readFile(profile.soulPath, "utf8"), /You are BMO/);
+  assert.match(await fs.readFile(profile.bootstrapPromptPath, "utf8"), /Hello BMO/);
+  assert.match(await fs.readFile(profile.bootstrapPromptPath, "utf8"), /Your owner is Finn/);
 });
 
 test("local memory recall returns relevant journal entries", async () => {
@@ -940,6 +968,58 @@ test("managed connectors initialize local configs and install MCP entries for Di
     delete process.env.WAKEFIELD_TEST_INIT_PHOTON_ID;
     delete process.env.WAKEFIELD_TEST_INIT_PHOTON_SECRET;
   }
+});
+
+test("managed connector configs retarget when the selected Codex thread changes", async () => {
+  const home = await tempHome();
+  const root = await tempHome();
+  const originalCwd = path.join(root, "old-target");
+  const nextCwd = path.join(root, "new-target");
+  const connector = await createFakeManagedConnector(path.join(root, "discord"), "discord-codex", {
+    targetCwd: originalCwd,
+    threadId: "thread-old",
+    withConfig: true,
+    withMcp: false
+  });
+  await importManagedConnectors([
+    {
+      id: "discord-codex",
+      adapter: "discord-codex",
+      enabled: true,
+      packagePath: connector.packagePath,
+      configPath: connector.configPath,
+      targetId: "self-test"
+    }
+  ], { home });
+
+  const changed = await retargetManagedConnectorConfigs({
+    home,
+    agent: {
+      id: "rickbot",
+      name: "RickBot",
+      threadId: "thread-new",
+      cwd: nextCwd
+    }
+  });
+  assert.equal(changed.ok, true);
+  assert.equal(changed.changed, 1);
+
+  const config = JSON.parse(await fs.readFile(connector.configPath, "utf8"));
+  assert.equal(config.targets[0].id, "self-test");
+  assert.equal(config.targets[0].displayName, "RickBot");
+  assert.equal(config.targets[0].threadId, "thread-new");
+  assert.equal(config.targets[0].cwd, nextCwd);
+
+  const unchanged = await retargetManagedConnectorConfigs({
+    home,
+    agent: {
+      id: "rickbot",
+      name: "RickBot",
+      threadId: "thread-new",
+      cwd: nextCwd
+    }
+  });
+  assert.equal(unchanged.changed, 0);
 });
 
 test("managed connector setup installs config, MCP tools, launch agent, and env file in one pass", async () => {
@@ -2983,6 +3063,40 @@ test("wakeups bundle multiple duties into one scheduled turn", async () => {
 
   const after = await dutyStatuses({ home, now: new Date(2026, 5, 14, 4, 16, 0) });
   assert.equal(after.wakeups[0].due, false);
+});
+
+test("wakeup lists can hide compatibility rows and delete wakeups and duties cleanly", async () => {
+  const home = await tempHome();
+  await configureDuty("support", {
+    home,
+    label: "Support",
+    wakeTimes: ["10:00"],
+    skills: ["support-skill"]
+  });
+  await configureWakeup("morning-support", {
+    home,
+    label: "Morning Support",
+    wakeTimes: ["10:00"],
+    duties: ["support"]
+  });
+
+  const visible = await dutyStatuses({ home, includeCompatibilityWakeups: false });
+  assert.deepEqual(visible.wakeups.map((wakeup) => wakeup.id), ["morning-support"]);
+
+  const compatibility = await dutyStatuses({ home, includeCompatibilityWakeups: true });
+  assert.deepEqual(compatibility.wakeups.map((wakeup) => wakeup.id), ["morning-support", "support"]);
+
+  await assert.rejects(
+    () => deleteDuty("support", { home }),
+    /used by wakeup/
+  );
+
+  const afterWakeupDelete = await deleteWakeup("morning-support", { home });
+  assert.deepEqual(afterWakeupDelete.wakeups, []);
+
+  const afterDutyDelete = await deleteDuty("support", { home });
+  assert.deepEqual(afterDutyDelete.duties, []);
+  assert.deepEqual((await dutyStatuses({ home, includeCompatibilityWakeups: true })).wakeups, []);
 });
 
 test("duties configure CLI preserves required tools when changing dispatch mode", async () => {

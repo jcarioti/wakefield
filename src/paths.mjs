@@ -21,6 +21,34 @@ export function agentsDir(home = appHome()) {
   return path.join(home, "agents");
 }
 
+export function defaultAgentHomesDir() {
+  return path.join(os.homedir(), "Wakefield Agents");
+}
+
+export function defaultAgentHome(agentId) {
+  return path.join(defaultAgentHomesDir(), agentId);
+}
+
+export function agentLocalDir(agentHome) {
+  return path.join(agentHome, ".wakefield");
+}
+
+export function agentLocalProfilePath(agentHome) {
+  return path.join(agentLocalDir(agentHome), "profile.json");
+}
+
+export function agentLocalMemoryDir(agentHome) {
+  return path.join(agentLocalDir(agentHome), "memories");
+}
+
+export function agentLocalMemoryPath(agentHome, name) {
+  return path.join(agentLocalMemoryDir(agentHome), `${name}.jsonl`);
+}
+
+export function agentLocalMemoryDocumentPath(agentHome, name) {
+  return path.join(agentLocalMemoryDir(agentHome), `${name}.json`);
+}
+
 export function connectorsDir(home = appHome()) {
   return path.join(home, "connectors");
 }

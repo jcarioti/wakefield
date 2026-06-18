@@ -1,6 +1,23 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { appConfigPath, appHome, agentDir, agentsDir, externalMessagesPath, memoryDocumentPath, memoryPath, profilePath, soulPath, statePath, expandHome, isPathInside } from "./paths.mjs";
+import {
+  agentLocalDir,
+  agentLocalMemoryDocumentPath,
+  agentLocalMemoryPath,
+  agentLocalProfilePath,
+  appConfigPath,
+  appHome,
+  agentDir,
+  agentsDir,
+  externalMessagesPath,
+  memoryDocumentPath,
+  memoryPath,
+  profilePath,
+  soulPath,
+  statePath,
+  expandHome,
+  isPathInside
+} from "./paths.mjs";
 import { ensureDir, pathExists, readJson, touch, writeJson } from "./json-store.mjs";
 
 export function slugifyName(name) {
@@ -44,8 +61,10 @@ export function soulFromPreset(value) {
 export async function initAgent({
   name,
   soul,
+  ownerName = null,
   threadId = null,
   cwd = null,
+  agentHome = null,
   home = appHome(),
   overwrite = false
 }) {
@@ -55,21 +74,34 @@ export async function initAgent({
 
   const agentId = slugifyName(name);
   const root = agentDir(agentId, home);
+  const resolvedAgentHome = agentHome
+    ? path.resolve(expandHome(agentHome))
+    : null;
+  const localDir = resolvedAgentHome ? agentLocalDir(resolvedAgentHome) : root;
   if (await pathExists(profilePath(agentId, home)) && !overwrite) {
     throw new Error(`Agent already exists: ${agentId}`);
   }
 
-  const resolvedCwd = cwd ? path.resolve(expandHome(cwd)) : root;
-  const now = new Date().toISOString();
-  const profile = {
-    id: agentId,
-    name: String(name).trim(),
-    createdAt: now,
-    updatedAt: now,
-    threadId,
-    cwd: resolvedCwd,
-    soulPath: soulPath(agentId, home),
-    memory: {
+  const resolvedCwd = cwd
+    ? path.resolve(expandHome(cwd))
+    : resolvedAgentHome || root;
+  const resolvedSoulPath = resolvedAgentHome
+    ? path.join(resolvedAgentHome, "AGENTS.md")
+    : soulPath(agentId, home);
+  const memory = resolvedAgentHome
+    ? {
+      provider: "local-jsonl",
+      inboxPath: agentLocalMemoryPath(resolvedAgentHome, "inbox"),
+      journalPath: agentLocalMemoryPath(resolvedAgentHome, "journal"),
+      dreamsPath: agentLocalMemoryPath(resolvedAgentHome, "dreams"),
+      capturePath: agentLocalMemoryPath(resolvedAgentHome, "memory-capture"),
+      notesPath: agentLocalMemoryDocumentPath(resolvedAgentHome, "notes"),
+      mattersPath: agentLocalMemoryDocumentPath(resolvedAgentHome, "matters"),
+      externalMessagesPath: agentLocalMemoryPath(resolvedAgentHome, "external-messages"),
+      statePath: agentLocalMemoryDocumentPath(resolvedAgentHome, "state"),
+      injectionLedgerPath: agentLocalMemoryDocumentPath(resolvedAgentHome, "injection-ledger")
+    }
+    : {
       provider: "local-jsonl",
       inboxPath: memoryPath(agentId, "inbox", home),
       journalPath: memoryPath(agentId, "journal", home),
@@ -79,7 +111,21 @@ export async function initAgent({
       mattersPath: memoryDocumentPath(agentId, "matters", home),
       externalMessagesPath: externalMessagesPath(agentId, home),
       statePath: statePath(agentId, home)
-    },
+    };
+  const now = new Date().toISOString();
+  const profile = {
+    id: agentId,
+    name: String(name).trim(),
+    ownerName: ownerName == null || String(ownerName).trim() === "" ? null : String(ownerName).trim(),
+    createdAt: now,
+    updatedAt: now,
+    agentHome: resolvedAgentHome,
+    localDir,
+    threadId,
+    cwd: resolvedCwd,
+    soulPath: resolvedSoulPath,
+    bootstrapPromptPath: resolvedAgentHome ? path.join(localDir, "bootstrap-prompt.md") : null,
+    memory,
     hooks: {
       enabled: true,
       matchCwd: true
@@ -87,10 +133,16 @@ export async function initAgent({
   };
 
   await ensureDir(root);
+  if (resolvedAgentHome) await ensureDir(resolvedAgentHome);
   await ensureDir(path.dirname(profile.soulPath));
   await ensureDir(path.dirname(profile.memory.statePath));
   await writeJson(profilePath(agentId, home), profile);
+  if (resolvedAgentHome) await writeJson(agentLocalProfilePath(resolvedAgentHome), profile);
   await fs.writeFile(profile.soulPath, soulDocument({ name: profile.name, soul }));
+  if (resolvedAgentHome) {
+    await writeAgentGitignore(resolvedAgentHome);
+    await fs.writeFile(profile.bootstrapPromptPath, bootstrapPrompt({ profile, soul }));
+  }
   await writeJson(profile.memory.statePath, {
     facts: [],
     preferences: [],
@@ -176,6 +228,10 @@ export async function saveAgent(profile, home = appHome()) {
     updatedAt: new Date().toISOString()
   };
   await writeJson(profilePath(next.id, home), next);
+  if (next.agentHome) {
+    await ensureDir(agentLocalDir(next.agentHome));
+    await writeJson(agentLocalProfilePath(next.agentHome), next);
+  }
   return next;
 }
 
@@ -200,16 +256,19 @@ export async function agentStatus({
 export async function configureAgent({
   home = appHome(),
   name = null,
-  soul = null
+  soul = null,
+  ownerName = null
 } = {}) {
   const profile = await loadAgent(null, home);
   if (!profile) throw new Error("No Wakefield agent is initialized yet.");
   const next = await saveAgent({
     ...profile,
-    name: name == null || String(name).trim() === "" ? profile.name : String(name).trim()
+    name: name == null || String(name).trim() === "" ? profile.name : String(name).trim(),
+    ownerName: ownerName == null ? profile.ownerName || null : String(ownerName).trim() || null
   }, home);
   if (soul != null) {
     await fs.writeFile(next.soulPath, soulDocument({ name: next.name, soul }));
+    if (next.bootstrapPromptPath) await fs.writeFile(next.bootstrapPromptPath, bootstrapPrompt({ profile: next, soul }));
   }
   return agentStatus({ home });
 }
@@ -305,4 +364,36 @@ ${description}
 - Ask before taking actions that affect money, accounts, credentials, or other people.
 - Prefer short, clear updates when work takes time.
 `;
+}
+
+export function bootstrapPrompt({ profile, soul = "" }) {
+  const owner = profile.ownerName ? `Your owner is ${profile.ownerName}.` : "Your owner will introduce themselves soon.";
+  return [
+    `Hello ${profile.name}.`,
+    "",
+    `You have just been created as a Wakefield-powered assistant. ${owner}`,
+    `Your working folder is ${profile.cwd}.`,
+    "",
+    "Read AGENTS.md in this folder as your identity and operating instructions.",
+    "In conversation, answer as your agent name. If someone asks what powers you, say you are powered by Codex.",
+    "Wakefield is the local delivery system that brings you iMessage, Discord, email, scheduled wakeups, and small memory note cards.",
+    "Wakefield is not your identity.",
+    "",
+    "Your soul is:",
+    String(soul || "").trim() || "A helpful local companion with a steady memory and clear follow-through.",
+    "",
+    "Acknowledge briefly that you are awake and ready. Do not over-explain the setup."
+  ].join("\n");
+}
+
+async function writeAgentGitignore(agentHome) {
+  const gitignorePath = path.join(agentHome, ".gitignore");
+  const entry = ".wakefield/\n";
+  const current = await fs.readFile(gitignorePath, "utf8").catch((error) => {
+    if (error?.code === "ENOENT") return "";
+    throw error;
+  });
+  if (current.split(/\r?\n/).includes(".wakefield/")) return;
+  const prefix = current && !current.endsWith("\n") ? `${current}\n` : current;
+  await fs.writeFile(gitignorePath, `${prefix}${entry}`);
 }

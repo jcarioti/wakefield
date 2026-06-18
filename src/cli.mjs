@@ -10,7 +10,7 @@ import { formatContactResolution, formatContacts, importContactsFile, loadContac
 import { archiveMatter, contextMemory, forgetMemoryItem, formatContextMemory, formatMatters, formatNotes, loadMatters, loadNotes, matterFromCli, noteFromCli, recallContext, scopeFromOptions, upsertMatter, upsertNote } from "./context-memory.mjs";
 import { startDiscordGateway } from "./discord-gateway.mjs";
 import { doctor, formatDoctor } from "./doctor.mjs";
-import { configureDuty, configureWakeup, dutyStatuses, formatDutyRun, formatDutyStatuses, importDuties, runDueDuties } from "./duties.mjs";
+import { configureDuty, configureWakeup, deleteDuty, deleteWakeup, dutyStatuses, formatDutyRun, formatDutyStatuses, importDuties, runDueDuties } from "./duties.mjs";
 import { formatEmailPoll, pollEmailImap } from "./email-imap.mjs";
 import { formatEmailIngest, ingestEmailRfc822, readEmailInput } from "./email-rfc822.mjs";
 import { acknowledgeExternalMessage, formatExternalIngest, formatExternalMessages, ingestExternalMessage, listExternalMessages } from "./external-messages.mjs";
@@ -21,13 +21,14 @@ import { dispatchExternalMessage, formatDispatchResult } from "./inbox-dispatch.
 import { formatImessagePoll, pollImessageChatDb } from "./imessage-chatdb.mjs";
 import { installWakefield } from "./install.mjs";
 import { formatManifest, wakefieldManifest } from "./manifest.mjs";
-import { configureManagedConnector, formatManagedConnectorConfigInit, formatManagedConnectorMcpInstall, formatManagedConnectorSetup, formatManagedConnectorStatuses, formatManagedConnectorTest, formatManagedConnectorWizard, formatManagedLaunchAgentResult, formatManagedLaunchAgentStatus, importManagedConnectors, initializeManagedConnectorConfig, installManagedConnectorMcp, managedConnectorLaunchAgentPlist, managedConnectorLaunchAgentStatus, managedConnectorStatus, managedConnectorStatuses, managedConnectorWizard, managedConnectorWizards, printManagedConnectorMcp, runManagedConnectorProcess, setupManagedConnector, testManagedConnector, installManagedConnectorLaunchAgent, loadManagedConnectorLaunchAgent, unloadManagedConnectorLaunchAgent, uninstallManagedConnectorLaunchAgent } from "./managed-connectors.mjs";
+import { configureManagedConnector, formatManagedConnectorConfigInit, formatManagedConnectorMcpInstall, formatManagedConnectorSetup, formatManagedConnectorStatuses, formatManagedConnectorTest, formatManagedConnectorWizard, formatManagedLaunchAgentResult, formatManagedLaunchAgentStatus, importManagedConnectors, initializeManagedConnectorConfig, installManagedConnectorMcp, managedConnectorLaunchAgentPlist, managedConnectorLaunchAgentStatus, managedConnectorStatus, managedConnectorStatuses, managedConnectorWizard, managedConnectorWizards, printManagedConnectorMcp, retargetManagedConnectorConfigs, runManagedConnectorProcess, setupManagedConnector, testManagedConnector, installManagedConnectorLaunchAgent, loadManagedConnectorLaunchAgent, unloadManagedConnectorLaunchAgent, uninstallManagedConnectorLaunchAgent } from "./managed-connectors.mjs";
 import { formatMemoryCaptureResult, listMemoryCaptureAudit, processMemoryCaptures } from "./memory-capture.mjs";
 import { formatMemoryMcpInstall, formatMemoryMcpStatus, installMemoryMcp, memoryMcpStatus, printMemoryMcp } from "./memory-mcp.mjs";
 import { formatMenuSnapshot, menuSnapshot } from "./menu-snapshot.mjs";
 import { compact, formatDreamResult, memoryContext, processDreams, recordMemory } from "./memory.mjs";
-import { appHome, expandHome } from "./paths.mjs";
-import { agentStatus, configureAgent, ensureAgentMemory, initAgent, loadAgent, selectThread, SOUL_PRESETS, soulFromPreset } from "./profile.mjs";
+import { openCodexNewThread, openCodexWorkspace } from "./codex-app.mjs";
+import { appHome, defaultAgentHome, expandHome } from "./paths.mjs";
+import { agentStatus, bootstrapPrompt, configureAgent, ensureAgentMemory, initAgent, loadAgent, selectThread, SOUL_PRESETS, soulFromPreset, slugifyName } from "./profile.mjs";
 import { configureService, formatLaunchAgentResult, formatLaunchAgentStatus, formatServiceRun, formatServiceStatus, installLaunchAgent, launchAgentPlist, launchAgentStatus, loadLaunchAgent, runServiceOnce, serviceStatus, uninstallLaunchAgent, unloadLaunchAgent } from "./service.mjs";
 import { formatSelfTest, runSelfTest } from "./self-test.mjs";
 import { formatActions, formatConnectors, formatNextSteps, formatSetupStatus, setupStatus } from "./setup.mjs";
@@ -46,11 +47,14 @@ async function main(argv = process.argv.slice(2)) {
     const options = parseOptions(rest);
     const name = options.name || await ask("Agent name");
     const soul = await resolveSoulInput(options);
+    const agentHome = options.agentHome || options.agentHomePath || null;
     const profile = await initAgent({
       name,
       soul,
+      ownerName: options.ownerName || options.owner || null,
       threadId: options.threadId || null,
       cwd: options.cwd || null,
+      agentHome,
       overwrite: Boolean(options.overwrite)
     });
     console.log(`Created ${profile.name} at ${profile.cwd}`);
@@ -100,13 +104,17 @@ async function main(argv = process.argv.slice(2)) {
   if (command === "install") {
     const options = parseOptions(rest);
     const hasAgent = await loadAgent();
-    const name = options.name || (hasAgent ? null : await ask("Agent name", { fallback: "Wakefield" }));
-    const soul = hasAgent ? "" : await resolveSoulInput(options);
+    const wantsNewAgent = Boolean(options.newAgent || options.createAgent);
+    const name = options.name || (hasAgent && !wantsNewAgent ? null : await ask("Agent name", { fallback: "Wakefield" }));
+    const soul = hasAgent && !wantsNewAgent ? "" : await resolveSoulInput(options);
     const result = await installWakefield({
       name: name || "Wakefield",
       soul,
-      threadId: options.latestThread ? await latestThreadId() : options.threadId || null,
+      ownerName: options.ownerName || options.owner || null,
+      threadId: options.latestThread ? await latestThreadId({ cwd: options.cwd || null }) : options.threadId || null,
       cwd: options.cwd || null,
+      agentHome: options.agentHome || options.agentHomePath || (options.createAgentHome && name ? defaultAgentHome(slugifyName(name)) : null),
+      newAgent: wantsNewAgent,
       overwriteAgent: Boolean(options.overwriteAgent),
       skipHooks: Boolean(options.skipHooks)
     });
@@ -131,11 +139,13 @@ async function main(argv = process.argv.slice(2)) {
   if (command === "select-thread") {
     const options = parseOptions(rest);
     const profile = await selectThread({
-      threadId: options.latest ? await latestThreadId() : options.threadId || options.id,
+      threadId: options.latest ? await latestThreadId({ cwd: options.cwd || null }) : options.threadId || options.id,
       cwd: options.cwd || null
     });
+    const retarget = await retargetManagedConnectorConfigs({ agent: profile });
     console.log(`Selected Codex thread for ${profile.name}: ${profile.threadId}`);
     console.log(`Codex cwd: ${profile.cwd}`);
+    if (retarget.changed > 0) console.log(`Retargeted managed connector configs: ${retarget.changed}`);
     return;
   }
 
@@ -147,11 +157,55 @@ async function main(argv = process.argv.slice(2)) {
     return;
   }
 
+  if (command === "agent" && rest[0] === "open-codex") {
+    const options = parseOptions(rest.slice(1));
+    const profile = await requireAgent();
+    const result = await openCodexWorkspace({
+      cwd: options.cwd || profile.cwd,
+      codexPath: options.codexPath || null
+    });
+    console.log(options.json ? JSON.stringify(result, null, 2) : `Opened Codex workspace: ${result.command.at(-1)}`);
+    return;
+  }
+
+  if (command === "agent" && rest[0] === "open-new-thread") {
+    const options = parseOptions(rest.slice(1));
+    const profile = await requireAgent();
+    const bootstrapText = options.prompt || (profile.bootstrapPromptPath
+      ? await fs.readFile(profile.bootstrapPromptPath, "utf8").catch(() => "")
+      : "");
+    const result = await openCodexNewThread({
+      cwd: options.cwd || profile.cwd,
+      prompt: bootstrapText
+    });
+    console.log(options.json ? JSON.stringify(result, null, 2) : "Opened Codex with the agent bootstrap prompt.");
+    return;
+  }
+
+  if (command === "agent" && rest[0] === "bootstrap-prompt") {
+    const options = parseOptions(rest.slice(1));
+    const profile = await requireAgent();
+    let text = profile.bootstrapPromptPath
+      ? await fs.readFile(profile.bootstrapPromptPath, "utf8").catch(() => null)
+      : null;
+    if (!text) {
+      const soul = await fs.readFile(profile.soulPath, "utf8").catch(() => "");
+      text = bootstrapPrompt({ profile, soul });
+    }
+    const result = {
+      path: profile.bootstrapPromptPath || null,
+      text
+    };
+    console.log(options.json ? JSON.stringify(result, null, 2) : text);
+    return;
+  }
+
   if (command === "agent" && rest[0] === "configure") {
     const options = parseOptions(rest.slice(1));
     const result = await configureAgent({
       name: options.name || null,
-      soul: options.soul || null
+      soul: options.soul || null,
+      ownerName: options.ownerName || options.owner || null
     });
     console.log(options.json ? JSON.stringify(result, null, 2) : formatAgentStatus(result));
     return;
@@ -207,9 +261,12 @@ async function main(argv = process.argv.slice(2)) {
     const result = await runSetup({
       name,
       soul,
+      ownerName: options.ownerName || options.owner || null,
       threadId: options.threadId || null,
       latestThread: Boolean(options.latestThread || options.latest),
       cwd: options.cwd || null,
+      agentHome: options.agentHome || options.agentHomePath || (options.createAgentHome ? defaultAgentHome(slugifyName(name)) : null),
+      newAgent: Boolean(options.newAgent || options.createAgent),
       skipHooks: Boolean(options.skipHooks),
       enableService: Boolean(options.enableService),
       intervalMinutes: options.intervalMinutes || options.interval,
@@ -222,7 +279,7 @@ async function main(argv = process.argv.slice(2)) {
       reloadScheduler: Boolean(options.reloadLaunchAgent || options.reloadScheduler)
     });
     console.log(options.json ? JSON.stringify(result, null, 2) : formatSetupRun(result));
-    process.exitCode = result.ok ? 0 : 1;
+    process.exitCode = result.ok || (options.allowNeedsThread && onlyMissingCodexThread(result.status?.doctor)) ? 0 : 1;
     return;
   }
 
@@ -602,7 +659,7 @@ async function main(argv = process.argv.slice(2)) {
 
   if (command === "duties" && (rest[0] === "list" || rest[0] === "status" || !rest[0])) {
     const options = parseOptions(rest[0] ? rest.slice(1) : rest);
-    const duties = await dutyStatuses();
+    const duties = await dutyStatuses({ includeCompatibilityWakeups: Boolean(options.includeCompatibilityWakeups) });
     console.log(options.json ? JSON.stringify(duties, null, 2) : formatDutyStatuses(duties));
     return;
   }
@@ -647,9 +704,21 @@ async function main(argv = process.argv.slice(2)) {
     return;
   }
 
+  if (command === "duties" && (rest[0] === "delete" || rest[0] === "remove")) {
+    const dutyId = rest[1] && !rest[1].startsWith("--") ? rest[1] : null;
+    const options = parseOptions(dutyId ? rest.slice(2) : rest.slice(1));
+    const resolvedDutyId = dutyId || options.id;
+    if (!resolvedDutyId) throw new Error("duties delete needs a duty id.");
+    const duties = await deleteDuty(resolvedDutyId, {
+      removeReferences: Boolean(options.removeReferences)
+    });
+    console.log(options.json ? JSON.stringify(duties, null, 2) : formatDutyStatuses(await dutyStatuses({ includeCompatibilityWakeups: false })));
+    return;
+  }
+
   if (command === "wakeups" && (rest[0] === "list" || rest[0] === "status" || !rest[0])) {
     const options = parseOptions(rest[0] ? rest.slice(1) : rest);
-    const duties = await dutyStatuses();
+    const duties = await dutyStatuses({ includeCompatibilityWakeups: Boolean(options.includeCompatibilityWakeups) });
     console.log(options.json ? JSON.stringify(duties, null, 2) : formatDutyStatuses(duties));
     return;
   }
@@ -681,6 +750,16 @@ async function main(argv = process.argv.slice(2)) {
       resetSchedule: Boolean(options.resetSchedule)
     });
     console.log(options.json ? JSON.stringify(duties, null, 2) : formatDutyStatuses(await dutyStatuses()));
+    return;
+  }
+
+  if (command === "wakeups" && (rest[0] === "delete" || rest[0] === "remove")) {
+    const wakeupId = rest[1] && !rest[1].startsWith("--") ? rest[1] : null;
+    const options = parseOptions(wakeupId ? rest.slice(2) : rest.slice(1));
+    const resolvedWakeupId = wakeupId || options.id;
+    if (!resolvedWakeupId) throw new Error("wakeups delete needs a wakeup id.");
+    const duties = await deleteWakeup(resolvedWakeupId);
+    console.log(options.json ? JSON.stringify(duties, null, 2) : formatDutyStatuses(await dutyStatuses({ includeCompatibilityWakeups: false })));
     return;
   }
 
@@ -1092,10 +1171,13 @@ async function main(argv = process.argv.slice(2)) {
 function usage() {
   return [
     "Usage:",
-    "  wakefield install [--name NAME] [--soul TEXT|--soul-preset friendly|gamer|fantasy|operator] [--thread-id ID|--latest-thread] [--cwd PATH]",
-    "  wakefield init [--name NAME] [--soul TEXT|--soul-preset friendly|gamer|fantasy|operator] [--thread-id ID] [--cwd PATH]",
+    "  wakefield install [--name NAME] [--owner-name NAME] [--soul TEXT|--soul-preset friendly|gamer|fantasy|operator] [--thread-id ID|--latest-thread] [--cwd PATH] [--new-agent] [--agent-home PATH|--create-agent-home]",
+    "  wakefield init [--name NAME] [--owner-name NAME] [--soul TEXT|--soul-preset friendly|gamer|fantasy|operator] [--thread-id ID] [--cwd PATH] [--agent-home PATH]",
     "  wakefield agent status [--json]",
     "  wakefield agent configure [--name NAME] [--soul TEXT] [--json]",
+    "  wakefield agent open-codex [--cwd PATH] [--json]",
+    "  wakefield agent open-new-thread [--cwd PATH] [--prompt TEXT] [--json]",
+    "  wakefield agent bootstrap-prompt [--json]",
     "  wakefield select-thread --thread-id ID|--latest [--cwd PATH]",
     "  wakefield threads list [--json] [--limit N]",
     "  wakefield manifest [--json]",
@@ -1105,7 +1187,7 @@ function usage() {
     "  wakefield setup status [--json]",
     "  wakefield setup next [--json]",
     "  wakefield setup actions [--json]",
-    "  wakefield setup run [--name NAME] [--soul TEXT|--soul-preset friendly|gamer|fantasy|operator] [--thread-id ID|--latest-thread] [--enable-service] [--enable-dispatch] [--envFile PATH] [--install-launch-agent] [--load-launch-agent] [--json]",
+    "  wakefield setup run [--name NAME] [--owner-name NAME] [--soul TEXT|--soul-preset friendly|gamer|fantasy|operator] [--thread-id ID|--latest-thread] [--new-agent] [--agent-home PATH|--create-agent-home] [--enable-service] [--enable-dispatch] [--envFile PATH] [--install-launch-agent] [--load-launch-agent] [--allow-needs-thread] [--json]",
     "  wakefield setup connector discord|imessage [--set key=value] [--secret KEY=value] [--envFile PATH] [--overwrite] [--no-load] [--yes] [--json]",
     "  wakefield pack inspect --file pack.json [--json]",
     "  wakefield pack install --file pack.json [--thread-id ID|--latest-thread] [--enable-service] [--dry-run] [--json]",
@@ -1140,9 +1222,11 @@ function usage() {
     "  wakefield duties list [--json]",
     "  wakefield duties import --file duties.json [--json]",
     "  wakefield duties configure ID [--enable|--disable] [--wake-time HH:mm] [--interval-minutes N|--clear-interval] [--skill NAME] [--prompt TEXT|--prompt-file PATH] [--dispatch-mode dry-run|manual|ipc] [--json]",
+    "  wakefield duties delete ID [--remove-references] [--json]",
     "  wakefield duties run [ID] [--force] [--json]",
     "  wakefield wakeups list [--json]",
     "  wakefield wakeups configure ID --time HH:mm --duty DUTY_ID [--duty DUTY_ID] [--dispatch-mode dry-run|manual|ipc] [--json]",
+    "  wakefield wakeups delete ID [--json]",
     "  wakefield wakeups run [ID] [--force] [--json]",
     "  wakefield discord listen [--dispatch-mode dry-run|manual|ipc|auto|steer|start]",
     "  wakefield email ingest [--file message.eml] [--json]",
@@ -1296,6 +1380,11 @@ function formatAgentStatus(result) {
   ].join("\n");
 }
 
+function onlyMissingCodexThread(report) {
+  const failed = (report?.checks || []).filter((check) => !check.ok && !check.optional);
+  return failed.length === 1 && failed[0].label === "Codex thread";
+}
+
 async function ask(label, { fallback = null } = {}) {
   const rl = createInterface({ input, output });
   try {
@@ -1366,9 +1455,17 @@ function camelCase(value) {
   return value.replace(/-([a-z])/g, (_, char) => char.toUpperCase());
 }
 
-async function latestThreadId() {
-  const [thread] = await listRecentThreads({ limit: 1 });
-  if (!thread) throw new Error("No local Codex thread transcripts found. Open or create a Codex thread first.");
+async function latestThreadId({ cwd = null } = {}) {
+  const threads = await listRecentThreads({ limit: cwd ? 50 : 1 });
+  const resolvedCwd = cwd ? path.resolve(expandHome(cwd)) : null;
+  const thread = resolvedCwd
+    ? threads.find((item) => item.cwd && path.resolve(expandHome(item.cwd)) === resolvedCwd)
+    : threads[0];
+  if (!thread) {
+    throw new Error(resolvedCwd
+      ? `No local Codex thread transcripts found for ${resolvedCwd}. Open the Codex bootstrap prompt and press Send first.`
+      : "No local Codex thread transcripts found. Open or create a Codex thread first.");
+  }
   return thread.threadId;
 }
 

@@ -13,6 +13,7 @@ final class WakefieldModel: ObservableObject {
     @Published var busy = false
     @Published var lastMessage = ""
     @Published var lastError = ""
+    @Published var onboardingOpenedCodex = false
 
     private var timer: Timer?
     private var controlWindow: NSWindow?
@@ -55,7 +56,7 @@ final class WakefieldModel: ObservableObject {
             lastError = ""
             if !openedFirstRun, snapshot?.agent == nil {
                 openedFirstRun = true
-                openControlWindow(tab: .agent)
+                openControlWindow(tab: .setup)
             }
         } catch {
             lastError = error.localizedDescription
@@ -77,7 +78,7 @@ final class WakefieldModel: ObservableObject {
             backing: .buffered,
             defer: false
         )
-        window.title = "Wakefield Control"
+        window.title = "Wakefield"
         window.center()
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: ControlWindow(model: self))
@@ -115,15 +116,69 @@ final class WakefieldModel: ObservableObject {
         }
     }
 
-    func saveAgent(name: String, soul: String) {
+    func saveAgent(name: String, soul: String, ownerName: String? = nil) {
         let command = agentDetails?.profile == nil
             ? ["init", "--name", name, "--soul", soul]
             : ["agent", "configure", "--name", name, "--soul", soul]
+        var args = command
+        if let ownerName = trimmedNonEmpty(ownerName) {
+            args += ["--owner-name", ownerName]
+        }
         perform(
             agentDetails?.profile == nil ? "Creating agent" : "Saving agent",
-            args: command,
+            args: args,
             timeout: 90
         )
+    }
+
+    func finishOnboarding(name: String, ownerName: String, soul: String) {
+        Task {
+            onboardingOpenedCodex = false
+            var setup = [
+                "setup", "run",
+                "--new-agent",
+                "--create-agent-home",
+                "--name", name,
+                "--soul", soul,
+                "--enable-service",
+                "--enable-dispatch",
+                "--install-launch-agent",
+                "--load-launch-agent",
+                "--allow-needs-thread",
+                "--yes"
+            ]
+            if let owner = trimmedNonEmpty(ownerName) {
+                setup += ["--owner-name", owner]
+            }
+            await performSequence("Creating \(name)", commands: [setup], timeout: 180)
+            guard lastError.isEmpty else { return }
+            let opened = await WakefieldCLI.run(["agent", "open-new-thread"], timeout: 60)
+            if opened.ok {
+                onboardingOpenedCodex = true
+                lastMessage = "Codex is open with \(name)'s first prompt"
+            } else {
+                lastError = opened.trimmedOutput
+                lastMessage = "Opening Codex failed"
+            }
+            await refreshAll()
+        }
+    }
+
+    func continueOnboardingAfterBootstrap() {
+        Task {
+            guard let cwd = agentDetails?.profile?.cwd ?? snapshot?.agent?.cwd else {
+                lastError = "No agent folder is configured yet."
+                return
+            }
+            await performSequence(
+                "Selecting new Codex chat",
+                commands: [["select-thread", "--latest", "--cwd", cwd]],
+                timeout: 90
+            )
+            if lastError.isEmpty {
+                controlTab = .connectors
+            }
+        }
     }
 
     func pauseAll() {
@@ -223,6 +278,10 @@ final class WakefieldModel: ObservableObject {
         perform("Saving \(draft.label)", args: args)
     }
 
+    func deleteWakeup(_ wakeup: Wakeup) {
+        perform("Deleting \(wakeup.label)", args: ["wakeups", "delete", wakeup.id])
+    }
+
     func setWakeup(_ wakeup: Wakeup, enabled: Bool) {
         perform(
             enabled ? "Turning on \(wakeup.label)" : "Turning off \(wakeup.label)",
@@ -243,6 +302,10 @@ final class WakefieldModel: ObservableObject {
             args += ["--prompt", prompt]
         }
         perform("Saving \(draft.label)", args: args)
+    }
+
+    func deleteDuty(_ duty: DutyDefinition) {
+        perform("Deleting \(duty.label)", args: ["duties", "delete", duty.id, "--remove-references"])
     }
 
     func saveConnectorPackage(_ wizard: ConnectorWizard, values: [String: String]) {
@@ -352,9 +415,9 @@ struct WakeupDraft: Equatable {
             .filter { !$0.isEmpty }
     }
 
-    init(wakeup: Wakeup?) {
-        id = wakeup?.id ?? "new-wakeup"
-        label = wakeup?.label ?? "New Wakeup"
+    init(wakeup: Wakeup?, suggestedIndex: Int = 1) {
+        id = wakeup?.id ?? "new-wakeup-\(suggestedIndex)"
+        label = wakeup?.label ?? "New Wakeup \(suggestedIndex)"
         timesText = (wakeup?.wakeTimes ?? ["09:00"]).joined(separator: ", ")
         dutyIds = Set(wakeup?.selectedDutyIds ?? [])
         enabled = wakeup?.enabled ?? true
@@ -376,9 +439,9 @@ struct DutyDraft: Equatable {
             .filter { !$0.isEmpty }
     }
 
-    init(duty: DutyDefinition?) {
-        id = duty?.id ?? "new-duty"
-        label = duty?.label ?? "New Duty"
+    init(duty: DutyDefinition?, suggestedIndex: Int = 1) {
+        id = duty?.id ?? "new-duty-\(suggestedIndex)"
+        label = duty?.label ?? "New Duty \(suggestedIndex)"
         skillsText = (duty?.skills ?? []).joined(separator: ", ")
         prompt = duty?.prompt ?? ""
         enabled = duty?.enabled ?? true

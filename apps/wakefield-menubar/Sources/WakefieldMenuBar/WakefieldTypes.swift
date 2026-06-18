@@ -22,9 +22,12 @@ struct MenuSnapshot: Decodable {
 struct AgentSummary: Decodable {
     var id: String
     var name: String
+    var ownerName: String?
+    var agentHome: String?
     var threadId: String?
     var cwd: String?
     var soulPath: String?
+    var bootstrapPromptPath: String?
 }
 
 struct AgentConfigStatus: Decodable {

@@ -10,9 +10,12 @@ export async function runSetup({
   codexHomePath = null,
   name = "Wakefield",
   soul = "",
+  ownerName = null,
   threadId = null,
   latestThread = false,
   cwd = null,
+  agentHome = null,
+  newAgent = false,
   skipHooks = false,
   enableService = false,
   intervalMinutes = null,
@@ -26,7 +29,7 @@ export async function runSetup({
   launchAgentsPath = null
 } = {}) {
   const actions = [];
-  const before = await loadAgent(null, home);
+  const before = newAgent ? null : await loadAgent(null, home);
   const resolvedThreadId = threadId || await maybeLatestThreadId({ latestThread, codexHomePath, actions });
 
   let profile;
@@ -34,8 +37,11 @@ export async function runSetup({
     const result = await installWakefield({
       name,
       soul,
+      ownerName,
       threadId: resolvedThreadId,
       cwd,
+      agentHome,
+      newAgent,
       skipHooks,
       home,
       codexHomePath

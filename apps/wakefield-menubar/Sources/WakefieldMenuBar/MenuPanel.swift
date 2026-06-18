@@ -113,7 +113,7 @@ struct MenuPanel: View {
                     .lineLimit(2)
             }
             HStack {
-                Button("Open Control") { model.openControlWindow(tab: .agent) }
+                Button("Open Wakefield") { model.openControlWindow(tab: .agent) }
                     .keyboardShortcut(",", modifiers: .command)
                 Button("Run Once") { model.runServiceOnce() }
                     .disabled(model.busy)

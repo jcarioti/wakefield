@@ -3,8 +3,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PACKAGE="$ROOT/apps/wakefield-menubar"
-APP_NAME="Wakefield Menu"
+APP_NAME="Wakefield"
 APP_DIR="$HOME/Applications/${APP_NAME}.app"
+LEGACY_APP_DIR="$HOME/Applications/Wakefield Menu.app"
 CONTENTS="$APP_DIR/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
@@ -20,6 +21,7 @@ pkill -x WakefieldMenuBar >/dev/null 2>&1 || true
 swift build --package-path "$PACKAGE" -c release
 
 rm -rf "$APP_DIR"
+rm -rf "$LEGACY_APP_DIR"
 mkdir -p "$MACOS" "$RESOURCES"
 cp "$PACKAGE/.build/release/WakefieldMenuBar" "$EXECUTABLE"
 

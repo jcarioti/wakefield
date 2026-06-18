@@ -51,6 +51,8 @@ struct ControlWindow: View {
     @ViewBuilder
     private var content: some View {
         switch model.controlTab {
+        case .setup:
+            SetupPane(model: model)
         case .agent:
             AgentPane(model: model)
         case .connectors:
@@ -96,6 +98,7 @@ private struct ControlHeader: View {
 }
 
 enum ControlTab: String, CaseIterable, Identifiable {
+    case setup
     case agent
     case connectors
     case wakeups
@@ -106,6 +109,7 @@ enum ControlTab: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .setup: return "Setup"
         case .agent: return "Agent"
         case .connectors: return "Connectors"
         case .wakeups: return "Wakeups"
@@ -116,12 +120,239 @@ enum ControlTab: String, CaseIterable, Identifiable {
 
     var symbol: String {
         switch self {
+        case .setup: return "wand.and.stars"
         case .agent: return "sparkles"
         case .connectors: return "point.3.connected.trianglepath.dotted"
         case .wakeups: return "alarm"
         case .duties: return "checklist"
         case .chat: return "bubble.left.and.text.bubble.right"
         }
+    }
+}
+
+private struct SetupPane: View {
+    @ObservedObject var model: WakefieldModel
+    @State private var step = 0
+    @State private var name = "Mira"
+    @State private var ownerName = NSFullUserName()
+    @State private var selectedPreset = wakefieldSoulPresets[0].id
+    @State private var soul = wakefieldSoulPresets[0].text
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                SetupStepPill(index: 0, title: "Name", selected: step == 0, done: step > 0)
+                SetupStepPill(index: 1, title: "Connect", selected: step == 1, done: step > 1)
+                SetupStepPill(index: 2, title: "Wake", selected: step == 2, done: step > 2)
+                SetupStepPill(index: 3, title: "Try", selected: step == 3, done: false)
+            }
+            .padding(.horizontal, 22)
+            .padding(.top, 20)
+            .padding(.bottom, 8)
+
+            Divider()
+
+            Group {
+                switch step {
+                case 0:
+                    identityStep
+                case 1:
+                    connectorsStep
+                case 2:
+                    launchStep
+                default:
+                    doneStep
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private var identityStep: some View {
+        FormPane {
+            Text("Create Your Assistant")
+                .font(.title2.weight(.semibold))
+            HStack(spacing: 12) {
+                LabeledControl("Assistant name") {
+                    TextField("Mira", text: $name)
+                        .textFieldStyle(.roundedBorder)
+                }
+                LabeledControl("Your name") {
+                    TextField("Sam", text: $ownerName)
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+            LabeledControl("Soul style") {
+                Picker("", selection: $selectedPreset) {
+                    ForEach(wakefieldSoulPresets) { preset in
+                        Text(preset.label).tag(preset.id)
+                    }
+                    Text("Custom").tag("custom")
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: selectedPreset) { _, value in
+                    guard let preset = wakefieldSoulPresets.first(where: { $0.id == value }) else { return }
+                    soul = preset.text
+                }
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Soul")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextEditor(text: $soul)
+                    .frame(minHeight: 110, maxHeight: 150)
+                    .padding(6)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 7))
+            }
+            HStack {
+                Spacer()
+                Button {
+                    step = 1
+                } label: {
+                    Label("Continue", systemImage: "arrow.right.circle")
+                }
+                .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+    }
+
+    private var connectorsStep: some View {
+        FormPane {
+            Text("Connect Channels")
+                .font(.title2.weight(.semibold))
+            Text("Wakefield can listen through iMessage, Discord, and email.")
+                .foregroundStyle(.secondary)
+
+            VStack(spacing: 10) {
+                SetupConnectorRow(symbol: "message.fill", title: "iMessage", subtitle: "Photon/Spectrum for iMessage and SMS.")
+                SetupConnectorRow(symbol: "bubble.left.and.bubble.right.fill", title: "Discord", subtitle: "A bot token and allowed channels or DMs.")
+                SetupConnectorRow(symbol: "envelope.fill", title: "Email", subtitle: "IMAP settings for read-only intake.")
+            }
+
+            HStack {
+                Button("Back") { step = 0 }
+                Spacer()
+                Button {
+                    model.controlTab = .connectors
+                } label: {
+                    Label("Open Connector Setup", systemImage: "slider.horizontal.3")
+                }
+                Button {
+                    step = 2
+                } label: {
+                    Label("Continue", systemImage: "arrow.right.circle")
+                }
+            }
+        }
+    }
+
+    private var launchStep: some View {
+        FormPane {
+            Text("Wake \(name)")
+                .font(.title2.weight(.semibold))
+            Text("Wakefield will create the local agent folder, install the Codex hooks and skills, start the background service, then open Codex with the first prompt ready to send.")
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Agent folder under ~/Wakefield Agents", systemImage: "folder")
+                Label("Private memory under .wakefield/memories", systemImage: "brain.head.profile")
+                Label("Codex opens with the bootstrap prompt filled in", systemImage: "bubble.left.and.text.bubble.right")
+            }
+            .foregroundStyle(.secondary)
+
+            HStack {
+                Button("Back") { step = 1 }
+                Spacer()
+                Button {
+                    model.finishOnboarding(name: name, ownerName: ownerName, soul: soul)
+                    step = 3
+                } label: {
+                    Label("Finish Setup", systemImage: "checkmark.circle.fill")
+                }
+                .disabled(model.busy || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+    }
+
+    private var doneStep: some View {
+        FormPane {
+            Text(model.onboardingOpenedCodex ? "Press Send In Codex" : "Finishing Setup")
+                .font(.title2.weight(.semibold))
+            if model.busy {
+                ProgressView()
+            }
+            Text(doneCopy)
+                .foregroundStyle(.secondary)
+            HStack {
+                Button {
+                    model.continueOnboardingAfterBootstrap()
+                } label: {
+                    Label("I Sent It", systemImage: "arrow.triangle.2.circlepath.circle")
+                }
+                .disabled(model.busy || !model.onboardingOpenedCodex)
+                Button {
+                    model.controlTab = .connectors
+                } label: {
+                    Label("Set Up Connectors", systemImage: "point.3.connected.trianglepath.dotted")
+                }
+            }
+            Divider()
+            Text("First test")
+                .font(.headline)
+            Text("Text or DM \(name): \"Hey \(name), I'm \(ownerName.isEmpty ? "your name" : ownerName).\"")
+                .font(.title3.weight(.medium))
+        }
+    }
+
+    private var doneCopy: String {
+        if model.onboardingOpenedCodex {
+            return "Codex should be open with the first prompt filled in. Send that prompt, wait for the assistant to answer, then come back here."
+        }
+        if !model.lastError.isEmpty {
+            return model.lastError
+        }
+        return "Wakefield is creating the assistant and opening Codex."
+    }
+}
+
+private struct SetupStepPill: View {
+    let index: Int
+    let title: String
+    let selected: Bool
+    let done: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: done ? "checkmark.circle.fill" : "\(index + 1).circle")
+            Text(title)
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(selected ? .primary : .secondary)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(selected ? Color.accentColor.opacity(0.14) : Color.clear, in: Capsule())
+    }
+}
+
+private struct SetupConnectorRow: View {
+    let symbol: String
+    let title: String
+    let subtitle: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol)
+                .frame(width: 24)
+                .foregroundStyle(.blue)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.headline)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 4)
     }
 }
 
@@ -442,8 +673,8 @@ private struct WakeupsPane: View {
     @State private var draft = WakeupDraft(wakeup: nil)
 
     var body: some View {
-        HStack(spacing: 0) {
-            List(selection: $selectedWakeupId) {
+            HStack(spacing: 0) {
+                List(selection: $selectedWakeupId) {
                 ForEach(model.duties.wakeups) { wakeup in
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
@@ -466,15 +697,18 @@ private struct WakeupsPane: View {
             }
             .frame(width: 270)
             Divider()
-            WakeupEditor(model: model, draft: $draft)
+            WakeupEditor(model: model, selectedWakeup: selectedWakeup, draft: $draft) {
+                selectedWakeupId = nil
+                draft = WakeupDraft(wakeup: nil, suggestedIndex: model.duties.wakeups.count + 1)
+            }
         }
         .onAppear {
             let wakeup = selectedWakeup ?? model.duties.wakeups.first
             selectedWakeupId = wakeup?.id
-            draft = WakeupDraft(wakeup: wakeup)
+            draft = WakeupDraft(wakeup: wakeup, suggestedIndex: model.duties.wakeups.count + 1)
         }
         .onChange(of: selectedWakeupId) { _, _ in
-            draft = WakeupDraft(wakeup: selectedWakeup)
+            draft = WakeupDraft(wakeup: selectedWakeup, suggestedIndex: model.duties.wakeups.count + 1)
         }
     }
 
@@ -485,12 +719,22 @@ private struct WakeupsPane: View {
 
 private struct WakeupEditor: View {
     @ObservedObject var model: WakefieldModel
+    let selectedWakeup: Wakeup?
     @Binding var draft: WakeupDraft
+    let newAction: () -> Void
 
     var body: some View {
         FormPane {
-            Text("Wakeup")
-                .font(.title3.weight(.semibold))
+            HStack {
+                Text("Wakeup")
+                    .font(.title3.weight(.semibold))
+                Spacer()
+                Button {
+                    newAction()
+                } label: {
+                    Label("New", systemImage: "plus.circle")
+                }
+            }
 
             LabeledControl("Name") {
                 TextField("Morning Ops", text: $draft.label)
@@ -532,12 +776,24 @@ private struct WakeupEditor: View {
                 }
             }
 
-            Button {
-                model.saveWakeup(draft)
-            } label: {
-                Label("Save Wakeup", systemImage: "checkmark.circle")
+            HStack {
+                Button {
+                    model.saveWakeup(draft)
+                } label: {
+                    Label("Save Wakeup", systemImage: "checkmark.circle")
+                }
+                .disabled(model.busy || draft.id.isEmpty || draft.label.isEmpty || draft.times.isEmpty || draft.dutyIds.isEmpty)
+
+                if let selectedWakeup {
+                    Button(role: .destructive) {
+                        model.deleteWakeup(selectedWakeup)
+                        newAction()
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                    .disabled(model.busy)
+                }
             }
-            .disabled(model.busy || draft.id.isEmpty || draft.label.isEmpty || draft.times.isEmpty || draft.dutyIds.isEmpty)
         }
     }
 }
@@ -564,15 +820,18 @@ private struct DutiesPane: View {
             }
             .frame(width: 270)
             Divider()
-            DutyEditor(model: model, draft: $draft)
+            DutyEditor(model: model, selectedDuty: selectedDuty, draft: $draft) {
+                selectedDutyId = nil
+                draft = DutyDraft(duty: nil, suggestedIndex: model.duties.duties.count + 1)
+            }
         }
         .onAppear {
             let duty = selectedDuty ?? model.duties.duties.first
             selectedDutyId = duty?.id
-            draft = DutyDraft(duty: duty)
+            draft = DutyDraft(duty: duty, suggestedIndex: model.duties.duties.count + 1)
         }
         .onChange(of: selectedDutyId) { _, _ in
-            draft = DutyDraft(duty: selectedDuty)
+            draft = DutyDraft(duty: selectedDuty, suggestedIndex: model.duties.duties.count + 1)
         }
     }
 
@@ -583,12 +842,22 @@ private struct DutiesPane: View {
 
 private struct DutyEditor: View {
     @ObservedObject var model: WakefieldModel
+    let selectedDuty: DutyDefinition?
     @Binding var draft: DutyDraft
+    let newAction: () -> Void
 
     var body: some View {
         FormPane {
-            Text("Duty")
-                .font(.title3.weight(.semibold))
+            HStack {
+                Text("Duty")
+                    .font(.title3.weight(.semibold))
+                Spacer()
+                Button {
+                    newAction()
+                } label: {
+                    Label("New", systemImage: "plus.circle")
+                }
+            }
             LabeledControl("Name") {
                 TextField("Inventory Check", text: $draft.label)
                     .textFieldStyle(.roundedBorder)
@@ -613,12 +882,24 @@ private struct DutyEditor: View {
                     .padding(6)
                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 7))
             }
-            Button {
-                model.saveDuty(draft)
-            } label: {
-                Label("Save Duty", systemImage: "checkmark.circle")
+            HStack {
+                Button {
+                    model.saveDuty(draft)
+                } label: {
+                    Label("Save Duty", systemImage: "checkmark.circle")
+                }
+                .disabled(model.busy || draft.id.isEmpty || draft.label.isEmpty)
+
+                if let selectedDuty {
+                    Button(role: .destructive) {
+                        model.deleteDuty(selectedDuty)
+                        newAction()
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                    .disabled(model.busy)
+                }
             }
-            .disabled(model.busy || draft.id.isEmpty || draft.label.isEmpty)
         }
     }
 }

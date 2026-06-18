@@ -457,6 +457,65 @@ export function formatManagedConnectorConfigInit(result) {
   return `Wrote managed connector config: ${result.path}`;
 }
 
+export async function retargetManagedConnectorConfigs({
+  home = appHome(),
+  agent,
+  connectorIds = null
+} = {}) {
+  if (!agent?.threadId || !agent?.cwd) {
+    return {
+      ok: false,
+      changed: 0,
+      skipped: [],
+      results: [],
+      reason: "Retargeting needs an agent with a selected thread and cwd."
+    };
+  }
+  const configs = await loadManagedConnectorConfigs({ home });
+  const wanted = connectorIds ? new Set(connectorIds) : null;
+  const results = [];
+  for (const config of configs) {
+    if (wanted && !wanted.has(config.id)) continue;
+    if (!config.configPath || !await pathExists(config.configPath)) {
+      results.push({ id: config.id, changed: false, skipped: "missing-config", path: config.configPath || null });
+      continue;
+    }
+    const raw = await readJson(config.configPath, {});
+    const targetId = config.targetId || raw.targets?.[0]?.id || agent.id || "default";
+    const targets = Array.isArray(raw.targets) && raw.targets.length > 0 ? raw.targets : [{ id: targetId }];
+    let changed = false;
+    const nextTargets = targets.map((target, index) => {
+      const selected = config.targetId ? target.id === config.targetId : index === 0;
+      if (!selected) return target;
+      const next = {
+        ...target,
+        id: target.id || targetId,
+        displayName: agent.name || target.displayName || targetId,
+        threadId: agent.threadId,
+        cwd: agent.cwd
+      };
+      changed = changed
+        || target.threadId !== next.threadId
+        || !sameResolvedPath(target.cwd, next.cwd)
+        || target.displayName !== next.displayName;
+      return next;
+    });
+    if (changed) {
+      await writeJson(config.configPath, {
+        ...raw,
+        targets: nextTargets
+      });
+    }
+    results.push({ id: config.id, changed, skipped: null, path: config.configPath });
+  }
+  return {
+    ok: true,
+    changed: results.filter((result) => result.changed).length,
+    skipped: results.filter((result) => result.skipped),
+    results
+  };
+}
+
 export function formatManagedConnectorSetup(result) {
   const lines = [
     `${result.name} setup`,

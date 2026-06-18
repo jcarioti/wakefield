@@ -8,23 +8,28 @@ import { installWakefieldSkills } from "./skills.mjs";
 export async function installWakefield({
   name = "Wakefield",
   soul = "",
+  ownerName = null,
   threadId = null,
   cwd = null,
+  agentHome = null,
+  newAgent = false,
   overwriteAgent = false,
   skipHooks = false,
   skipSkills = false,
   home = appHome(),
   codexHomePath = null
 } = {}) {
-  let profile = await loadAgent(null, home);
+  let profile = newAgent ? null : await loadAgent(null, home);
   let createdAgent = false;
 
   if (!profile || overwriteAgent) {
     profile = await initAgent({
       name,
       soul,
+      ownerName,
       threadId,
       cwd,
+      agentHome,
       home,
       overwrite: overwriteAgent
     });
