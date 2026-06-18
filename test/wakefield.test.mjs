@@ -1452,6 +1452,119 @@ test("managed connector setup installs config, MCP tools, launch agent, and env 
   }
 });
 
+test("managed iMessage setup syncs allowed people from Photon project users", async () => {
+  const home = await tempHome();
+  const root = await tempHome();
+  const agent = {
+    id: "photon-agent",
+    name: "Photon Agent",
+    threadId: "thread-photon",
+    cwd: path.join(root, "target")
+  };
+  const imessage = await createFakeManagedConnector(path.join(root, "imessage"), "imessage-spectrum", {
+    targetCwd: agent.cwd,
+    threadId: agent.threadId,
+    withConfig: false,
+    withMcp: false
+  });
+  const envFile = path.join(root, "wakefield.env");
+  await fs.writeFile(envFile, [
+    "WAKEFIELD_TEST_SETUP_PHOTON_ID=project-1",
+    "WAKEFIELD_TEST_SETUP_PHOTON_SECRET=secret-1",
+    ""
+  ].join("\n"), { mode: 0o600 });
+  const previousFetch = globalThis.fetch;
+  const requests = [];
+  const ownerUser = {
+    id: "user-owner",
+    type: "shared",
+    firstName: "Joe",
+    lastName: "Owner",
+    email: "joe@example.com",
+    phoneNumber: "+13307669880",
+    assignedPhoneNumber: "+16282646604",
+    meta: { project_owner: true },
+    createdAt: "2026-06-18T00:00:00.000Z"
+  };
+  const friendUser = {
+    id: "user-friend",
+    type: "shared",
+    firstName: "Sam",
+    lastName: "Friend",
+    phoneNumber: "+13304421678",
+    assignedPhoneNumber: "+16282646604",
+    createdAt: "2026-06-18T00:00:00.000Z"
+  };
+  let photonUsers = [ownerUser, friendUser];
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url: String(url), init });
+    return jsonResponse({
+      succeed: true,
+      data: {
+        total: photonUsers.length,
+        users: photonUsers
+      }
+    });
+  };
+  try {
+    const result = await setupManagedConnector("imessage-spectrum", {
+      home,
+      agent,
+      packagePath: imessage.packagePath,
+      configPath: imessage.configPath,
+      codexConfigPath: imessage.codexConfigPath,
+      envFile,
+      load: false,
+      launchAgentsPath: path.join(root, "LaunchAgents"),
+      settings: {
+        targetId: "setup",
+        projectIdEnv: "WAKEFIELD_TEST_SETUP_PHOTON_ID",
+        projectSecretEnv: "WAKEFIELD_TEST_SETUP_PHOTON_SECRET",
+        allowGroupChats: "true"
+      }
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.photonUsers.ok, true);
+    assert.deepEqual(result.photonUsers.allowedAddresses, ["+13307669880", "+13304421678"]);
+    assert.equal(requests[0].url, "https://spectrum.photon.codes/projects/project-1/users/?type=shared");
+    const connectorConfig = JSON.parse(await fs.readFile(imessage.configPath, "utf8"));
+    assert.deepEqual(connectorConfig.targets[0].allowedAddresses, ["+13307669880", "+13304421678"]);
+    assert.deepEqual(connectorConfig.imessage.allowedOutboundAddresses, ["+13307669880", "+13304421678"]);
+    assert.equal(connectorConfig.imessage.spectrum.projectUsersCache.total, 2);
+    connectorConfig.targets[0].allowedAddresses.push("+19995550123");
+    connectorConfig.imessage.allowedOutboundAddresses.push("+19995550123");
+    await fs.writeFile(imessage.configPath, `${JSON.stringify(connectorConfig, null, 2)}\n`, "utf8");
+
+    photonUsers = [ownerUser];
+    requests.length = 0;
+    const second = await setupManagedConnector("imessage-spectrum", {
+      home,
+      agent,
+      packagePath: imessage.packagePath,
+      configPath: imessage.configPath,
+      codexConfigPath: imessage.codexConfigPath,
+      envFile,
+      load: false,
+      launchAgentsPath: path.join(root, "LaunchAgents"),
+      settings: {
+        targetId: "setup",
+        projectIdEnv: "WAKEFIELD_TEST_SETUP_PHOTON_ID",
+        projectSecretEnv: "WAKEFIELD_TEST_SETUP_PHOTON_SECRET",
+        allowGroupChats: "true"
+      }
+    });
+    assert.equal(second.ok, true);
+    assert.deepEqual(second.photonUsers.allowedAddresses, ["+13307669880"]);
+    const rotatedConfig = JSON.parse(await fs.readFile(imessage.configPath, "utf8"));
+    assert.deepEqual(rotatedConfig.targets[0].allowedAddresses, ["+13307669880"]);
+    assert.deepEqual(rotatedConfig.imessage.allowedOutboundAddresses, ["+13307669880"]);
+    assert.equal(rotatedConfig.imessage.spectrum.projectUsersCache.total, 1);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test("connector setup keeps non-interactive secrets and writes the env file", async () => {
   const home = await tempHome();
   const cwd = path.join(home, "agent");
@@ -4180,6 +4293,20 @@ async function callMcpTool(server, name, input = {}) {
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function jsonResponse(body, { ok = true, status = 200, statusText = "OK" } = {}) {
+  return {
+    ok,
+    status,
+    statusText,
+    async json() {
+      return body;
+    },
+    async text() {
+      return JSON.stringify(body);
+    }
+  };
 }
 
 async function writeCodexSession(codexHomePath, {

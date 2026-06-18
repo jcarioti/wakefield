@@ -150,7 +150,6 @@ export const MANAGED_CONNECTOR_ADAPTERS = [
       { id: "projectIdEnv", label: "Photon project id env var", required: true, placeholder: "PHOTON_PROJECT_ID", secretEnv: true },
       { id: "projectSecretEnv", label: "Photon secret env var", required: true, placeholder: "PHOTON_SECRET_KEY", secretEnv: true },
       { id: "cloudUrl", label: "Photon cloud URL", required: false, placeholder: "https://..." },
-      { id: "allowedAddresses", label: "Allowed phone/email addresses", required: false, placeholder: "+15551234567,person@example.com" },
       { id: "allowedSpaceIds", label: "Allowed Spectrum space ids", required: false, placeholder: "comma-separated ids" },
       { id: "allowGroupChats", label: "Allow group chats", required: false, placeholder: "false" },
       { id: "allowOutboundToKnownSpaces", label: "Allow outbound to known spaces", required: false, placeholder: "true" },
@@ -447,13 +446,17 @@ async function refreshPhotonUsersForConnector({
       users
     };
 
+    const allowedAddresses = photonAllowedAddresses(listed.users);
+    const target = ensureFirstTarget(raw, { agentName });
+    const targetBefore = JSON.stringify(target.allowedAddresses || []);
+    const outboundBefore = JSON.stringify(raw.imessage.allowedOutboundAddresses || []);
+    target.allowedAddresses = allowedAddresses;
+    raw.imessage.allowedOutboundAddresses = allowedAddresses;
+    const changedConfig = targetBefore !== JSON.stringify(target.allowedAddresses)
+      || outboundBefore !== JSON.stringify(raw.imessage.allowedOutboundAddresses);
+
     let ownerContact = null;
-    let changedConfig = true;
     if (owner?.phoneNumber) {
-      const target = ensureFirstTarget(raw, { agentName });
-      const before = JSON.stringify(target.allowedAddresses || []);
-      target.allowedAddresses = unique([...(target.allowedAddresses || []), owner.phoneNumber]);
-      changedConfig = changedConfig || before !== JSON.stringify(target.allowedAddresses);
       ownerContact = await upsertContact(photonOwnerContact(owner, { ownerName }), { home });
     }
 
@@ -465,6 +468,7 @@ async function refreshPhotonUsersForConnector({
       total: listed.total,
       owner: owner ? photonUserStatus(owner, { spectrum: connectorConfig.imessage.spectrum }) : null,
       users,
+      allowedAddresses,
       contactImported: Boolean(ownerContact)
     };
   } catch (error) {
@@ -490,6 +494,12 @@ function ensureFirstTarget(raw, { agentName } = {}) {
   }
   raw.targets[0].allowedAddresses = asList(raw.targets[0].allowedAddresses);
   return raw.targets[0];
+}
+
+function photonAllowedAddresses(users = []) {
+  return unique(users
+    .map((user) => user.phoneNumber)
+    .filter(Boolean));
 }
 
 function photonOwnerContact(user, { ownerName } = {}) {
@@ -1984,7 +1994,6 @@ function managedConnectorSetupDefaults(adapter, status) {
     projectIdEnv: status.connectorConfig?.secretRefs?.projectIdEnv || "PHOTON_PROJECT_ID",
     projectSecretEnv: status.connectorConfig?.secretRefs?.projectSecretEnv || "PHOTON_SECRET_KEY",
     cloudUrl: status.connectorConfig?.spectrum?.cloudUrl || "",
-    allowedAddresses: (status.connectorConfig?.outbound?.addresses || target.allowedAddresses || []).join(","),
     allowedSpaceIds: (status.connectorConfig?.outbound?.spaceIds || target.allowedSpaceIds || []).join(","),
     allowGroupChats: target.allowGroupChats ? "true" : "false",
     allowOutboundToKnownSpaces: status.connectorConfig?.outbound?.allowOutboundToKnownSpaces === false ? "false" : "true",

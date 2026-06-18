@@ -112,7 +112,7 @@ You will need:
 - a Photon project
 - a Spectrum bridge for the iMessage account
 - `PHOTON_PROJECT_ID` and `PHOTON_SECRET_KEY` environment variables
-- allowed phone numbers, email addresses, or Spectrum space IDs
+- shared Photon project users for the people who may message the agent
 
 Setup:
 
@@ -120,9 +120,11 @@ Setup:
 pnpm exec wakefield setup connector imessage \
   --envFile .env.wakefield \
   --set projectIdEnv=PHOTON_PROJECT_ID \
-  --set projectSecretEnv=PHOTON_SECRET_KEY \
-  --set allowedAddresses=<phone-or-email>
+  --set projectSecretEnv=PHOTON_SECRET_KEY
 ```
+
+Wakefield reads the Photon project users and automatically allows those phone
+numbers. Spectrum space IDs are optional for advanced direct-space targeting.
 
 ### Email
 

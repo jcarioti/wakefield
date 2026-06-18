@@ -654,10 +654,6 @@ private struct OnboardingConnectorFields: View {
                     SecureField("secret", text: binding("projectSecretValue"))
                         .textFieldStyle(.roundedBorder)
                 }
-                LabeledControl("Allowed people") {
-                    TextField("+15551234567, person@example.com", text: binding("allowedAddresses"))
-                        .textFieldStyle(.roundedBorder)
-                }
                 LabeledControl("Allowed spaces") {
                     TextField("space ids", text: binding("allowedSpaceIds"))
                         .textFieldStyle(.roundedBorder)
@@ -973,10 +969,6 @@ private struct ConnectorSetupFields: View {
                         configured: isWakefieldConfiguredCredentialMask(values["projectSecretValue"]),
                         text: binding("projectSecretValue")
                     )
-                }
-                LabeledControl("Allowed people") {
-                    TextField("+15551234567, person@example.com", text: binding("allowedAddresses"))
-                        .textFieldStyle(.roundedBorder)
                 }
                 LabeledControl("Allowed spaces") {
                     TextField("space ids", text: binding("allowedSpaceIds"))

@@ -284,7 +284,6 @@ final class WakefieldModel: ObservableObject {
             addSet("projectSecretEnv", projectSecretEnv)
             addSecret(projectIdEnv, values["projectIdValue"])
             addSecret(projectSecretEnv, values["projectSecretValue"])
-            addSet("allowedAddresses", values["allowedAddresses"])
             addSet("allowedSpaceIds", values["allowedSpaceIds"])
             addSet("allowGroupChats", values["allowGroupChats"])
         } else {
@@ -442,7 +441,6 @@ final class WakefieldModel: ObservableObject {
             addSet("projectSecretEnv", projectSecretEnv)
             addSecret(projectIdEnv, draft.values["projectIdValue"])
             addSecret(projectSecretEnv, draft.values["projectSecretValue"])
-            addSet("allowedAddresses", draft.values["allowedAddresses"])
             addSet("allowedSpaceIds", draft.values["allowedSpaceIds"])
             addSet("allowGroupChats", draft.values["allowGroupChats"])
         case "discord":

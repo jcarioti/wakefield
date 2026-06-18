@@ -1407,9 +1407,6 @@ async function connectorSetupInput(connectorId, options) {
     if (!settings.projectSecretEnv) {
       settings.projectSecretEnv = await ask("Photon secret env var", { fallback: "PHOTON_SECRET_KEY" });
     }
-    if (!settings.allowedAddresses && !settings.allowedSpaceIds) {
-      settings.allowedAddresses = await ask("Allowed phone numbers or emails, comma-separated", { fallback: "" });
-    }
     if (!settings.allowedSpaceIds) {
       settings.allowedSpaceIds = await ask("Allowed Spectrum space IDs, optional", { fallback: "" });
     }
