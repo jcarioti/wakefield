@@ -155,6 +155,13 @@ export async function wakefieldManifest({
       configured: Boolean(connector.configured),
       ready: Boolean(connector.ready),
       running: Boolean(connector.running),
+      health: connector.health ? {
+        id: connector.health.id,
+        ok: Boolean(connector.health.ok),
+        status: connector.health.status || null,
+        detail: connector.health.detail || null,
+        checkedAt: connector.health.checkedAt || null
+      } : null,
       capabilities: connector.capabilities || [],
       mcp: {
         serverName: connector.mcp?.serverName || null,

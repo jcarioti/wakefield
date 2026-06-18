@@ -164,14 +164,16 @@ export async function managedConnectorStatuses({
   home = appHome(),
   agent = null,
   codexConfigPath = null,
-  now = new Date()
+  now = new Date(),
+  includeLiveHealth = false
 } = {}) {
   const configs = await loadManagedConnectorConfigs({ home });
   return Promise.all(configs.map((config) => managedConnectorStatus(config.id, {
     home,
     agent,
     codexConfigPath,
-    now
+    now,
+    includeLiveHealth
   })));
 }
 
@@ -180,7 +182,8 @@ export async function managedConnectorStatus(id, {
   agent = null,
   codexConfigPath = null,
   launchAgentsPath = launchAgentsDir(),
-  now = new Date()
+  now = new Date(),
+  includeLiveHealth = false
 } = {}) {
   await loadManagedEnvironment({ home });
   const config = await getManagedConnectorConfig(id, { home });
@@ -192,10 +195,14 @@ export async function managedConnectorStatus(id, {
     codexConfigPath
   });
   const launchAgent = await managedConnectorLaunchAgentStatus(id, { home, launchAgentsPath });
+  const health = includeLiveHealth && config.enabled
+    ? await inspectManagedConnectorHealth(adapter, { connectorConfig, launchAgent, now })
+    : null;
   const checks = [
     ...packageInspection.checks,
     ...connectorConfig.checks,
     ...mcp.checks,
+    ...(health?.check ? [health.check] : []),
     check("launch agent", launchAgent.installed && launchAgent.loaded, launchAgent.installed ? launchAgent.loaded ? "loaded" : "installed, not loaded" : "not installed", { optional: true })
   ];
   const requiredChecks = checks.filter((item) => !item.optional);
@@ -212,6 +219,7 @@ export async function managedConnectorStatus(id, {
     configured: packageInspection.ok && connectorConfig.ok,
     ready: Boolean(config.enabled && ready),
     running: Boolean(launchAgent.loaded),
+    health,
     capabilities: adapter.capabilities,
     setupFields: managedConnectorSetupFields(adapter, {
       connectorConfig,
@@ -226,7 +234,7 @@ export async function managedConnectorStatus(id, {
     processes: adapter.processes.map((processDef) => processSummary(processDef, config)),
     smokeTests: adapter.smokeTests,
     checks,
-    nextAction: managedConnectorNextAction({ config, packageInspection, connectorConfig, mcp, launchAgent }),
+    nextAction: managedConnectorNextAction({ config, packageInspection, connectorConfig, mcp, launchAgent, health }),
     commands: managedConnectorCommands(adapter, config)
   };
 }
@@ -836,7 +844,10 @@ export function formatManagedConnectorStatuses(statuses) {
       ? status.running ? "ready, running" : "ready, not running"
       : status.enabled ? "needs attention" : "disabled";
     const failed = status.checks.filter((item) => !item.ok && !item.optional).map((item) => item.id);
-    const details = failed.length > 0 ? ` missing: ${failed.join(", ")}` : "";
+    const detail = status.health && !status.health.ok
+      ? status.health.detail
+      : failed.length > 0 ? `missing: ${failed.join(", ")}` : "";
+    const details = detail ? ` - ${detail}` : "";
     return `${status.id}: ${state}${details}`;
   }).join("\n");
 }
@@ -1899,7 +1910,7 @@ function selectManagedTarget(targets, targetId) {
   return targets.length === 1 ? targets[0] : null;
 }
 
-function managedConnectorNextAction({ config, packageInspection, connectorConfig, mcp, launchAgent }) {
+function managedConnectorNextAction({ config, packageInspection, connectorConfig, mcp, launchAgent, health }) {
   if (!config.enabled) {
     return { id: "enable", label: "Enable connector package", reason: "The connector package is configured but disabled." };
   }
@@ -1917,6 +1928,9 @@ function managedConnectorNextAction({ config, packageInspection, connectorConfig
   }
   if (launchAgent.loaded === false) {
     return { id: "load-daemon", label: "Load connector daemon", reason: "The background connector process is installed but not loaded." };
+  }
+  if (health && !health.ok) {
+    return { id: "run-checks", label: "Run connector checks", reason: health.detail };
   }
   return { id: "run-checks", label: "Run connector checks", reason: "Connector package facts are in place." };
 }
@@ -2050,6 +2064,22 @@ function managedConnectorSmokePlan(adapter, status, kind) {
   };
 }
 
+async function inspectManagedConnectorHealth(adapter, { connectorConfig, now = new Date() } = {}) {
+  if (adapter.id === "imessage-spectrum") {
+    const bridge = await spectrumBridgeStatus(connectorConfig.spectrum?.ipcSocketPath);
+    const status = bridge.ok ? "connected" : "degraded";
+    return {
+      id: "spectrum-bridge",
+      ok: bridge.ok,
+      status,
+      detail: bridge.detail,
+      checkedAt: now.toISOString(),
+      check: check("live bridge", bridge.ok, bridge.detail)
+    };
+  }
+  return null;
+}
+
 async function spectrumBridgeStatus(ipcSocketPath) {
   if (!ipcSocketPath) {
     return { ok: false, detail: "Spectrum IPC socket path is not configured." };
@@ -2075,11 +2105,14 @@ async function spectrumBridgeStatus(ipcSocketPath) {
       try {
         const response = JSON.parse(text.trim().split("\n")[0]);
         const recentError = recentSpectrumBridgeError(response.result?.receiveLoop);
+        const degradedStatus = degradedSpectrumBridgeStatus(response.result);
         resolve({
-          ok: Boolean(response.ok) && !recentError,
+          ok: Boolean(response.ok) && !recentError && !degradedStatus,
           detail: recentError
             ? `Recent ${recentError.label}: ${recentError.message}`
-            : response.ok ? response.result?.status || "status returned" : response.error || "status failed",
+            : degradedStatus
+              ? degradedStatus.detail
+              : response.ok ? response.result?.status || "status returned" : response.error || "status failed",
           response
         });
       } catch (error) {
@@ -2105,6 +2138,18 @@ function recentSpectrumBridgeError(receiveLoop, { now = Date.now(), maxAgeMs = 1
     at: receiveLoop.lastErrorAt,
     message: firstLine(receiveLoop.lastError),
     label: spectrumBridgeErrorLabel(receiveLoop.lastError)
+  };
+}
+
+function degradedSpectrumBridgeStatus(result) {
+  const status = String(result?.status || "").trim();
+  if (!/degraded|failed|errored|rate-limited|offline|restarting|rotating|stopping/i.test(status)) {
+    return null;
+  }
+  const error = firstLine(result?.receiveLoop?.lastError);
+  return {
+    status,
+    detail: error ? `${status}: ${error}` : status
   };
 }
 

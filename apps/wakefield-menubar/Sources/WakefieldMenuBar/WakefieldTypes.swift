@@ -157,6 +157,7 @@ struct ManagedConnector: Decodable, Identifiable, Hashable {
     var configured: Bool
     var ready: Bool
     var running: Bool
+    var health: ConnectorHealthStatus?
     var nextAction: NextAction?
     var package: PackageStatus?
     var connectorConfig: ConnectorConfigStatus?
@@ -172,10 +173,18 @@ struct ManagedConnector: Decodable, Identifiable, Hashable {
 
     var stateText: String {
         if !enabled { return "Off" }
+        if isDegraded { return "Degraded" }
         if running && ready { return "Running" }
         if ready { return "Ready" }
         if configured { return "Needs tools" }
         return "Setup needed"
+    }
+
+    var isDegraded: Bool {
+        if let health {
+            return !health.ok
+        }
+        return false
     }
 
     var symbolName: String {
@@ -195,6 +204,14 @@ struct NextAction: Decodable, Hashable {
 struct PackageStatus: Decodable, Hashable {
     var path: String?
     var ok: Bool?
+}
+
+struct ConnectorHealthStatus: Decodable, Hashable {
+    var id: String?
+    var ok: Bool
+    var status: String?
+    var detail: String?
+    var checkedAt: String?
 }
 
 struct ConnectorConfigStatus: Decodable, Hashable {

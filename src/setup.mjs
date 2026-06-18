@@ -24,17 +24,20 @@ export async function setupStatus({
   const managedConnectors = await managedConnectorStatuses({
     home,
     agent,
-    codexConfigPath: codexConfigPath(codexHomePath || undefined)
+    codexConfigPath: codexConfigPath(codexHomePath || undefined),
+    includeLiveHealth: true
   });
   const contacts = await loadContacts({ home });
   const actions = setupActions({ report, agent, threads, connectors, managedConnectors, service });
-  const nextSteps = nextSetupSteps({ report, agent, threads });
+  const managedConnectorIssues = managedConnectors.filter((connector) => connector.enabled && !connector.ready);
+  const ok = Boolean(report.ok && managedConnectorIssues.length === 0);
+  const nextSteps = nextSetupSteps({ report, agent, threads, managedConnectorIssues });
   const manifest = await wakefieldManifest({ connectors, managedConnectors, actions });
 
   return {
     manifest,
-    ok: report.ok,
-    phase: report.ok ? "ready" : "needs_setup",
+    ok,
+    phase: ok ? "ready" : "needs_setup",
     agent: agent ? {
       id: agent.id,
       name: agent.name,
@@ -337,7 +340,7 @@ export function setupActions({ report, agent, threads, connectors = [], managedC
   ];
 }
 
-function nextSetupSteps({ report, agent, threads }) {
+function nextSetupSteps({ report, agent, threads, managedConnectorIssues = [] }) {
   const steps = [];
   const check = (label) => report.checks.find((item) => item.label === label);
 
@@ -360,6 +363,10 @@ function nextSetupSteps({ report, agent, threads }) {
 
   if (check("Codex hook config")?.ok) {
     steps.push("In Codex, run /hooks and trust the Wakefield hook if Codex asks for review.");
+  }
+  for (const connector of managedConnectorIssues) {
+    const detail = connector.health?.detail || connector.checks.find((item) => !item.ok && !item.optional)?.detail || "needs attention";
+    steps.push(`${connector.name}: ${detail}`);
   }
   return [...new Set(steps)];
 }

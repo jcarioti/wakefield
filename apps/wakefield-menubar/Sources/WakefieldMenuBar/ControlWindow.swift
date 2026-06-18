@@ -888,7 +888,7 @@ private struct ConnectorListRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: connector.symbolName)
-                .foregroundStyle(connector.running ? .green : connector.ready ? .blue : .orange)
+                .foregroundStyle(connector.isDegraded ? .orange : connector.running && connector.ready ? .green : connector.ready ? .blue : .orange)
                 .frame(width: 22)
             VStack(alignment: .leading, spacing: 2) {
                 Text(connector.displayName)
@@ -915,7 +915,7 @@ private struct ConnectorDetailPane: View {
                 Label(connector.displayName, systemImage: connector.symbolName)
                     .font(.title3.weight(.semibold))
                 Spacer()
-                StatusPill(text: connector.stateText, tint: connector.running ? .green : connector.ready ? .blue : .orange)
+                StatusPill(text: connector.stateText, tint: connector.isDegraded ? .orange : connector.running && connector.ready ? .green : connector.ready ? .blue : .orange)
                 Toggle("", isOn: Binding(
                     get: { connector.running },
                     set: { model.setConnector(connector, running: $0) }

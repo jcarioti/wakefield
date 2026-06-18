@@ -178,7 +178,7 @@ export async function runSelfTest({
       const setupStatus = await fetch(`http://${address.address}:${address.port}/setup/status`).then((item) => item.json());
       steps.push(check(
         "http-setup-api",
-        setupStatus.phase === "ready" && setupStatus.actions.some((action) => action.id === "select-thread"),
+        ["ready", "needs_setup"].includes(setupStatus.phase) && setupStatus.actions.some((action) => action.id === "select-thread"),
         setupStatus.phase
       ));
 

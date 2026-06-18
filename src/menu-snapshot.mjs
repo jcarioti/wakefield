@@ -146,6 +146,13 @@ function managedConnectorSummary(connector) {
     configured: connector.configured,
     ready: connector.ready,
     running: connector.running,
+    health: connector.health ? {
+      id: connector.health.id,
+      ok: Boolean(connector.health.ok),
+      status: connector.health.status || null,
+      detail: connector.health.detail || null,
+      checkedAt: connector.health.checkedAt || null
+    } : null,
     capabilities: connector.capabilities || [],
     nextAction: connector.nextAction,
     package: {

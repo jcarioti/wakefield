@@ -629,6 +629,74 @@ test("menuSnapshot gives a bounded read-only menu bar payload", async () => {
   assert.equal((await listExternalMessages(profile)).length, 1);
 });
 
+test("menuSnapshot marks managed iMessage degraded when the live bridge reports 502", async () => {
+  const home = await tempHome();
+  const root = await tempHome();
+  const connector = await createFakeManagedConnector(root, "imessage-spectrum", {
+    withConfig: true,
+    withMcp: true
+  });
+  const codexHomePath = path.dirname(connector.codexConfigPath);
+  process.env.WAKEFIELD_TEST_PHOTON_ID = "project-id";
+  process.env.WAKEFIELD_TEST_PHOTON_SECRET = "project-secret";
+  await installWakefield({
+    name: "Bridge Health",
+    soul: "",
+    threadId: "thread-bridge-health",
+    cwd: connector.targetCwd,
+    home,
+    codexHomePath
+  });
+  await importManagedConnectors([
+    {
+      id: "imessage-spectrum",
+      adapter: "imessage-spectrum",
+      enabled: true,
+      packagePath: connector.packagePath,
+      configPath: connector.configPath,
+      targetId: "self-test",
+      mcp: {
+        codexConfigPath: connector.codexConfigPath
+      }
+    }
+  ], { home });
+
+  const server = net.createServer((socket) => {
+    socket.once("data", () => {
+      socket.end(`${JSON.stringify({
+        id: "wakefield-status",
+        ok: true,
+        result: {
+          status: "receive-loop-degraded",
+          receiveLoop: {
+            state: "running",
+            lastErrorAt: new Date().toISOString(),
+            lastError: "ConnectionError: Received HTTP status code 502"
+          }
+        }
+      })}\n`);
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(path.join(root, "spectrum.sock"), resolve);
+  });
+  try {
+    const snapshot = await menuSnapshot({ home, codexHomePath });
+    const imessage = snapshot.managedConnectors.find((item) => item.id === "imessage-spectrum");
+    assert.equal(snapshot.ready, false);
+    assert.equal(snapshot.headline, "Review setup");
+    assert.equal(imessage.ready, false);
+    assert.equal(imessage.health.ok, false);
+    assert.match(imessage.health.detail, /502/);
+    assert.match(snapshot.nextSteps.join("\n"), /502/);
+  } finally {
+    delete process.env.WAKEFIELD_TEST_PHOTON_ID;
+    delete process.env.WAKEFIELD_TEST_PHOTON_SECRET;
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("runSetup gives clone installs a one-command idempotent setup path", async () => {
   const home = await tempHome();
   const codexHomePath = await tempHome();
@@ -1037,6 +1105,56 @@ test("managed connector Spectrum bridge check reports recent receive-loop errors
     const result = await testManagedConnector("imessage-spectrum", { home, kind: "spectrum-bridge" });
     assert.equal(result.ok, false);
     assert.match(result.bridge.detail, /Recent bridge error: Received HTTP status code 502/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("managed connector Spectrum bridge check fails explicit degraded status", async () => {
+  const home = await tempHome();
+  const root = await tempHome();
+  const connector = await createFakeManagedConnector(root, "imessage-spectrum", {
+    withConfig: true,
+    withMcp: true
+  });
+  await importManagedConnectors([
+    {
+      id: "imessage-spectrum",
+      adapter: "imessage-spectrum",
+      enabled: true,
+      packagePath: connector.packagePath,
+      configPath: connector.configPath,
+      targetId: "self-test",
+      mcp: {
+        codexConfigPath: connector.codexConfigPath
+      }
+    }
+  ], { home });
+
+  const server = net.createServer((socket) => {
+    socket.once("data", () => {
+      socket.end(`${JSON.stringify({
+        id: "wakefield-status",
+        ok: true,
+        result: {
+          status: "receive-loop-degraded",
+          receiveLoop: {
+            state: "running",
+            lastErrorAt: "2026-06-18T18:00:00.000Z",
+            lastError: "ConnectionError: Received HTTP status code 502"
+          }
+        }
+      })}\n`);
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(path.join(root, "spectrum.sock"), resolve);
+  });
+  try {
+    const result = await testManagedConnector("imessage-spectrum", { home, kind: "spectrum-bridge" });
+    assert.equal(result.ok, false);
+    assert.match(result.bridge.detail, /receive-loop-degraded: ConnectionError: Received HTTP status code 502/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

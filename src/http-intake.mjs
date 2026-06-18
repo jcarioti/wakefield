@@ -67,7 +67,7 @@ export async function handleHttpRequest(request, response, {
   if (request.method === "GET" && url.pathname === "/manifest") {
     writeJson(response, 200, await wakefieldManifest({
       connectors: await connectorStatuses({ home }),
-      managedConnectors: await managedConnectorStatuses({ home })
+      managedConnectors: await managedConnectorStatuses({ home, includeLiveHealth: true })
     }));
     return;
   }
@@ -261,7 +261,8 @@ export async function handleHttpRequest(request, response, {
       connectors: await managedConnectorStatuses({
         home,
         agent: await loadAgent(null, home),
-        codexConfigPath: url.searchParams.get("codexConfigPath") || url.searchParams.get("codexConfig") || liveCodexConfigPath()
+        codexConfigPath: url.searchParams.get("codexConfigPath") || url.searchParams.get("codexConfig") || liveCodexConfigPath(),
+        includeLiveHealth: true
       })
     });
     return;
@@ -282,7 +283,8 @@ export async function handleHttpRequest(request, response, {
     writeJson(response, 200, await managedConnectorWizard(segments[1], {
       home,
       agent: await loadAgent(null, home),
-      codexConfigPath: url.searchParams.get("codexConfigPath") || url.searchParams.get("codexConfig") || liveCodexConfigPath()
+      codexConfigPath: url.searchParams.get("codexConfigPath") || url.searchParams.get("codexConfig") || liveCodexConfigPath(),
+      includeLiveHealth: true
     }));
     return;
   }

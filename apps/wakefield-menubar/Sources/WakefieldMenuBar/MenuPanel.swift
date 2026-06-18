@@ -66,7 +66,7 @@ struct MenuPanel: View {
                             get: { connector.running },
                             set: { model.setConnector(connector, running: $0) }
                         ),
-                        tint: connector.running ? .green : connector.ready ? .blue : .orange
+                        tint: connector.isDegraded ? .orange : connector.running && connector.ready ? .green : connector.ready ? .blue : .orange
                     )
                     .disabled(model.busy)
                 }

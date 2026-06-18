@@ -447,9 +447,10 @@ async function main(argv = process.argv.slice(2)) {
     const options = parseOptions(connectorArg ? rest.slice(2) : rest[0] ? rest.slice(1) : rest);
     const agent = await loadAgent();
     const codexConfigPath = options.codexConfig || options.codexConfigPath || liveCodexConfigPath();
+    const includeLiveHealth = !options.noLive && !options.static;
     const result = connectorArg || options.id
-      ? await managedConnectorStatus(connectorArg || options.id, { agent, codexConfigPath })
-      : await managedConnectorStatuses({ agent, codexConfigPath });
+      ? await managedConnectorStatus(connectorArg || options.id, { agent, codexConfigPath, includeLiveHealth })
+      : await managedConnectorStatuses({ agent, codexConfigPath, includeLiveHealth });
     console.log(options.json
       ? JSON.stringify(Array.isArray(result) ? { connectors: result } : result, null, 2)
       : Array.isArray(result) ? formatManagedConnectorStatuses(result) : formatManagedConnectorStatuses([result]));
@@ -1288,7 +1289,7 @@ function usage() {
     "  wakefield connectors wizard CONNECTOR [--json]",
     "  wakefield connectors wizards [--json]",
     "  wakefield connectors configure CONNECTOR [--enable|--disable] [--set key=value] [--unset key] [--json]",
-    "  wakefield managed-connectors status [ID] [--codex-config PATH] [--json]",
+    "  wakefield managed-connectors status [ID] [--codex-config PATH] [--no-live] [--json]",
     "  wakefield managed-connectors setup ID [--set key=value] [--secret KEY=value] [--envFile PATH] [--overwrite] [--no-load] [--yes] [--json]",
     "  wakefield managed-connectors wizard ID [--codex-config PATH] [--json]",
     "  wakefield managed-connectors wizards [--codex-config PATH] [--json]",
