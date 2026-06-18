@@ -491,9 +491,31 @@ private struct SetupPane: View {
 
     private func photonRedirectURL(for user: PhotonProjectUser?, message: String) -> URL? {
         guard var components = URLComponents(string: user?.redirectUrl ?? "") else { return nil }
-        components.queryItems = [URLQueryItem(name: "msg", value: message)]
+        var queryItems = components.queryItems ?? []
+        queryItems.removeAll { $0.name == "msg" }
+        queryItems.append(URLQueryItem(name: "msg", value: message))
+        components.percentEncodedQuery = wakefieldPercentEncodedQuery(queryItems)
         return components.url
     }
+}
+
+private let wakefieldQueryValueAllowed: CharacterSet = {
+    var allowed = CharacterSet.urlQueryAllowed
+    allowed.remove(charactersIn: ":#[]@!$&'()*+,;=%")
+    return allowed
+}()
+
+private func wakefieldPercentEncodedQuery(_ items: [URLQueryItem]) -> String {
+    items.map { item in
+        let name = wakefieldPercentEncodeQueryPart(item.name)
+        guard let value = item.value else { return name }
+        return "\(name)=\(wakefieldPercentEncodeQueryPart(value))"
+    }
+    .joined(separator: "&")
+}
+
+private func wakefieldPercentEncodeQueryPart(_ value: String) -> String {
+    value.addingPercentEncoding(withAllowedCharacters: wakefieldQueryValueAllowed) ?? ""
 }
 
 private struct SetupStepPill: View {
