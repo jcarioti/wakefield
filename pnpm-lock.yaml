@@ -21,7 +21,11 @@ importers:
         specifier: ^3.25.76
         version: 3.25.76
 
-  packages/connector-shared: {}
+  packages/connector-shared:
+    dependencies:
+      ws:
+        specifier: ^8.21.0
+        version: 8.21.0
 
   packages/discord-codex:
     dependencies:

@@ -50,6 +50,7 @@ export async function wakefieldManifest({
         ["wakefield", "managed-connectors", "init-config", "$connectorId", "--json"],
         ["wakefield", "managed-connectors", "mcp", "status", "$connectorId", "--json"],
         ["wakefield", "managed-connectors", "mcp", "install", "$connectorId", "--json"],
+        ["wakefield", "mcp", "reload", "--json"],
         ["wakefield", "mcp", "memory", "status", "--json"],
         ["wakefield", "mcp", "memory", "install", "--json"],
         ["wakefield", "managed-connectors", "test", "$connectorId", "--kind", "status", "--json"],
@@ -124,7 +125,8 @@ export async function wakefieldManifest({
       feature("managed-connector-packages", "available", "Supervise mature connector packages for Discord and Photon/Spectrum iMessage without embedding app-specific logic."),
       feature("managed-connector-wizards", "available", "Expose setup, MCP, daemon, and smoke-test contracts for mature connector packages."),
       feature("managed-connector-config-init", "available", "Generate local mature connector config files from the selected persistent Codex thread without storing raw secrets."),
-      feature("managed-connector-mcp-install", "available", "Install or update the named mature connector MCP server in the selected Codex config."),
+      feature("managed-connector-mcp-install", "available", "Install or update the named mature connector MCP server in the live Codex Desktop config."),
+      feature("codex-mcp-reload", "available", "Ask the live Codex Desktop app-server to reload MCP servers through Codex remote control, then verify MCP server status."),
       feature("managed-connector-launch-agents", "available", "Generate, install, load, reload, and remove user LaunchAgents for managed connector daemons.")
     ],
     connectors: connectors.map((connector) => ({

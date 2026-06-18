@@ -14,8 +14,9 @@ final class WakefieldModel: ObservableObject {
     @Published var lastMessage = ""
     @Published var lastError = ""
     @Published var onboardingOpenedCodex = false
-    @Published var onboardingNeedsCodexRestart = false
+    @Published var onboardingMcpRefreshFailed = false
     @Published var onboardingWatchingBootstrap = false
+    @Published var onboardingReadyToUse = false
     @Published var onboardingPendingConnectorCount = 0
     @Published var showingOnboarding = false
 
@@ -151,8 +152,9 @@ final class WakefieldModel: ObservableObject {
         Task {
             showingOnboarding = true
             onboardingOpenedCodex = false
-            onboardingNeedsCodexRestart = false
+            onboardingMcpRefreshFailed = false
             onboardingWatchingBootstrap = false
+            onboardingReadyToUse = false
             pendingOnboardingConnectors = connectors.filter { $0.enabled }
             onboardingPendingConnectorCount = pendingOnboardingConnectors.count
             onboardingShouldOpenConnectors = !pendingOnboardingConnectors.isEmpty
@@ -194,11 +196,10 @@ final class WakefieldModel: ObservableObject {
         }
     }
 
-    func finishOnboardingAfterCodexRestart() {
-        onboardingNeedsCodexRestart = false
-        onboardingOpenedCodex = false
-        onboardingWatchingBootstrap = false
-        lastMessage = "Setup complete"
+    func retryOnboardingMcpRefresh() {
+        Task {
+            await refreshOnboardingMcp()
+        }
     }
 
     func pauseAll() {
@@ -466,8 +467,26 @@ final class WakefieldModel: ObservableObject {
             await completePendingOnboardingConnectors()
         }
         if lastError.isEmpty {
-            onboardingNeedsCodexRestart = true
-            lastMessage = "Restart Codex to finish loading Wakefield"
+            await refreshOnboardingMcp()
+        }
+    }
+
+    private func refreshOnboardingMcp() async {
+        busy = true
+        onboardingMcpRefreshFailed = false
+        lastError = ""
+        lastMessage = "Refreshing Codex tools..."
+        let reload = await WakefieldCLI.run(["mcp", "reload", "--json"], timeout: 60)
+        busy = false
+        if reload.ok {
+            await refreshAll()
+            onboardingReadyToUse = true
+            onboardingOpenedCodex = false
+            lastMessage = "Codex refreshed MCP tools"
+        } else {
+            onboardingMcpRefreshFailed = true
+            lastError = reload.trimmedOutput
+            lastMessage = "Codex tool refresh failed"
         }
     }
 

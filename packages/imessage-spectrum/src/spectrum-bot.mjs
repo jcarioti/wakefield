@@ -49,7 +49,9 @@ import {
   createPhotonImessageClients,
   getPhotonMessage,
   listPhotonMessagesInChat,
+  listPhotonProjectUsers,
   markPhotonChatRead,
+  ownerPhotonProjectUser,
   sendPhotonReaction,
   sendPhotonTextMessage
 } from "./photon-history.mjs";
@@ -97,6 +99,7 @@ let lastInboundAt = null;
 let lastMatchedInboundAt = null;
 let lastInboundMessage = null;
 let lastMatchedInboundMessage = null;
+let projectUsers = null;
 let statusHeartbeat = null;
 let deliveryRetryTimer = null;
 const startupReplayTimers = new Set();
@@ -115,6 +118,7 @@ const receiveLoop = {
 };
 
 app = await createSpectrumAppWithBackoff("startup");
+projectUsers = await loadPhotonProjectUsersSnapshot("startup");
 
 process.once("SIGINT", () => {
   shutdown("SIGINT");
@@ -462,6 +466,10 @@ function normalizeOptionalString(value) {
   }
   const text = String(value).trim();
   return text || null;
+}
+
+function normalizeCloudUrl(value) {
+  return String(value || "https://spectrum.photon.codes").trim().replace(/\/+$/g, "");
 }
 
 async function routeDeliveryRecord(record, { space = null, message = null, source = "retry" } = {}) {
@@ -1214,6 +1222,7 @@ async function writeStatus(status) {
     lastMatchedInboundAt,
     lastInboundMessage,
     lastMatchedInboundMessage,
+    projectUsers,
     pendingDeliveryCount,
     receiveLoop: receiveLoopStatus()
   }, null, 2)}\n`, "utf8");
@@ -1235,6 +1244,42 @@ async function runProviderOperation(label, operation) {
       return new Promise(() => {});
     }
     throw error;
+  }
+}
+
+async function loadPhotonProjectUsersSnapshot(context) {
+  try {
+    const result = await listPhotonProjectUsers({
+      spectrum: config.imessage.spectrum,
+      type: "shared"
+    });
+    const owner = ownerPhotonProjectUser(result.users);
+    return {
+      updatedAt: new Date().toISOString(),
+      total: result.total,
+      ownerUserId: owner?.id || null,
+      users: result.users.map((user) => ({
+        id: user.id,
+        type: user.type || "shared",
+        displayName: user.displayName,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        phoneNumber: user.phoneNumber,
+        assignedPhoneNumber: user.assignedPhoneNumber,
+        projectOwner: user.meta?.project_owner === true,
+        createdAt: user.createdAt,
+        redirectUrl: user.id ? `${normalizeCloudUrl(config.imessage.spectrum.cloudUrl)}/users/${encodeURIComponent(user.id)}/redirect` : null
+      }))
+    };
+  } catch (error) {
+    console.warn(`Photon/Spectrum shared user sync unavailable during ${context}: ${error.message}`);
+    return {
+      updatedAt: new Date().toISOString(),
+      total: 0,
+      users: [],
+      error: error.message
+    };
   }
 }
 

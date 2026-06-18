@@ -135,12 +135,9 @@ export function formatMemoryMcpStatus(status) {
 
 export function formatMemoryMcpInstall(result) {
   if (result.dryRun) return `Wakefield memory MCP dry run: ${result.codexConfigPath}`;
-  const line = result.changed
+  return result.changed
     ? `Installed Wakefield memory MCP server ${result.serverName}: ${result.codexConfigPath}`
     : `Wakefield memory MCP server ${result.serverName} already configured: ${result.codexConfigPath}`;
-  return result.changed
-    ? `${line}\nRestart Codex once before using the Wakefield memory tools in the selected chat.`
-    : line;
 }
 
 function memoryMcpBlock({ home, agentId = null }) {

@@ -8,6 +8,7 @@ import { listRecentThreads, waitForThreadByPrompt } from "./codex-sessions.mjs";
 import { asArray, configureConnector, connectorStatuses, connectorWizard, connectorWizards, CONNECTOR_SETUP_SLOTS, formatConnectorStatuses, formatConnectorWizard, parseSettings } from "./connectors.mjs";
 import { formatContactResolution, formatContacts, importContactsFile, loadContacts, resolveContact } from "./contacts.mjs";
 import { archiveMatter, contextMemory, forgetMemoryItem, formatContextMemory, formatMatters, formatNotes, loadMatters, loadNotes, matterFromCli, noteFromCli, recallContext, scopeFromOptions, upsertMatter, upsertNote } from "./context-memory.mjs";
+import { formatCodexMcpReload, reloadCodexMcpServers } from "./codex-mcp-reload.mjs";
 import { startDiscordGateway } from "./discord-gateway.mjs";
 import { doctor, formatDoctor } from "./doctor.mjs";
 import { configureDuty, configureWakeup, deleteDuty, deleteWakeup, dutyStatuses, formatDutyRun, formatDutyStatuses, importDuties, runDueDuties } from "./duties.mjs";
@@ -27,7 +28,7 @@ import { formatMemoryMcpInstall, formatMemoryMcpStatus, installMemoryMcp, memory
 import { formatMenuSnapshot, menuSnapshot } from "./menu-snapshot.mjs";
 import { compact, formatDreamResult, memoryContext, processDreams, recordMemory } from "./memory.mjs";
 import { openCodexNewThread, openCodexWorkspace } from "./codex-app.mjs";
-import { appHome, defaultAgentHome, expandHome } from "./paths.mjs";
+import { appHome, defaultAgentHome, expandHome, liveCodexConfigPath } from "./paths.mjs";
 import { agentStatus, bootstrapPrompt, configureAgent, ensureAgentMemory, initAgent, loadAgent, selectThread, SOUL_PRESETS, soulFromPreset, slugifyName } from "./profile.mjs";
 import { configureService, formatLaunchAgentResult, formatLaunchAgentStatus, formatServiceRun, formatServiceStatus, installLaunchAgent, launchAgentPlist, launchAgentStatus, loadLaunchAgent, runServiceOnce, serviceStatus, uninstallLaunchAgent, unloadLaunchAgent } from "./service.mjs";
 import { formatSelfTest, runSelfTest } from "./self-test.mjs";
@@ -128,7 +129,7 @@ async function main(argv = process.argv.slice(2)) {
       console.log(`Wakefield base skills: ${changed > 0 ? "installed" : "already installed"} (${result.skillResult.installed.length}) at ${result.skillResult.skillsRoot}`);
     }
     if (result.hookResult?.changed || result.skillResult?.installed?.some((skill) => skill.changed)) {
-      console.log("Restart Codex once, then continue the selected agent chat so hooks and tools reload cleanly.");
+      console.log("Open Codex and run /hooks if it asks you to review newly installed hooks.");
     }
     console.log("");
     console.log(formatDoctor(result.doctor));
@@ -308,6 +309,7 @@ async function main(argv = process.argv.slice(2)) {
       latestThread: Boolean(options.latestThread || options.latest),
       cwd: options.cwd || null,
       agentHome: options.agentHome || options.agentHomePath || (options.createAgentHome ? defaultAgentHome(slugifyName(name)) : null),
+      codexHomePath: options.codexHome || options.codexHomePath || null,
       newAgent: Boolean(options.newAgent || options.createAgent),
       skipHooks: Boolean(options.skipHooks),
       enableService: Boolean(options.enableService),
@@ -348,12 +350,13 @@ async function main(argv = process.argv.slice(2)) {
       settings: setupInput.settings,
       packagePath: options.packagePath || null,
       configPath: options.configPath || null,
-      codexConfigPath: options.codexConfig || options.codexConfigPath || null,
+      codexConfigPath: options.codexConfig || options.codexConfigPath || liveCodexConfigPath(),
       envFile: setupInput.envFile,
       clearEnvFile: Boolean(options.clearEnvFile),
       overwrite: Boolean(options.overwrite),
       load: !options.noLoad,
       reload: Boolean(options.reload),
+      refreshCodexMcp: !options.noMcpReload && !options.noReloadMcp,
       dryRun: Boolean(options.dryRun)
     });
     console.log(options.json ? JSON.stringify(result, null, 2) : formatManagedConnectorSetup(result));
@@ -443,9 +446,10 @@ async function main(argv = process.argv.slice(2)) {
     const connectorArg = rest[1] && !rest[1].startsWith("--") ? rest[1] : null;
     const options = parseOptions(connectorArg ? rest.slice(2) : rest[0] ? rest.slice(1) : rest);
     const agent = await loadAgent();
+    const codexConfigPath = options.codexConfig || options.codexConfigPath || liveCodexConfigPath();
     const result = connectorArg || options.id
-      ? await managedConnectorStatus(connectorArg || options.id, { agent })
-      : await managedConnectorStatuses({ agent });
+      ? await managedConnectorStatus(connectorArg || options.id, { agent, codexConfigPath })
+      : await managedConnectorStatuses({ agent, codexConfigPath });
     console.log(options.json
       ? JSON.stringify(Array.isArray(result) ? { connectors: result } : result, null, 2)
       : Array.isArray(result) ? formatManagedConnectorStatuses(result) : formatManagedConnectorStatuses([result]));
@@ -465,12 +469,13 @@ async function main(argv = process.argv.slice(2)) {
       settings: setupInput.settings,
       packagePath: options.packagePath || null,
       configPath: options.configPath || null,
-      codexConfigPath: options.codexConfig || options.codexConfigPath || null,
+      codexConfigPath: options.codexConfig || options.codexConfigPath || liveCodexConfigPath(),
       envFile: setupInput.envFile,
       clearEnvFile: Boolean(options.clearEnvFile),
       overwrite: Boolean(options.overwrite),
       load: !options.noLoad,
       reload: Boolean(options.reload),
+      refreshCodexMcp: !options.noMcpReload && !options.noReloadMcp,
       dryRun: Boolean(options.dryRun)
     });
     console.log(options.json ? JSON.stringify(result, null, 2) : formatManagedConnectorSetup(result));
@@ -485,9 +490,10 @@ async function main(argv = process.argv.slice(2)) {
       throw new Error("managed-connectors wizard needs a connector id.");
     }
     const agent = await loadAgent();
+    const codexConfigPath = options.codexConfig || options.codexConfigPath || liveCodexConfigPath();
     const result = connectorArg || options.id
-      ? await managedConnectorWizard(connectorArg || options.id, { agent })
-      : await managedConnectorWizards({ agent });
+      ? await managedConnectorWizard(connectorArg || options.id, { agent, codexConfigPath })
+      : await managedConnectorWizards({ agent, codexConfigPath });
     console.log(options.json
       ? JSON.stringify(Array.isArray(result) ? { wizards: result } : result, null, 2)
       : Array.isArray(result) ? result.map(formatManagedConnectorWizard).join("\n\n") : formatManagedConnectorWizard(result));
@@ -559,7 +565,10 @@ async function main(argv = process.argv.slice(2)) {
     if (!connectorId) throw new Error("managed-connectors mcp needs a connector id.");
     const agent = await loadAgent();
     if (action === "status") {
-      const status = await managedConnectorStatus(connectorId, { agent });
+      const status = await managedConnectorStatus(connectorId, {
+        agent,
+        codexConfigPath: options.codexConfig || options.codexConfigPath || liveCodexConfigPath()
+      });
       console.log(options.json ? JSON.stringify(status.mcp, null, 2) : formatManagedConnectorTest({
         connector: connectorId,
         kind: "mcp-status",
@@ -575,14 +584,35 @@ async function main(argv = process.argv.slice(2)) {
     if (action === "install") {
       const result = await installManagedConnectorMcp(connectorId, {
         agent,
-        codexConfigPath: options.codexConfig || options.codexConfigPath || null,
+        codexConfigPath: options.codexConfig || options.codexConfigPath || liveCodexConfigPath(),
         dryRun: Boolean(options.dryRun)
       });
-      console.log(options.json ? JSON.stringify(result, null, 2) : formatManagedConnectorMcpInstall(result));
+      if (!options.dryRun && !options.noReload && result.changed) {
+        result.codexMcpReload = await reloadCodexMcpServers();
+      }
+      console.log(options.json
+        ? JSON.stringify(result, null, 2)
+        : [
+          formatManagedConnectorMcpInstall(result),
+          result.codexMcpReload ? formatCodexMcpReload(result.codexMcpReload) : null
+        ].filter(Boolean).join("\n"));
       process.exitCode = result.ok ? 0 : 1;
       return;
     }
     throw new Error(`Unknown managed connector MCP action: ${action}`);
+  }
+
+  if (command === "mcp" && (rest[0] === "reload" || rest[0] === "refresh")) {
+    const options = parseOptions(rest.slice(1));
+    const result = await reloadCodexMcpServers({
+      timeoutMs: Number(options.timeoutMs || options.timeout || 30000),
+      pollMs: Number(options.pollMs || options.poll || 1000),
+      waitForStatus: !options.noWait,
+      requireRemoteControlConnected: !options.allowDisconnected
+    });
+    console.log(options.json ? JSON.stringify(result, null, 2) : formatCodexMcpReload(result));
+    process.exitCode = result.ok ? 0 : 1;
+    return;
   }
 
   if (command === "mcp" && rest[0] === "memory") {
@@ -592,7 +622,7 @@ async function main(argv = process.argv.slice(2)) {
     if (action === "status") {
       const status = await memoryMcpStatus({
         agent,
-        codexConfigPath: options.codexConfig || options.codexConfigPath || null
+        codexConfigPath: options.codexConfig || options.codexConfigPath || liveCodexConfigPath()
       });
       console.log(options.json ? JSON.stringify(status, null, 2) : formatMemoryMcpStatus(status));
       process.exitCode = status.ok ? 0 : 1;
@@ -608,10 +638,18 @@ async function main(argv = process.argv.slice(2)) {
       const result = await installMemoryMcp({
         agent,
         agentId: options.agentId || null,
-        codexConfigPath: options.codexConfig || options.codexConfigPath || null,
+        codexConfigPath: options.codexConfig || options.codexConfigPath || liveCodexConfigPath(),
         dryRun: Boolean(options.dryRun)
       });
-      console.log(options.json ? JSON.stringify(result, null, 2) : formatMemoryMcpInstall(result));
+      if (!options.dryRun && !options.noReload && result.changed) {
+        result.codexMcpReload = await reloadCodexMcpServers();
+      }
+      console.log(options.json
+        ? JSON.stringify(result, null, 2)
+        : [
+          formatMemoryMcpInstall(result),
+          result.codexMcpReload ? formatCodexMcpReload(result.codexMcpReload) : null
+        ].filter(Boolean).join("\n"));
       return;
     }
     throw new Error(`Unknown memory MCP action: ${action}`);
@@ -1240,7 +1278,7 @@ function usage() {
     "  wakefield setup status [--json]",
     "  wakefield setup next [--json]",
     "  wakefield setup actions [--json]",
-    "  wakefield setup run [--name NAME] [--owner-name NAME] [--soul TEXT|--soul-preset friendly|gamer|fantasy|operator] [--thread-id ID|--latest-thread] [--new-agent] [--agent-home PATH|--create-agent-home] [--enable-service] [--enable-dispatch] [--envFile PATH] [--install-launch-agent] [--load-launch-agent] [--allow-needs-thread] [--json]",
+    "  wakefield setup run [--name NAME] [--owner-name NAME] [--soul TEXT|--soul-preset friendly|gamer|fantasy|operator] [--thread-id ID|--latest-thread] [--codex-home PATH] [--new-agent] [--agent-home PATH|--create-agent-home] [--enable-service] [--enable-dispatch] [--envFile PATH] [--install-launch-agent] [--load-launch-agent] [--allow-needs-thread] [--json]",
     "  wakefield setup connector discord|imessage|email [--set key=value] [--secret KEY=value] [--envFile PATH] [--overwrite] [--no-load] [--yes] [--json]",
     "  wakefield pack inspect --file pack.json [--json]",
     "  wakefield pack install --file pack.json [--thread-id ID|--latest-thread] [--enable-service] [--dry-run] [--json]",
@@ -1250,18 +1288,19 @@ function usage() {
     "  wakefield connectors wizard CONNECTOR [--json]",
     "  wakefield connectors wizards [--json]",
     "  wakefield connectors configure CONNECTOR [--enable|--disable] [--set key=value] [--unset key] [--json]",
-    "  wakefield managed-connectors status [ID] [--json]",
+    "  wakefield managed-connectors status [ID] [--codex-config PATH] [--json]",
     "  wakefield managed-connectors setup ID [--set key=value] [--secret KEY=value] [--envFile PATH] [--overwrite] [--no-load] [--yes] [--json]",
-    "  wakefield managed-connectors wizard ID [--json]",
-    "  wakefield managed-connectors wizards [--json]",
+    "  wakefield managed-connectors wizard ID [--codex-config PATH] [--json]",
+    "  wakefield managed-connectors wizards [--codex-config PATH] [--json]",
     "  wakefield managed-connectors configure ID --adapter ADAPTER [--enable|--disable] [--set key=value] [--json]",
     "  wakefield managed-connectors init-config ID [--set key=value] [--overwrite] [--json]",
-    "  wakefield managed-connectors mcp status ID [--json]",
+    "  wakefield managed-connectors mcp status ID [--codex-config PATH] [--json]",
     "  wakefield managed-connectors mcp print ID",
-    "  wakefield managed-connectors mcp install ID [--codex-config PATH] [--dry-run] [--json]",
+    "  wakefield managed-connectors mcp install ID [--codex-config PATH] [--no-reload] [--dry-run] [--json]",
+    "  wakefield mcp reload [--timeout-ms N] [--poll-ms N] [--no-wait] [--allow-disconnected] [--json]",
     "  wakefield mcp memory status [--codex-config PATH] [--json]",
     "  wakefield mcp memory print",
-    "  wakefield mcp memory install [--codex-config PATH] [--dry-run] [--json]",
+    "  wakefield mcp memory install [--codex-config PATH] [--no-reload] [--dry-run] [--json]",
     "  wakefield managed-connectors test ID [--kind status|follower-probe|spectrum-bridge|reply-plan|tapback-plan] [--json]",
     "  wakefield managed-connectors launch-agent status ID [--json]",
     "  wakefield managed-connectors launch-agent print ID",

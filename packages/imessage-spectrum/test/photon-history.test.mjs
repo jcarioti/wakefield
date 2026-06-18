@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  createPhotonProjectUser,
   createPhotonImessageClients,
   getPhotonMessage,
   listPhotonMessagesInChat,
+  listPhotonProjectUsers,
   normalizePhotonMessage,
   normalizePhotonSettableReaction,
+  ownerPhotonProjectUser,
   photonMessageTargetFromId,
+  photonUserRedirectUrl,
   sendPhotonReaction,
   sendPhotonTextMessage,
   selectPhotonClient
@@ -94,6 +98,94 @@ test("selectPhotonClient requires a phone when dedicated Photon history has mult
     selectPhotonClient({ clients: clientSet.clients, phone: "instance_a" }).phone,
     "+15550000001"
   );
+});
+
+test("listPhotonProjectUsers reads shared assigned numbers without opening iMessage clients", async () => {
+  const requests = [];
+  const result = await listPhotonProjectUsers({
+    spectrum: {
+      projectId: "project-1",
+      projectSecret: "secret-1",
+      cloudUrl: "https://spectrum.example.test/"
+    },
+    type: "shared",
+    fetchImpl: async (url, init) => {
+      requests.push({ url, init });
+      return jsonResponse({
+        succeed: true,
+        data: {
+          total: 2,
+          users: [{
+            id: "user-owner",
+            projectId: "project-1",
+            type: "shared",
+            firstName: "Joe",
+            lastName: "Owner",
+            email: "joe@example.com",
+            phoneNumber: "+13307669880",
+            assignedPhoneNumber: "+16282646604",
+            meta: { project_owner: true },
+            createdAt: "2026-06-18T00:00:00.000Z"
+          }, {
+            id: "user-friend",
+            projectId: "project-1",
+            type: "shared",
+            firstName: "Sam",
+            phoneNumber: "+13307661678",
+            assignedPhoneNumber: "+16282646604"
+          }]
+        }
+      });
+    }
+  });
+
+  assert.equal(requests[0].url, "https://spectrum.example.test/projects/project-1/users/?type=shared");
+  assert.equal(requests[0].init.method, "GET");
+  assert.equal(requests[0].init.headers.Authorization, `Basic ${Buffer.from("project-1:secret-1").toString("base64")}`);
+  assert.equal(result.total, 2);
+  assert.equal(result.users[0].displayName, "Joe Owner");
+  assert.equal(ownerPhotonProjectUser(result.users).phoneNumber, "+13307669880");
+  assert.equal(
+    photonUserRedirectUrl(result.users[0], {
+      spectrum: { cloudUrl: "https://spectrum.example.test/" },
+      msg: "Hey Mira"
+    }),
+    "https://spectrum.example.test/users/user-owner/redirect?msg=Hey+Mira"
+  );
+});
+
+test("createPhotonProjectUser reuses Photon shared users by phone number", async () => {
+  const requests = [];
+  const result = await createPhotonProjectUser({
+    spectrum: {
+      projectId: "project-1",
+      projectSecret: "secret-1"
+    },
+    phoneNumber: "+13307669880",
+    firstName: "Joe",
+    fetchImpl: async (url, init) => {
+      requests.push({ url, init });
+      return jsonResponse({
+        succeed: true,
+        data: {
+          id: "user-owner",
+          type: "shared",
+          firstName: "Joe",
+          phoneNumber: "+13307669880",
+          assignedPhoneNumber: "+16282646604"
+        }
+      });
+    }
+  });
+
+  assert.equal(requests[0].url, "https://spectrum.photon.codes/projects/project-1/users/");
+  assert.equal(requests[0].init.method, "POST");
+  assert.deepEqual(JSON.parse(requests[0].init.body), {
+    type: "shared",
+    phoneNumber: "+13307669880",
+    firstName: "Joe"
+  });
+  assert.equal(result.assignedPhoneNumber, "+16282646604");
 });
 
 test("listPhotonMessagesInChat pages chat history and normalizes messages for recent batches", async () => {

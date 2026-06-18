@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ControlWindow: View {
@@ -256,7 +257,7 @@ private struct SetupPane: View {
 
     @ViewBuilder
     private var codexStep: some View {
-        if onboardingStarted || model.onboardingOpenedCodex || model.onboardingWatchingBootstrap || model.onboardingNeedsCodexRestart {
+        if onboardingStarted || model.onboardingOpenedCodex || model.onboardingWatchingBootstrap || model.onboardingMcpRefreshFailed || model.onboardingReadyToUse {
             codexProgressStep
         } else {
             launchStep
@@ -305,13 +306,21 @@ private struct SetupPane: View {
             }
             Text(codexCopy)
                 .foregroundStyle(.secondary)
-            if model.onboardingNeedsCodexRestart {
+            if model.onboardingMcpRefreshFailed {
                 HStack {
                     Button {
-                        model.finishOnboardingAfterCodexRestart()
+                        model.retryOnboardingMcpRefresh()
+                    } label: {
+                        Label("Try Again", systemImage: "arrow.triangle.2.circlepath.circle")
+                    }
+                    .disabled(model.busy)
+                }
+            } else if model.onboardingReadyToUse {
+                HStack {
+                    Button {
                         step = 3
                     } label: {
-                        Label("I Restarted Codex", systemImage: "checkmark.circle")
+                        Label("Continue", systemImage: "arrow.right.circle")
                     }
                 }
             } else if !model.lastError.isEmpty && model.onboardingOpenedCodex {
@@ -329,38 +338,34 @@ private struct SetupPane: View {
 
     private var useStep: some View {
         FormPane {
-            Text("\(name) Is Ready")
+            Text("See \(name) In Action")
                 .font(.title2.weight(.semibold))
-            Text("Try one of these first messages so the assistant can learn who you are in the channel you actually use.")
+            Text("Everything is set up. Try a first message from one of the channels Wakefield connected.")
                 .foregroundStyle(.secondary)
 
             VStack(alignment: .leading, spacing: 10) {
                 if connectorDrafts.contains(where: { $0.id == "imessage" && $0.enabled }) {
-                    FirstUseCard(
-                        title: "iMessage",
-                        symbolName: "message.fill",
-                        text: "Text \(name): \"Hey \(name), I'm \(ownerDisplayName).\""
-                    )
+                    imessageFirstUseCard
                 }
                 if connectorDrafts.contains(where: { $0.id == "discord" && $0.enabled }) {
-                    FirstUseCard(
-                        title: "Discord",
-                        symbolName: "bubble.left.and.bubble.right.fill",
-                        text: "DM \(name): \"Hey \(name), I'm \(ownerDisplayName).\""
-                    )
+                    discordFirstUseCard
                 }
                 if connectorDrafts.contains(where: { $0.id == "email" && $0.enabled }) {
                     FirstUseCard(
                         title: "Email",
                         symbolName: "envelope.fill",
-                        text: "Send a short test email to the configured mailbox. Email is intake only unless your agent has another reply channel."
+                        text: "Send a short test email to the configured mailbox. Email is intake only unless your agent has another reply channel.",
+                        actionTitle: nil,
+                        actionURL: nil
                     )
                 }
                 if selectedConnectorNames.isEmpty {
                     FirstUseCard(
                         title: "Codex",
                         symbolName: "bubble.left.and.text.bubble.right",
-                        text: "Continue the \(name) Codex chat directly whenever you want to shape the assistant."
+                        text: "Continue the \(name) Codex chat directly whenever you want to shape the assistant.",
+                        actionTitle: nil,
+                        actionURL: nil
                     )
                 }
             }
@@ -376,16 +381,54 @@ private struct SetupPane: View {
         }
     }
 
+    private var imessageFirstUseCard: some View {
+        let user = photonOwnerUser ?? photonFirstUser
+        let message = "Hey \(name), I'm \(ownerDisplayName)."
+        let url = photonRedirectURL(for: user, message: message)
+        let detail = user?.assignedPhoneNumber.map { "Photon assigned \($0) for \(user?.phoneNumber ?? "this contact")." }
+            ?? "Wakefield could not find a Photon shared-user mapping yet. Open the connector panel and run the iMessage check after Photon is reachable."
+        return FirstUseCard(
+            title: "iMessage",
+            symbolName: "message.fill",
+            text: "\(detail)\n\(message)",
+            actionTitle: url == nil ? nil : "Message in iMessage",
+            actionURL: url
+        )
+    }
+
+    private var discordFirstUseCard: some View {
+        let channelId = firstConfiguredDiscordChannelId
+        let url = channelId.flatMap { URL(string: "discord://-/channels/@me/\($0)") }
+            ?? channelId.flatMap { URL(string: "https://discord.com/channels/@me/\($0)") }
+        let text = channelId == nil
+            ? "Open Discord and message the bot or an allowed channel: \"Hey \(name), I'm \(ownerDisplayName).\""
+            : "Open the configured Discord channel and send: \"Hey \(name), I'm \(ownerDisplayName).\""
+        return FirstUseCard(
+            title: "Discord",
+            symbolName: "bubble.left.and.bubble.right.fill",
+            text: text,
+            actionTitle: url == nil ? nil : "Open Discord",
+            actionURL: url
+        )
+    }
+
     private var codexTitle: String {
-        if model.onboardingNeedsCodexRestart { return "Restart Codex" }
+        if model.onboardingReadyToUse { return "Codex Refreshed" }
+        if model.onboardingMcpRefreshFailed { return "Refresh Needed" }
         if model.onboardingWatchingBootstrap { return "Send The Prompt In Codex" }
         if model.onboardingOpenedCodex { return "Waiting For Codex" }
         return "Finishing Setup"
     }
 
     private var codexCopy: String {
-        if model.onboardingNeedsCodexRestart {
-            return "Wakefield found the new Codex chat and finished the local setup. Quit Codex completely, reopen it, then come back here."
+        if model.onboardingMcpRefreshFailed {
+            return "Wakefield finished setup, but Codex did not accept the tool refresh yet. Keep Codex open and try the refresh again."
+        }
+        if model.onboardingReadyToUse {
+            if selectedConnectorNames.isEmpty {
+                return "Wakefield found the new Codex chat and finished setup."
+            }
+            return "Wakefield found the new Codex chat and refreshed Codex's MCP tools. Continue to try the assistant in the channels you set up."
         }
         if !model.lastError.isEmpty {
             return model.lastError
@@ -425,6 +468,32 @@ private struct SetupPane: View {
     private var ownerDisplayName: String {
         trimmedNonEmpty(ownerName) ?? "your name"
     }
+
+    private var imessageConnector: ManagedConnector? {
+        model.snapshot?.managedConnectors.first(where: { $0.connectorId == "imessage" || $0.id == "imessage-spectrum" })
+    }
+
+    private var photonOwnerUser: PhotonProjectUser? {
+        imessageConnector?.connectorConfig?.spectrum?.projectUsers?.users.first(where: { $0.projectOwner == true })
+    }
+
+    private var photonFirstUser: PhotonProjectUser? {
+        imessageConnector?.connectorConfig?.spectrum?.projectUsers?.users.first
+    }
+
+    private var firstConfiguredDiscordChannelId: String? {
+        let values = connectorDrafts.first(where: { $0.id == "discord" })?.values["allowedChannelIds"] ?? ""
+        return values
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty })
+    }
+
+    private func photonRedirectURL(for user: PhotonProjectUser?, message: String) -> URL? {
+        guard var components = URLComponents(string: user?.redirectUrl ?? "") else { return nil }
+        components.queryItems = [URLQueryItem(name: "msg", value: message)]
+        return components.url
+    }
 }
 
 private struct SetupStepPill: View {
@@ -450,6 +519,8 @@ private struct FirstUseCard: View {
     let title: String
     let symbolName: String
     let text: String
+    let actionTitle: String?
+    let actionURL: URL?
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -462,7 +533,16 @@ private struct FirstUseCard: View {
                 Text(text)
                     .font(.title3.weight(.medium))
                     .textSelection(.enabled)
+                if let actionTitle, let actionURL {
+                    Button {
+                        NSWorkspace.shared.open(actionURL)
+                    } label: {
+                        Label(actionTitle, systemImage: "arrow.up.forward.app")
+                    }
+                    .padding(.top, 4)
+                }
             }
+            Spacer(minLength: 0)
         }
         .padding(12)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))

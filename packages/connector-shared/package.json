@@ -12,6 +12,7 @@
   "exports": {
     "./codex-app-server-client.mjs": "./src/codex-app-server-client.mjs",
     "./codex-ipc-client.mjs": "./src/codex-ipc-client.mjs",
+    "./codex-remote-control-app-server-client.mjs": "./src/codex-remote-control-app-server-client.mjs",
     "./codex-rollout-watch.mjs": "./src/codex-rollout-watch.mjs",
     "./codex-router.mjs": "./src/codex-router.mjs",
     "./lock.mjs": "./src/lock.mjs",
@@ -24,6 +25,9 @@
   "scripts": {
     "test": "node --test test/*.test.mjs",
     "check": "node --check src/*.mjs && node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.21.0"
   },
   "engines": {
     "node": ">=20"

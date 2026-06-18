@@ -11,6 +11,14 @@ import { nodeExecutable } from "./node-runtime.mjs";
 import { appHome, connectorConfigPath, expandHome, launchAgentsDir, logsDir, managedConnectorsConfigPath, serviceConfigPath } from "./paths.mjs";
 import { loadEnvFile } from "./service-env.mjs";
 import { connectorSkill, connectorSkillPrompt } from "./connector-skills.mjs";
+import { formatCodexMcpReload, reloadCodexMcpServers } from "./codex-mcp-reload.mjs";
+import { upsertContact } from "./contacts.mjs";
+import { loadConnectorConfig as loadImessageConnectorConfig } from "../packages/imessage-spectrum/src/config.mjs";
+import {
+  listPhotonProjectUsers,
+  ownerPhotonProjectUser,
+  photonUserRedirectUrl
+} from "../packages/imessage-spectrum/src/photon-history.mjs";
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -270,14 +278,21 @@ export async function setupManagedConnector(id, {
   overwrite = false,
   load = true,
   reload = false,
+  refreshCodexMcp = false,
   dryRun = false,
   launchAgentsPath = launchAgentsDir(),
   launchctlRunner = execFileAsync
 } = {}) {
-  const adapterDef = managedConnectorAdapter(adapter || id);
-  const resolvedConfigPath = configPath || settings.configPath || connectorConfigPath(id, home);
-  const resolvedPackagePath = packagePath || settings.packagePath || null;
-  const resolvedCodexConfigPath = codexConfigPath || settings.codexConfigPath || settings["mcp.codexConfigPath"] || null;
+  const existingConfig = await getManagedConnectorConfig(id, { home }).catch(() => null);
+  const adapterDef = managedConnectorAdapter(adapter || existingConfig?.adapter || id);
+  const resolvedConfigPath = configPath || settings.configPath || existingConfig?.configPath || connectorConfigPath(id, home);
+  const resolvedPackagePath = packagePath || settings.packagePath || existingConfig?.packagePath || null;
+  const resolvedCodexConfigPath = codexConfigPath
+    || settings.codexConfigPath
+    || settings["mcp.codexConfigPath"]
+    || existingConfig?.mcp?.codexConfigPath
+    || existingConfig?.codexConfigPath
+    || null;
   const serviceEnvironment = await configureManagedConnectorEnvironment({
     home,
     envFile,
@@ -315,6 +330,14 @@ export async function setupManagedConnector(id, {
       settings,
       overwrite
     });
+  const photonUsers = !dryRun && adapterDef.id === "imessage-spectrum"
+    ? await refreshPhotonUsersForConnector({
+      home,
+      configPath: resolvedConfigPath,
+      agentName: agent?.name || id,
+      ownerName: agent?.ownerName || null
+    })
+    : null;
   const mcp = dryRun
     ? {
       ok: true,
@@ -333,6 +356,9 @@ export async function setupManagedConnector(id, {
       codexConfigPath: resolvedCodexConfigPath,
       dryRun
     });
+  const codexMcpReload = !dryRun && refreshCodexMcp && mcp.changed
+    ? await reloadCodexMcpServers()
+    : null;
   const launchAgent = dryRun
     ? {
       ok: true,
@@ -378,10 +404,130 @@ export async function setupManagedConnector(id, {
     serviceEnvironment,
     configured,
     initialized,
+    photonUsers,
     mcp,
+    codexMcpReload,
     launchAgent,
     status,
     nextAction: status?.nextAction || null
+  };
+}
+
+async function refreshPhotonUsersForConnector({
+  home,
+  configPath,
+  agentName,
+  ownerName
+} = {}) {
+  try {
+    await loadManagedEnvironment({ home });
+    const connectorConfig = await loadImessageConnectorConfig({ configPath });
+    const listed = await listPhotonProjectUsers({
+      spectrum: connectorConfig.imessage.spectrum,
+      type: "shared"
+    });
+    const owner = ownerPhotonProjectUser(listed.users);
+    const users = listed.users.map((user) => photonUserStatus(user, {
+      spectrum: connectorConfig.imessage.spectrum
+    }));
+    const raw = await readJson(configPath, {});
+    raw.imessage = raw.imessage && typeof raw.imessage === "object" ? raw.imessage : {};
+    raw.imessage.spectrum = raw.imessage.spectrum && typeof raw.imessage.spectrum === "object" ? raw.imessage.spectrum : {};
+    raw.imessage.spectrum.projectUsersCache = {
+      updatedAt: new Date().toISOString(),
+      total: listed.total,
+      users
+    };
+
+    let ownerContact = null;
+    let changedConfig = true;
+    if (owner?.phoneNumber) {
+      const target = ensureFirstTarget(raw, { agentName });
+      const before = JSON.stringify(target.allowedAddresses || []);
+      target.allowedAddresses = unique([...(target.allowedAddresses || []), owner.phoneNumber]);
+      changedConfig = changedConfig || before !== JSON.stringify(target.allowedAddresses);
+      ownerContact = await upsertContact(photonOwnerContact(owner, { ownerName }), { home });
+    }
+
+    await writeJson(configPath, raw);
+    return {
+      ok: true,
+      action: "photon-users-sync",
+      changedConfig,
+      total: listed.total,
+      owner: owner ? photonUserStatus(owner, { spectrum: connectorConfig.imessage.spectrum }) : null,
+      users,
+      contactImported: Boolean(ownerContact)
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      action: "photon-users-sync",
+      error: {
+        message: error?.message || String(error),
+        code: error?.code || null
+      }
+    };
+  }
+}
+
+function ensureFirstTarget(raw, { agentName } = {}) {
+  raw.targets = Array.isArray(raw.targets) ? raw.targets : [];
+  if (raw.targets.length === 0) {
+    raw.targets.push({
+      id: "default",
+      displayName: agentName || "Wakefield Agent",
+      allowedAddresses: []
+    });
+  }
+  raw.targets[0].allowedAddresses = asList(raw.targets[0].allowedAddresses);
+  return raw.targets[0];
+}
+
+function photonOwnerContact(user, { ownerName } = {}) {
+  const displayName = user.displayName || ownerName || "Owner";
+  return {
+    id: user.meta?.project_owner === true ? "owner" : contactIdFromPhotonUser(user),
+    displayName,
+    relationships: ["owner"],
+    roles: ["owner"],
+    identities: [
+      { connector: "imessage", address: user.phoneNumber, label: "Photon user phone" },
+      { connector: "sms", address: user.phoneNumber, label: "Photon user phone" }
+    ],
+    preferences: {
+      preferredReplyConnector: "imessage"
+    },
+    source: {
+      connector: "imessage-spectrum",
+      provider: "photon",
+      photonUserId: user.id,
+      assignedPhoneNumber: user.assignedPhoneNumber || null
+    }
+  };
+}
+
+function contactIdFromPhotonUser(user) {
+  return String(user.displayName || user.email || user.phoneNumber || user.id || "photon-user")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "photon-user";
+}
+
+function photonUserStatus(user, { spectrum = null } = {}) {
+  return {
+    id: user.id,
+    type: user.type || "shared",
+    displayName: user.displayName,
+    firstName: user.firstName,
+    lastName: user.lastName,
+    email: user.email,
+    phoneNumber: user.phoneNumber,
+    assignedPhoneNumber: user.assignedPhoneNumber,
+    projectOwner: user.meta?.project_owner === true,
+    createdAt: user.createdAt,
+    redirectUrl: photonUserRedirectUrl(user, { spectrum })
   };
 }
 
@@ -542,7 +688,13 @@ export function formatManagedConnectorSetup(result) {
     if (!result.status.ready && result.nextAction?.reason) lines.push(`next: ${result.nextAction.reason}`);
   }
   if (result.mcp?.changed) {
-    lines.push("restart Codex once before using these connector tools in the selected chat.");
+    if (result.codexMcpReload?.ok) {
+      lines.push("Codex tools: refreshed in Codex.");
+    } else if (result.codexMcpReload) {
+      lines.push(formatCodexMcpReload(result.codexMcpReload));
+    } else {
+      lines.push("Codex tools: installed; run `wakefield mcp reload` to refresh the live Codex Desktop runtime.");
+    }
   }
   return lines.join("\n");
 }
@@ -1527,10 +1679,19 @@ function inspectSpectrumConnectorConfig(raw, { configPath, targets, selectedTarg
   const statusPath = spectrum.statusPath ? resolveConfigPath(spectrum.statusPath, { cwd: path.dirname(configPath) }) : null;
   const ipcExists = ipcSocketPath ? fsAccessSyncish(ipcSocketPath) : false;
   const status = readJsonSyncish(statusPath);
+  const projectUsers = normalizePhotonProjectUsersCache(
+    raw.imessage?.spectrum?.projectUsersCache || status?.projectUsers || null
+  );
   const statusAgeMs = statusPath && status?.updatedAt ? now.getTime() - Date.parse(status.updatedAt) : null;
   checks.push(check("Spectrum IPC path", Boolean(ipcSocketPath), ipcSocketPath || "missing"));
   checks.push(check("Spectrum IPC socket", ipcExists, ipcSocketPath || "missing", { optional: true }));
   checks.push(check("Spectrum status file", Boolean(status), statusPath || "missing", { optional: true }));
+  checks.push(check(
+    "Photon shared users",
+    projectUsers.users.length > 0,
+    projectUsers.users.length > 0 ? `${projectUsers.users.length}/${projectUsers.total || projectUsers.users.length} configured` : "not synced yet",
+    { optional: true }
+  ));
   const allowedOutboundAddresses = [
     ...(imessage.allowedOutboundAddresses || []),
     ...(raw.targets || []).flatMap((target) => target.allowedAddresses || [])
@@ -1564,6 +1725,7 @@ function inspectSpectrumConnectorConfig(raw, { configPath, targets, selectedTarg
       ipcSocketExists: ipcExists,
       statusPath,
       cloudUrl: spectrum.cloudUrl || null,
+      projectUsers,
       status: status ? {
         status: status.status || null,
         updatedAt: status.updatedAt || null,
@@ -1612,10 +1774,34 @@ async function inspectMcpConfig(adapter, config, { agent, codexConfigPath }) {
   };
 }
 
+function normalizePhotonProjectUsersCache(cache) {
+  const source = cache && typeof cache === "object" ? cache : {};
+  const users = (Array.isArray(source.users) ? source.users : [])
+    .map((user) => ({
+      id: String(user.id || "").trim() || null,
+      type: String(user.type || "shared").trim(),
+      displayName: String(user.displayName || [user.firstName, user.lastName].filter(Boolean).join(" ") || user.email || user.phoneNumber || "").trim() || null,
+      firstName: String(user.firstName || "").trim() || null,
+      lastName: String(user.lastName || "").trim() || null,
+      email: String(user.email || "").trim() || null,
+      phoneNumber: String(user.phoneNumber || "").trim() || null,
+      assignedPhoneNumber: String(user.assignedPhoneNumber || "").trim() || null,
+      projectOwner: user.projectOwner === true || user.meta?.project_owner === true,
+      createdAt: String(user.createdAt || "").trim() || null,
+      redirectUrl: String(user.redirectUrl || "").trim() || null
+    }))
+    .filter((user) => user.id || user.phoneNumber || user.assignedPhoneNumber);
+  return {
+    updatedAt: String(source.updatedAt || "").trim() || null,
+    total: Number.isInteger(source.total) ? source.total : users.length,
+    users
+  };
+}
+
 async function resolveManagedCodexConfigPath(config, { agent, codexConfigPath }) {
+  if (codexConfigPath) return path.resolve(expandHome(codexConfigPath));
   if (config.mcp.codexConfigPath) return config.mcp.codexConfigPath;
   if (config.codexConfigPath) return config.codexConfigPath;
-  if (codexConfigPath) return path.resolve(expandHome(codexConfigPath));
   const startDir = agent?.cwd || config.packagePath || process.cwd();
   const found = await findNearestCodexConfig(startDir);
   if (found) return found;

@@ -202,6 +202,46 @@ struct ConnectorConfigStatus: Decodable, Hashable {
     var ok: Bool?
     var targetId: String?
     var provider: String?
+    var spectrum: SpectrumConnectorStatus?
+    var outbound: ConnectorOutboundStatus?
+}
+
+struct SpectrumConnectorStatus: Decodable, Hashable {
+    var cloudUrl: String?
+    var projectUsers: PhotonProjectUsersStatus?
+    var status: SpectrumRuntimeStatus?
+}
+
+struct PhotonProjectUsersStatus: Decodable, Hashable {
+    var updatedAt: String?
+    var total: Int?
+    var users: [PhotonProjectUser]
+}
+
+struct PhotonProjectUser: Decodable, Identifiable, Hashable {
+    var id: String
+    var type: String?
+    var displayName: String?
+    var firstName: String?
+    var lastName: String?
+    var email: String?
+    var phoneNumber: String?
+    var assignedPhoneNumber: String?
+    var projectOwner: Bool?
+    var createdAt: String?
+    var redirectUrl: String?
+}
+
+struct SpectrumRuntimeStatus: Decodable, Hashable {
+    var status: String?
+    var updatedAt: String?
+    var knownSpaceIds: [String]?
+}
+
+struct ConnectorOutboundStatus: Decodable, Hashable {
+    var allowOutboundToKnownSpaces: Bool?
+    var addresses: [String]?
+    var spaceIds: [String]?
 }
 
 struct MCPStatus: Decodable, Hashable {

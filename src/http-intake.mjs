@@ -1,5 +1,6 @@
 import http from "node:http";
 import { inspectAgentPack, installAgentPack } from "./agent-packs.mjs";
+import { reloadCodexMcpServers } from "./codex-mcp-reload.mjs";
 import { listRecentThreads } from "./codex-sessions.mjs";
 import { configureConnector, connectorStatuses, connectorWizard, connectorWizards, CONNECTOR_SETUP_SLOTS } from "./connectors.mjs";
 import { importContactsFile, loadContacts } from "./contacts.mjs";
@@ -13,6 +14,7 @@ import { pollImessageChatDb } from "./imessage-chatdb.mjs";
 import { configureManagedConnector, initializeManagedConnectorConfig, installManagedConnectorLaunchAgent, installManagedConnectorMcp, loadManagedConnectorLaunchAgent, managedConnectorLaunchAgentStatus, managedConnectorStatus, managedConnectorStatuses, managedConnectorWizard, managedConnectorWizards, testManagedConnector, uninstallManagedConnectorLaunchAgent, unloadManagedConnectorLaunchAgent } from "./managed-connectors.mjs";
 import { wakefieldManifest } from "./manifest.mjs";
 import { menuSnapshot } from "./menu-snapshot.mjs";
+import { liveCodexConfigPath } from "./paths.mjs";
 import { loadAgent, selectThread } from "./profile.mjs";
 import { runSetup } from "./setup-runner.mjs";
 import { setupStatus } from "./setup.mjs";
@@ -256,14 +258,22 @@ export async function handleHttpRequest(request, response, {
 
   if (request.method === "GET" && url.pathname === "/managed-connectors") {
     writeJson(response, 200, {
-      connectors: await managedConnectorStatuses({ home, agent: await loadAgent(null, home) })
+      connectors: await managedConnectorStatuses({
+        home,
+        agent: await loadAgent(null, home),
+        codexConfigPath: url.searchParams.get("codexConfigPath") || url.searchParams.get("codexConfig") || liveCodexConfigPath()
+      })
     });
     return;
   }
 
   if (request.method === "GET" && url.pathname === "/managed-connectors/wizards") {
     writeJson(response, 200, {
-      wizards: await managedConnectorWizards({ home, agent: await loadAgent(null, home) })
+      wizards: await managedConnectorWizards({
+        home,
+        agent: await loadAgent(null, home),
+        codexConfigPath: url.searchParams.get("codexConfigPath") || url.searchParams.get("codexConfig") || liveCodexConfigPath()
+      })
     });
     return;
   }
@@ -271,7 +281,8 @@ export async function handleHttpRequest(request, response, {
   if (request.method === "GET" && segments[0] === "managed-connectors" && segments[2] === "wizard") {
     writeJson(response, 200, await managedConnectorWizard(segments[1], {
       home,
-      agent: await loadAgent(null, home)
+      agent: await loadAgent(null, home),
+      codexConfigPath: url.searchParams.get("codexConfigPath") || url.searchParams.get("codexConfig") || liveCodexConfigPath()
     }));
     return;
   }
@@ -279,7 +290,8 @@ export async function handleHttpRequest(request, response, {
   if (request.method === "GET" && segments[0] === "managed-connectors" && segments.length === 2) {
     writeJson(response, 200, await managedConnectorStatus(segments[1], {
       home,
-      agent: await loadAgent(null, home)
+      agent: await loadAgent(null, home),
+      codexConfigPath: url.searchParams.get("codexConfigPath") || url.searchParams.get("codexConfig") || liveCodexConfigPath()
     }));
     return;
   }
@@ -314,9 +326,12 @@ export async function handleHttpRequest(request, response, {
     const result = await installManagedConnectorMcp(segments[1], {
       home,
       agent: await loadAgent(null, home),
-      codexConfigPath: body.codexConfigPath || body.codexConfig || null,
+      codexConfigPath: body.codexConfigPath || body.codexConfig || liveCodexConfigPath(),
       dryRun: Boolean(body.dryRun)
     });
+    if (!body.dryRun && result.changed) {
+      result.codexMcpReload = await reloadCodexMcpServers();
+    }
     writeJson(response, result.ok ? 200 : 409, result);
     return;
   }

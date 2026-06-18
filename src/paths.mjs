@@ -90,6 +90,18 @@ export function launchAgentsDir(env = process.env) {
   return path.join(os.homedir(), "Library", "LaunchAgents");
 }
 
+export function codexHome(env = process.env) {
+  return expandHome(env.CODEX_HOME || path.join(os.homedir(), ".codex"));
+}
+
+export function codexConfigPath(codexHomePath = codexHome()) {
+  return path.join(expandHome(codexHomePath), "config.toml");
+}
+
+export function liveCodexConfigPath(env = process.env) {
+  return codexConfigPath(codexHome(env));
+}
+
 export function agentDir(agentId, home = appHome()) {
   return path.join(agentsDir(home), agentId);
 }

@@ -7,6 +7,7 @@ import test from "node:test";
 import { promisify } from "node:util";
 import { inspectAgentPack, installAgentPack } from "../src/agent-packs.mjs";
 import { codexDreamerConfig } from "../src/codex-dreamer.mjs";
+import { reloadCodexMcpServers } from "../src/codex-mcp-reload.mjs";
 import { routePromptToCodex } from "../src/codex-ipc.mjs";
 import { findRecentThreadByPrompt, listRecentThreads, threadIdFromFilename, waitForThreadByPrompt } from "../src/codex-sessions.mjs";
 import { configureConnector, connectorWizard, connectorWizards, CONNECTOR_SETUP_SLOTS, connectorStatuses } from "../src/connectors.mjs";
@@ -325,6 +326,72 @@ test("memory MCP tools recall, update, archive, and forget scoped memory", async
   assert.deepEqual(notes.notes, []);
 });
 
+test("Codex MCP reload wrapper reports success and soft failures", async () => {
+  const successCalls = [];
+  const success = await reloadCodexMcpServers({
+    client: {
+      remoteControlStatus: { status: "connected" },
+      reloadMcpServers: async (options) => {
+        successCalls.push(options);
+        return {
+          reload: { ok: true },
+          after: { servers: [{ name: "wakefield-memory", tools: 10 }] },
+          events: []
+        };
+      },
+      disconnect() {
+        throw new Error("caller-owned clients are not disconnected");
+      }
+    },
+    timeoutMs: 1234,
+    pollMs: 12
+  });
+  assert.equal(success.ok, true);
+  assert.equal(success.refreshed, true);
+  assert.deepEqual(success.after, {
+    count: 1,
+    servers: [{ name: "wakefield-memory", tools: 10 }]
+  });
+  assert.deepEqual(success.wakefieldMcp.servers, [{
+    name: "wakefield-memory",
+    tools: 10,
+    status: null,
+    authStatus: null,
+    error: null
+  }]);
+  assert.deepEqual(successCalls, [{ timeoutMs: 1234, pollMs: 12, waitForStatus: true }]);
+
+  const noTools = await reloadCodexMcpServers({
+    client: {
+      remoteControlStatus: { status: "connected" },
+      reloadMcpServers: async () => ({
+        reload: { ok: true },
+        after: { servers: [{ name: "imessage-codex", tools: 0 }] },
+        events: []
+      }),
+      disconnect() {}
+    }
+  });
+  assert.equal(noTools.ok, false);
+  assert.equal(noTools.diagnosis.code, "wakefield-mcp-tools-unavailable");
+  assert.match(noTools.wakefieldMcp.issues[0].message, /0 tools/);
+
+  const failure = await reloadCodexMcpServers({
+    client: {
+      remoteControlStatus: null,
+      reloadMcpServers: async () => {
+        const error = new Error("no app-server socket");
+        error.code = "connect-failed";
+        throw error;
+      },
+      disconnect() {}
+    }
+  });
+  assert.equal(failure.ok, false);
+  assert.equal(failure.refreshed, false);
+  assert.equal(failure.error.code, "connect-failed");
+});
+
 test("selectThread attaches the current agent to a persistent Codex thread", async () => {
   const home = await tempHome();
   const codexHomePath = await tempHome();
@@ -591,6 +658,7 @@ test("runSetup gives clone installs a one-command idempotent setup path", async 
   assert.equal(first.actions.find((action) => action.id === "install-hooks").status, "applied");
   assert.equal(first.actions.find((action) => action.id === "install-base-skills").status, "applied");
   assert.match(first.actions.find((action) => action.id === "install-base-skills").detail, /Wakefield skill\(s\)/);
+  assert.equal(first.actions.find((action) => action.id === "install-memory-mcp").status, "applied");
   assert.equal(first.actions.find((action) => action.id === "enable-service").detail, "9 minute interval");
   assert.equal(first.actions.find((action) => action.id === "enable-external-dispatch").detail, "ipc, limit 2");
 
@@ -605,6 +673,9 @@ test("runSetup gives clone installs a one-command idempotent setup path", async 
     codexHomePath
   })).configured, true);
   assert.equal((await wakefieldSkillsStatus({ codexHomePath })).configured, true);
+  const codexConfigText = await fs.readFile(path.join(codexHomePath, "config.toml"), "utf8");
+  assert.match(codexConfigText, /mcp_servers\.wakefield-memory/);
+  assert.match(codexConfigText, /wakefield_memory_recall/);
 
   const second = await runSetup({
     home,
@@ -618,6 +689,7 @@ test("runSetup gives clone installs a one-command idempotent setup path", async 
   assert.equal(second.actions.find((action) => action.id === "create-agent").status, "unchanged");
   assert.equal(second.actions.find((action) => action.id === "install-hooks").status, "unchanged");
   assert.equal(second.actions.find((action) => action.id === "install-base-skills").status, "unchanged");
+  assert.equal(second.actions.find((action) => action.id === "install-memory-mcp").status, "unchanged");
 });
 
 test("agent packs install cwd, contacts, and duties without embedding app-specific code", async () => {
@@ -972,6 +1044,21 @@ test("managed connectors initialize local configs and install MCP entries for Di
     assert.match(discordMcpText, /discord_send_message/);
     assert.match(discordMcpText, new RegExp(`command = "${escapeRegExp(nodeExecutable())}"`));
     assert.equal((await managedConnectorStatus("discord-codex", { home, agent })).mcp.ok, true);
+    const liveCodexConfigPath = path.join(root, "live-codex", "config.toml");
+    const discordLiveMcp = await installManagedConnectorMcp("discord-codex", {
+      home,
+      agent,
+      codexConfigPath: liveCodexConfigPath
+    });
+    assert.equal(discordLiveMcp.codexConfigPath, liveCodexConfigPath);
+    assert.equal(discordLiveMcp.changed, true);
+    const discordLiveMcpText = await fs.readFile(liveCodexConfigPath, "utf8");
+    assert.match(discordLiveMcpText, /discord_send_message/);
+    assert.equal((await managedConnectorStatus("discord-codex", {
+      home,
+      agent,
+      codexConfigPath: liveCodexConfigPath
+    })).mcp.ok, true);
 
     const imessageInit = await initializeManagedConnectorConfig("imessage-spectrum", {
       home,
@@ -991,13 +1078,30 @@ test("managed connectors initialize local configs and install MCP entries for Di
     assert.equal(imessageConfig.codex.connectorSkillPrompt, "Use $wakefield-imessage for iMessage connector routing.");
     assert.deepEqual(imessageConfig.imessage.allowedOutboundSpaceIds, ["space-7"]);
     assert.equal(imessageConfig.targets[0].allowGroupChats, true);
+    imessageConfig.imessage.spectrum.projectUsersCache = {
+      updatedAt: "2026-06-18T00:00:00.000Z",
+      total: 1,
+      users: [{
+        id: "user-owner",
+        type: "shared",
+        displayName: "Owner Person",
+        phoneNumber: "+15551234567",
+        assignedPhoneNumber: "+15557654321",
+        projectOwner: true,
+        redirectUrl: "https://spectrum.photon.codes/users/user-owner/redirect"
+      }]
+    };
+    await fs.writeFile(imessage.configPath, `${JSON.stringify(imessageConfig, null, 2)}\n`, "utf8");
 
     const imessageMcp = await installManagedConnectorMcp("imessage-spectrum", { home, agent });
     assert.equal(imessageMcp.changed, true);
     const codexText = await fs.readFile(path.join(agent.cwd, ".codex", "config.toml"), "utf8");
     assert.match(codexText, /imessage_send_reaction/);
     assert.match(codexText, /discord_send_message/);
-    assert.equal((await managedConnectorStatus("imessage-spectrum", { home, agent })).mcp.ok, true);
+    const imessageStatus = await managedConnectorStatus("imessage-spectrum", { home, agent });
+    assert.equal(imessageStatus.mcp.ok, true);
+    assert.equal(imessageStatus.connectorConfig.spectrum.projectUsers.total, 1);
+    assert.equal(imessageStatus.connectorConfig.spectrum.projectUsers.users[0].assignedPhoneNumber, "+15557654321");
 
     const imessageDiagnosticPlan = await testManagedConnector("imessage-spectrum", { home, kind: "diagnostic-plan" });
     assert.equal(imessageDiagnosticPlan.ok, true);
@@ -2192,7 +2296,7 @@ test("manifest describes package, core features, setup commands, and connector s
   assert.equal(manifest.runtime.binary, "wakefield");
   assert.deepEqual(
     manifest.core.filter((feature) => feature.status === "available").map((feature) => feature.id),
-    ["agent-profile", "soul", "thread-selection", "agent-packs", "codex-hooks", "contacts", "local-memory", "scoped-memory-notes", "active-context-matters", "scoped-memory-recall", "memory-mcp-tools", "local-dreamer", "external-message-ingest", "discord-gateway", "email-rfc822-ingest", "email-imap-poll", "imessage-chatdb-poll", "http-intake", "http-setup-api", "external-message-dispatch", "service-tick", "scheduled-duties", "service-env-file", "service-external-dispatch", "macos-launch-agent", "setup-actions", "menu-snapshot", "clone-self-test", "clone-verify", "one-command-setup", "connector-config", "connector-wizards", "managed-connector-packages", "managed-connector-wizards", "managed-connector-config-init", "managed-connector-mcp-install", "managed-connector-launch-agents"]
+    ["agent-profile", "soul", "thread-selection", "agent-packs", "codex-hooks", "contacts", "local-memory", "scoped-memory-notes", "active-context-matters", "scoped-memory-recall", "memory-mcp-tools", "local-dreamer", "external-message-ingest", "discord-gateway", "email-rfc822-ingest", "email-imap-poll", "imessage-chatdb-poll", "http-intake", "http-setup-api", "external-message-dispatch", "service-tick", "scheduled-duties", "service-env-file", "service-external-dispatch", "macos-launch-agent", "setup-actions", "menu-snapshot", "clone-self-test", "clone-verify", "one-command-setup", "connector-config", "connector-wizards", "managed-connector-packages", "managed-connector-wizards", "managed-connector-config-init", "managed-connector-mcp-install", "codex-mcp-reload", "managed-connector-launch-agents"]
   );
   assert.deepEqual(
     manifest.connectors.map((connector) => connector.setupActionId),
@@ -2212,6 +2316,7 @@ test("manifest describes package, core features, setup commands, and connector s
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield connectors wizard discord --json"));
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield managed-connectors status --json"));
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield managed-connectors wizards --json"));
+  assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield mcp reload --json"));
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield mcp memory status --json"));
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield mcp memory install --json"));
   assert.ok(manifest.setup.jsonCommands.some((command) => command.join(" ") === "wakefield managed-connectors test $connectorId --kind status --json"));

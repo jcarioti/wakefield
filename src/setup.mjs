@@ -4,6 +4,7 @@ import { loadContacts } from "./contacts.mjs";
 import { doctor, formatDoctor } from "./doctor.mjs";
 import { managedConnectorStatuses } from "./managed-connectors.mjs";
 import { wakefieldManifest } from "./manifest.mjs";
+import { codexConfigPath } from "./paths.mjs";
 import { loadAgent } from "./profile.mjs";
 import { serviceStatus } from "./service.mjs";
 
@@ -20,7 +21,11 @@ export async function setupStatus({
   });
   const service = await serviceStatus({ home });
   const connectors = await connectorStatuses({ home });
-  const managedConnectors = await managedConnectorStatuses({ home, agent });
+  const managedConnectors = await managedConnectorStatuses({
+    home,
+    agent,
+    codexConfigPath: codexConfigPath(codexHomePath || undefined)
+  });
   const contacts = await loadContacts({ home });
   const actions = setupActions({ report, agent, threads, connectors, managedConnectors, service });
   const nextSteps = nextSetupSteps({ report, agent, threads });
@@ -204,6 +209,15 @@ export function setupActions({ report, agent, threads, connectors = [], managedC
         : check("Codex hook config")?.ok
           ? null
           : "Install hooks first."
+    },
+    {
+      id: "refresh-codex-mcp",
+      kind: "command",
+      label: "Refresh Codex MCP tools",
+      enabled: Boolean(agent),
+      command: ["wakefield", "mcp", "reload"],
+      fields: [],
+      reason: agent ? null : "Create an agent first."
     },
     {
       id: "enable-service",

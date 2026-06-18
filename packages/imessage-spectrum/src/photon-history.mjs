@@ -54,12 +54,12 @@ export async function issuePhotonImessageTokens({
     throw new Error("Photon/Spectrum history requires a fetch implementation.");
   }
 
-  const cloudUrl = normalizeCloudUrl(spectrum.cloudUrl || env.SPECTRUM_CLOUD_URL || DEFAULT_CLOUD_URL);
-  const response = await fetchImpl(`${cloudUrl}/projects/${encodeURIComponent(spectrum.projectId)}/imessage/tokens`, {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${Buffer.from(`${spectrum.projectId}:${spectrum.projectSecret}`).toString("base64")}`
-    }
+  const response = await photonProjectRequest({
+    spectrum,
+    env,
+    fetchImpl,
+    route: "imessage/tokens",
+    method: "POST"
   });
 
   if (!response?.ok) {
@@ -76,6 +76,108 @@ export async function issuePhotonImessageTokens({
     throw new Error("Photon/Spectrum token response did not include a supported iMessage token type.");
   }
   return data;
+}
+
+export async function listPhotonProjectUsers({
+  spectrum,
+  type = "shared",
+  search = null,
+  ids = [],
+  limit = null,
+  offset = null,
+  env = process.env,
+  fetchImpl = globalThis.fetch
+}) {
+  const query = new URLSearchParams();
+  if (type) query.set("type", type);
+  if (search) query.set("search", search);
+  for (const id of ids || []) {
+    if (normalizeString(id)) query.append("id", normalizeString(id));
+  }
+  if (limit != null) query.set("limit", String(limit));
+  if (offset != null) query.set("offset", String(offset));
+  const route = `users/${query.toString() ? `?${query.toString()}` : ""}`;
+  const response = await photonProjectRequest({
+    spectrum,
+    env,
+    fetchImpl,
+    route
+  });
+  if (!response?.ok) {
+    const body = await response?.text?.().catch(() => "") || "";
+    throw new Error(`Photon/Spectrum user list failed (${response?.status || "unknown"}): ${body || response?.statusText || "no response body"}`);
+  }
+  const json = await response.json();
+  if (json?.succeed === false) {
+    throw new Error(`Photon/Spectrum user list failed: ${json.message || json.code || "succeed=false"}`);
+  }
+  const data = Object.hasOwn(json || {}, "data") ? json.data : json;
+  return {
+    users: (data?.users || []).map(normalizePhotonProjectUser),
+    total: Number.isInteger(data?.total) ? data.total : (data?.users || []).length
+  };
+}
+
+export async function createPhotonProjectUser({
+  spectrum,
+  type = "shared",
+  phoneNumber,
+  assignedPhoneNumber = null,
+  firstName = null,
+  lastName = null,
+  email = null,
+  env = process.env,
+  fetchImpl = globalThis.fetch
+}) {
+  const body = removeNullish({
+    type,
+    phoneNumber: normalizeString(phoneNumber),
+    assignedPhoneNumber: normalizeString(assignedPhoneNumber) || null,
+    firstName: normalizeString(firstName) || null,
+    lastName: normalizeString(lastName) || null,
+    email: normalizeString(email) || null
+  });
+  if (!body.phoneNumber) {
+    throw new Error("Photon/Spectrum user creation requires phoneNumber.");
+  }
+  const response = await photonProjectRequest({
+    spectrum,
+    env,
+    fetchImpl,
+    route: "users/",
+    method: "POST",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+  if (!response?.ok) {
+    const errorBody = await response?.text?.().catch(() => "") || "";
+    throw new Error(`Photon/Spectrum user creation failed (${response?.status || "unknown"}): ${errorBody || response?.statusText || "no response body"}`);
+  }
+  const json = await response.json();
+  if (json?.succeed === false) {
+    throw new Error(`Photon/Spectrum user creation failed: ${json.message || json.code || "succeed=false"}`);
+  }
+  const data = Object.hasOwn(json || {}, "data") ? json.data : json;
+  return normalizePhotonProjectUser(data);
+}
+
+export function ownerPhotonProjectUser(users = []) {
+  const normalized = users.map(normalizePhotonProjectUser).filter((user) => user.id);
+  return normalized.find((user) => user.meta?.project_owner === true)
+    || (normalized.length === 1 ? normalized[0] : null);
+}
+
+export function photonUserRedirectUrl(user, {
+  spectrum = null,
+  msg = null
+} = {}) {
+  if (!user?.id) return null;
+  const base = normalizeCloudUrl(spectrum?.cloudUrl || DEFAULT_CLOUD_URL);
+  const url = new URL(`/users/${encodeURIComponent(user.id)}/redirect`, base);
+  if (normalizeString(msg)) url.searchParams.set("msg", normalizeString(msg));
+  return url.toString();
 }
 
 export async function createPhotonImessageClients({
@@ -585,6 +687,50 @@ function stripSpectrumReactionSuffix(messageId) {
 function normalizeCloudUrl(value) {
   const normalized = normalizeString(value) || DEFAULT_CLOUD_URL;
   return normalized.replace(/\/+$/g, "");
+}
+
+function photonProjectRequest({
+  spectrum,
+  env = process.env,
+  fetchImpl = globalThis.fetch,
+  route,
+  method = "GET",
+  headers = {},
+  body = null
+}) {
+  if (!spectrum?.projectId || !spectrum?.projectSecret) {
+    throw new Error("Photon/Spectrum project API requires projectId and projectSecret. Set them in config.local.json or PHOTON_PROJECT_ID/PHOTON_SECRET_KEY.");
+  }
+  if (typeof fetchImpl !== "function") {
+    throw new Error("Photon/Spectrum project API requires a fetch implementation.");
+  }
+  const cloudUrl = normalizeCloudUrl(spectrum.cloudUrl || env.SPECTRUM_CLOUD_URL || DEFAULT_CLOUD_URL);
+  const normalizedRoute = String(route || "").replace(/^\/+/, "");
+  return fetchImpl(`${cloudUrl}/projects/${encodeURIComponent(spectrum.projectId)}/${normalizedRoute}`, {
+    method,
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${spectrum.projectId}:${spectrum.projectSecret}`).toString("base64")}`,
+      ...headers
+    },
+    body
+  });
+}
+
+function normalizePhotonProjectUser(user) {
+  const source = user && typeof user === "object" ? user : {};
+  return {
+    id: normalizeString(source.id) || null,
+    projectId: normalizeString(source.projectId) || null,
+    type: normalizeString(source.type) || null,
+    firstName: normalizeString(source.firstName) || null,
+    lastName: normalizeString(source.lastName) || null,
+    displayName: [source.firstName, source.lastName].map(normalizeString).filter(Boolean).join(" ") || normalizeString(source.email) || normalizeString(source.phoneNumber) || null,
+    email: normalizeString(source.email) || null,
+    phoneNumber: normalizeString(source.phoneNumber) || null,
+    assignedPhoneNumber: normalizeString(source.assignedPhoneNumber) || null,
+    meta: source.meta && typeof source.meta === "object" ? source.meta : {},
+    createdAt: normalizeString(source.createdAt) || null
+  };
 }
 
 function formatReaction(reaction) {

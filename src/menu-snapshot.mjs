@@ -156,7 +156,13 @@ function managedConnectorSummary(connector) {
       path: connector.connectorConfig?.path || null,
       ok: Boolean(connector.connectorConfig?.ok),
       targetId: connector.connectorConfig?.targetId || null,
-      provider: connector.connectorConfig?.provider || null
+      provider: connector.connectorConfig?.provider || null,
+      spectrum: connector.connectorConfig?.spectrum ? {
+        cloudUrl: connector.connectorConfig.spectrum.cloudUrl || null,
+        projectUsers: connector.connectorConfig.spectrum.projectUsers || null,
+        status: connector.connectorConfig.spectrum.status || null
+      } : null,
+      outbound: connector.connectorConfig?.outbound || null
     },
     mcp: {
       ok: Boolean(connector.mcp?.ok),

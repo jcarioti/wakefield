@@ -68,8 +68,9 @@ For a new assistant, open Codex in the agent workspace shown by
 `wakefield select-thread --latest`. That workspace contains the generated
 `AGENTS.md` soul.
 
-After Wakefield installs hooks or Codex tools, restart Codex once, then continue
-the selected agent chat. Codex loads new hooks and MCP tools at app startup.
+After Wakefield installs Codex tools, it asks the live Codex Desktop runtime to
+refresh MCP servers through Codex's remote-control stream, then verifies the
+loaded MCP server status before continuing.
 
 ## Connectors
 

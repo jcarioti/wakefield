@@ -1,6 +1,7 @@
 import { listRecentThreads } from "./codex-sessions.mjs";
 import { installWakefield } from "./install.mjs";
-import { appHome } from "./paths.mjs";
+import { appHome, codexConfigPath } from "./paths.mjs";
+import { installMemoryMcp } from "./memory-mcp.mjs";
 import { loadAgent, selectThread } from "./profile.mjs";
 import { configureService, installLaunchAgent } from "./service.mjs";
 import { setupStatus } from "./setup.mjs";
@@ -150,6 +151,17 @@ export async function runSetup({
     });
   }
 
+  const memoryMcp = await installMemoryMcp({
+    home,
+    agent: profile,
+    codexConfigPath: codexConfigPath(codexHomePath || undefined)
+  });
+  actions.push({
+    id: "install-memory-mcp",
+    status: memoryMcp.changed ? "applied" : "unchanged",
+    detail: memoryMcp.codexConfigPath
+  });
+
   const status = await setupStatus({ home, codexHomePath });
   return {
     ok: status.ok,
@@ -166,7 +178,7 @@ export function formatSetupRun(result) {
   }
   lines.push("", `state: ${result.phase}`);
   if (result.actions.some((action) => ["install-hooks", "install-base-skills"].includes(action.id) && action.status === "applied")) {
-    lines.push("", "Restart Codex once, then continue the selected agent chat so hooks and tools reload cleanly.");
+    lines.push("", "Open Codex and run /hooks if it asks you to review newly installed hooks.");
   }
   if (!result.ok && result.status.nextSteps.length > 0) {
     lines.push("", "Next steps:");
