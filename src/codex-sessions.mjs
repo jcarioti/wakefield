@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { codexHome } from "./hook-manager.mjs";
+import { expandHome } from "./paths.mjs";
 
 const THREAD_ID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
 
@@ -36,6 +37,45 @@ export async function listRecentThreads({
 
 export function threadIdFromFilename(name) {
   return String(name || "").match(THREAD_ID_RE)?.[1] || null;
+}
+
+export async function findRecentThreadByPrompt({
+  codexHomePath = codexHome(),
+  cwd = null,
+  prompt,
+  limit = 50
+} = {}) {
+  const needle = normalizeTranscriptText(prompt);
+  if (!needle) throw new Error("Finding a Codex thread by prompt needs prompt text.");
+  const resolvedCwd = cwd ? path.resolve(expandHome(cwd)) : null;
+  const threads = await listRecentThreads({ codexHomePath, limit });
+  for (const thread of threads) {
+    if (resolvedCwd && (!thread.cwd || path.resolve(expandHome(thread.cwd)) !== resolvedCwd)) continue;
+    const transcriptText = await readSessionUserText(thread.path);
+    if (normalizeTranscriptText(transcriptText).includes(needle)) {
+      return {
+        ...thread,
+        matchedPrompt: true
+      };
+    }
+  }
+  return null;
+}
+
+export async function waitForThreadByPrompt({
+  timeoutMs = 120000,
+  pollMs = 2000,
+  ...options
+} = {}) {
+  const deadline = Date.now() + Number(timeoutMs || 0);
+  const interval = Math.max(250, Number(pollMs || 2000));
+  do {
+    const thread = await findRecentThreadByPrompt(options);
+    if (thread) return thread;
+    if (Date.now() >= deadline) break;
+    await sleep(Math.min(interval, Math.max(0, deadline - Date.now())));
+  } while (Date.now() <= deadline);
+  return null;
 }
 
 async function walkSessions(dir, files, depth = 0) {
@@ -133,6 +173,54 @@ function titleFromEntry(entry) {
     .join("\n")
     .trim();
   return titleFromText(text);
+}
+
+async function readSessionUserText(file) {
+  let text;
+  try {
+    text = await fs.readFile(file, "utf8");
+  } catch {
+    return "";
+  }
+  const chunks = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const userText = userTextFromEntry(entry);
+    if (userText) chunks.push(userText);
+  }
+  return chunks.join("\n\n");
+}
+
+function userTextFromEntry(entry) {
+  if (entry.type === "event_msg" && entry.payload?.type === "user_message") {
+    return String(entry.payload.message || "");
+  }
+  if (entry.type !== "response_item") return "";
+  const payload = entry.payload || {};
+  if (payload.type !== "message" || payload.role !== "user") return "";
+  return (payload.content || [])
+    .filter((item) => item?.type === "input_text")
+    .map((item) => item.text)
+    .join("\n")
+    .trim();
+}
+
+function normalizeTranscriptText(value) {
+  return String(value || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function titleFromText(value) {

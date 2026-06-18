@@ -53,6 +53,10 @@ test("SpectrumDeliveryQueue persists pending records until delivery is confirmed
   const delivered = await reloaded.markDelivered(record.id, { action: "start", turnId: "turn-1" });
   assert.equal(delivered.routeResult.turnId, "turn-1");
   assert.deepEqual(await reloaded.pending(), []);
+
+  const persisted = JSON.parse(await fs.readFile(queuePath, "utf8"));
+  assert.equal(persisted.records[0].id, record.id);
+  assert.equal(persisted.records[0].deliveredAt != null, true);
 });
 
 test("delivery ids distinguish target, space, and message", () => {
@@ -89,6 +93,39 @@ test("beginPendingDeliveryAttempt skips stale pending snapshots after delivery",
 
   assert.equal(await beginPendingDeliveryAttempt(queue, staleSnapshot), null);
   assert.deepEqual(await queue.pending(), []);
+});
+
+test("upsert does not resurrect delivered records", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "spectrum-delivery-queue-test-"));
+  const queuePath = path.join(root, "queue.json");
+  const queue = new SpectrumDeliveryQueue({ queuePath });
+  const record = createPendingDeliveryRecord({
+    target: { id: "rick", threadId: "thread-1", cwd: "/tmp/rick" },
+    space: { id: "any;-;+15551234567", type: "dm" },
+    message: {
+      id: "spc-msg-1",
+      timestamp: new Date("2026-05-26T16:45:31.476Z"),
+      sender: { id: "+15551234567" }
+    },
+    codexText: "iMessage DM from Joe\nMessage:\nWake up",
+    eventLogRecord: {
+      target_id: "rick",
+      message_id: "spc-msg-1",
+      codex_route: null,
+      codex_turn_id: null
+    }
+  });
+
+  await queue.upsert(record);
+  const delivered = await queue.markDelivered(record.id, { action: "start", turnId: "turn-1" });
+  const upserted = await queue.upsert({
+    ...record,
+    codexText: "replayed text"
+  });
+
+  assert.equal(upserted.deliveredAt, delivered.deliveredAt);
+  assert.deepEqual(await queue.pending(), []);
+  assert.equal(await beginPendingDeliveryAttempt(queue, upserted), null);
 });
 
 test("findEarlierPendingDeliveryInLane blocks newer same-chat records until older messages deliver", async () => {

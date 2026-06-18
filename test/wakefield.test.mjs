@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { inspectAgentPack, installAgentPack } from "../src/agent-packs.mjs";
 import { codexDreamerConfig } from "../src/codex-dreamer.mjs";
 import { routePromptToCodex } from "../src/codex-ipc.mjs";
-import { listRecentThreads, threadIdFromFilename } from "../src/codex-sessions.mjs";
+import { findRecentThreadByPrompt, listRecentThreads, threadIdFromFilename, waitForThreadByPrompt } from "../src/codex-sessions.mjs";
 import { configureConnector, connectorWizard, connectorWizards, CONNECTOR_SETUP_SLOTS, connectorStatuses } from "../src/connectors.mjs";
 import { importContactsFile, loadContacts, resolveContact } from "../src/contacts.mjs";
 import { archiveMatter, formatContextMemory, loadMatters, recallContext, upsertMatter, upsertNote } from "../src/context-memory.mjs";
@@ -418,6 +418,46 @@ test("listRecentThreads returns local Codex transcripts newest first", async () 
   assert.equal(threads[0].title, "RickBot");
   assert.equal(threads[1].threadId, "019ecaaa-0000-7000-8000-000000000001");
   assert.equal(threadIdFromFilename(path.basename(newer)), "019ecaaa-0000-7000-8000-000000000002");
+});
+
+test("findRecentThreadByPrompt matches the project cwd and bootstrap prompt", async () => {
+  const codexHomePath = await tempHome();
+  const sessions = path.join(codexHomePath, "sessions", "2026", "06", "14");
+  await fs.mkdir(sessions, { recursive: true });
+  const wrong = path.join(sessions, "rollout-2026-06-14T11-30-00-019ecaaa-0000-7000-8000-000000000010.jsonl");
+  const right = path.join(sessions, "rollout-2026-06-14T11-31-00-019ecaaa-0000-7000-8000-000000000011.jsonl");
+  const prompt = [
+    "Hello BMO.",
+    "",
+    "You have just been created as a Wakefield-powered assistant.",
+    "Acknowledge briefly that you are awake and ready."
+  ].join("\n");
+  await fs.writeFile(wrong, [
+    JSON.stringify({ type: "session_meta", payload: { cwd: "/tmp/bmo", timestamp: "2026-06-14T11:30:00Z" } }),
+    JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Hello someone else." }] } })
+  ].join("\n"));
+  await fs.writeFile(right, [
+    JSON.stringify({ type: "session_meta", payload: { cwd: "/tmp/bmo", timestamp: "2026-06-14T11:31:00Z" } }),
+    JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: prompt } })
+  ].join("\n"));
+  await fs.utimes(wrong, new Date("2026-06-14T11:30:00Z"), new Date("2026-06-14T11:30:00Z"));
+  await fs.utimes(right, new Date("2026-06-14T11:31:00Z"), new Date("2026-06-14T11:31:00Z"));
+
+  const found = await findRecentThreadByPrompt({
+    codexHomePath,
+    cwd: "/tmp/bmo",
+    prompt
+  });
+  assert.equal(found.threadId, "019ecaaa-0000-7000-8000-000000000011");
+
+  const waited = await waitForThreadByPrompt({
+    codexHomePath,
+    cwd: "/tmp/bmo",
+    prompt,
+    timeoutMs: 1,
+    pollMs: 1
+  });
+  assert.equal(waited.threadId, found.threadId);
 });
 
 test("setupStatus gives menu-bar friendly next steps and connector slots", async () => {
@@ -1117,6 +1157,41 @@ test("connector setup keeps non-interactive secrets and writes the env file", as
   const envText = await fs.readFile(envFile, "utf8");
   assert.match(envText, /WAKEFIELD_TEST_PHOTON_ID=project-123/);
   assert.match(envText, /WAKEFIELD_TEST_PHOTON_SECRET=secret-456/);
+});
+
+test("email setup connector configures intake settings and service env file", async () => {
+  const home = await tempHome();
+  const envFile = path.join(home, "email.env");
+  const env = { ...process.env, WAKEFIELD_HOME: home };
+
+  const { stdout } = await execFileAsync(process.execPath, [
+    "src/cli.mjs",
+    "setup",
+    "connector",
+    "email",
+    "--envFile",
+    envFile,
+    "--set",
+    "imapHost=imap.example.com",
+    "--set",
+    "username=agent@example.com",
+    "--set",
+    "passwordEnv=WAKEFIELD_TEST_EMAIL_PASSWORD",
+    "--secret",
+    "WAKEFIELD_TEST_EMAIL_PASSWORD=email-password",
+    "--yes",
+    "--json"
+  ], { cwd: path.resolve("."), env });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.connector.id, "email");
+  assert.equal(result.connector.configured, true);
+  assert.equal(result.connector.enabled, true);
+  assert.equal(result.connector.ready, true);
+  assert.match(await fs.readFile(envFile, "utf8"), /WAKEFIELD_TEST_EMAIL_PASSWORD=email-password/);
+
+  const service = await serviceStatus({ home });
+  assert.equal(service.environment.path, envFile);
 });
 
 test("runSelfTest exercises clone-install paths in temporary state", async () => {

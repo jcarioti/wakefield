@@ -4,7 +4,7 @@ import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { formatAgentPackInspection, formatAgentPackInstall, inspectAgentPack, installAgentPack } from "./agent-packs.mjs";
-import { listRecentThreads } from "./codex-sessions.mjs";
+import { listRecentThreads, waitForThreadByPrompt } from "./codex-sessions.mjs";
 import { asArray, configureConnector, connectorStatuses, connectorWizard, connectorWizards, CONNECTOR_SETUP_SLOTS, formatConnectorStatuses, formatConnectorWizard, parseSettings } from "./connectors.mjs";
 import { formatContactResolution, formatContacts, importContactsFile, loadContacts, resolveContact } from "./contacts.mjs";
 import { archiveMatter, contextMemory, forgetMemoryItem, formatContextMemory, formatMatters, formatNotes, loadMatters, loadNotes, matterFromCli, noteFromCli, recallContext, scopeFromOptions, upsertMatter, upsertNote } from "./context-memory.mjs";
@@ -182,6 +182,48 @@ async function main(argv = process.argv.slice(2)) {
     return;
   }
 
+  if (command === "agent" && rest[0] === "wait-bootstrap-thread") {
+    const options = parseOptions(rest.slice(1));
+    const profile = await requireAgent();
+    const bootstrapText = options.prompt || (profile.bootstrapPromptPath
+      ? await fs.readFile(profile.bootstrapPromptPath, "utf8").catch(() => "")
+      : "");
+    const thread = await waitForThreadByPrompt({
+      cwd: options.cwd || profile.cwd,
+      prompt: bootstrapText,
+      timeoutMs: Number(options.timeoutMs || options.timeout || 120000),
+      pollMs: Number(options.pollMs || options.poll || 2000),
+      limit: Number(options.limit || 80)
+    });
+    if (!thread) {
+      const result = {
+        ok: false,
+        reason: "No Codex thread with the bootstrap prompt was found yet.",
+        cwd: options.cwd || profile.cwd
+      };
+      console.log(options.json ? JSON.stringify(result, null, 2) : result.reason);
+      process.exitCode = 1;
+      return;
+    }
+    let selected = null;
+    let retarget = null;
+    if (!options.noSelect) {
+      selected = await selectThread({
+        threadId: thread.threadId,
+        cwd: thread.cwd || options.cwd || profile.cwd
+      });
+      retarget = await retargetManagedConnectorConfigs({ agent: selected });
+    }
+    const result = {
+      ok: true,
+      thread,
+      selected,
+      retarget
+    };
+    console.log(options.json ? JSON.stringify(result, null, 2) : `Found Codex bootstrap thread: ${thread.threadId}`);
+    return;
+  }
+
   if (command === "agent" && rest[0] === "bootstrap-prompt") {
     const options = parseOptions(rest.slice(1));
     const profile = await requireAgent();
@@ -289,6 +331,16 @@ async function main(argv = process.argv.slice(2)) {
     const connectorId = setupConnectorId(connectorArg || options.id || options.connector);
     const setupInput = await connectorSetupInput(connectorId, options);
     await writeEnvSecrets(setupInput.envFile, setupInput.secrets);
+    if (connectorId === "email") {
+      if (setupInput.envFile) await configureService({ envFile: setupInput.envFile });
+      const status = await configureConnector("email", {
+        enabled: true,
+        settings: setupInput.settings
+      });
+      console.log(options.json ? JSON.stringify({ connector: status }, null, 2) : formatConnectorStatuses([status]));
+      process.exitCode = status.configured ? 0 : 1;
+      return;
+    }
     const agent = await requireAgent();
     const result = await setupManagedConnector(connectorId, {
       agent,
@@ -1177,6 +1229,7 @@ function usage() {
     "  wakefield agent configure [--name NAME] [--soul TEXT] [--json]",
     "  wakefield agent open-codex [--cwd PATH] [--json]",
     "  wakefield agent open-new-thread [--cwd PATH] [--prompt TEXT] [--json]",
+    "  wakefield agent wait-bootstrap-thread [--timeout-ms N] [--poll-ms N] [--no-select] [--json]",
     "  wakefield agent bootstrap-prompt [--json]",
     "  wakefield select-thread --thread-id ID|--latest [--cwd PATH]",
     "  wakefield threads list [--json] [--limit N]",
@@ -1188,7 +1241,7 @@ function usage() {
     "  wakefield setup next [--json]",
     "  wakefield setup actions [--json]",
     "  wakefield setup run [--name NAME] [--owner-name NAME] [--soul TEXT|--soul-preset friendly|gamer|fantasy|operator] [--thread-id ID|--latest-thread] [--new-agent] [--agent-home PATH|--create-agent-home] [--enable-service] [--enable-dispatch] [--envFile PATH] [--install-launch-agent] [--load-launch-agent] [--allow-needs-thread] [--json]",
-    "  wakefield setup connector discord|imessage [--set key=value] [--secret KEY=value] [--envFile PATH] [--overwrite] [--no-load] [--yes] [--json]",
+    "  wakefield setup connector discord|imessage|email [--set key=value] [--secret KEY=value] [--envFile PATH] [--overwrite] [--no-load] [--yes] [--json]",
     "  wakefield pack inspect --file pack.json [--json]",
     "  wakefield pack install --file pack.json [--thread-id ID|--latest-thread] [--enable-service] [--dry-run] [--json]",
     "  wakefield menu snapshot [--json]",
@@ -1271,11 +1324,13 @@ async function requireAgent() {
 }
 
 function setupConnectorId(value) {
-  if (!value) throw new Error("setup connector needs a connector id: discord or imessage.");
+  if (!value) throw new Error("setup connector needs a connector id: discord, imessage, or email.");
   const normalized = String(value).trim().toLowerCase();
   const aliases = {
     discord: "discord-codex",
     "discord-codex": "discord-codex",
+    email: "email",
+    imap: "email",
     imessage: "imessage-spectrum",
     "i-message": "imessage-spectrum",
     messages: "imessage-spectrum",
@@ -1318,6 +1373,22 @@ async function connectorSetupInput(connectorId, options) {
     if (!settings.allowedSpaceIds) {
       settings.allowedSpaceIds = await ask("Allowed Spectrum space IDs, optional", { fallback: "" });
     }
+  } else if (connectorId === "email") {
+    if (!settings.imapHost) {
+      settings.imapHost = await ask("IMAP host", { fallback: "imap.example.com" });
+    }
+    if (!settings.username) {
+      settings.username = await ask("Mailbox username", { fallback: "" });
+    }
+    if (!settings.passwordEnv) {
+      settings.passwordEnv = await ask("Mailbox password env var", { fallback: "WAKEFIELD_EMAIL_PASSWORD" });
+    }
+    if (!settings.mailbox) {
+      settings.mailbox = await ask("Mailbox", { fallback: "INBOX" });
+    }
+    if (!settings.allowedSenders) {
+      settings.allowedSenders = await ask("Allowed email senders, optional", { fallback: "" });
+    }
   }
 
   return { settings, envFile, secrets };
@@ -1327,6 +1398,9 @@ async function writeEnvSecrets(envFile, secrets = {}) {
   const entries = Object.entries(secrets).filter(([key, value]) => key && value != null);
   if (entries.length === 0) return null;
   if (!envFile) throw new Error("--secret requires --envFile PATH.");
+  for (const [key, value] of entries) {
+    process.env[String(key)] = String(value);
+  }
   const resolved = path.resolve(expandHome(envFile));
   let lines = [];
   try {

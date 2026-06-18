@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 const QUEUE_VERSION = 1;
+const DELIVERED_RECEIPT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 export class SpectrumDeliveryQueue {
   #queuePath;
@@ -42,7 +43,9 @@ export class SpectrumDeliveryQueue {
         firstQueuedAt: existing?.firstQueuedAt || record.firstQueuedAt || this.#timestamp(),
         updatedAt: this.#timestamp(),
         attempts: existing?.attempts || record.attempts || 0,
+        lastAttemptAt: existing?.lastAttemptAt || record.lastAttemptAt || null,
         deliveredAt: existing?.deliveredAt || record.deliveredAt || null,
+        routeResult: existing?.routeResult || record.routeResult || null,
         lastError: existing?.lastError || record.lastError || null
       };
       if (index >= 0) {
@@ -59,12 +62,17 @@ export class SpectrumDeliveryQueue {
     if (!this.#queuePath) {
       return null;
     }
-    return this.#update(id, (record) => ({
-      ...record,
-      attempts: Number(record.attempts || 0) + 1,
-      lastAttemptAt: this.#timestamp(),
-      lastError: null
-    }));
+    return this.#update(id, (record) => {
+      if (record.deliveredAt) {
+        return null;
+      }
+      return {
+        ...record,
+        attempts: Number(record.attempts || 0) + 1,
+        lastAttemptAt: this.#timestamp(),
+        lastError: null
+      };
+    });
   }
 
   async markAttemptFailed(id, error) {
@@ -88,13 +96,18 @@ export class SpectrumDeliveryQueue {
       if (index < 0) {
         return null;
       }
-      const [record] = state.records.splice(index, 1);
-      await this.#write(state);
-      return {
-        ...record,
-        deliveredAt: this.#timestamp(),
-        routeResult
+      const deliveredAt = this.#timestamp();
+      const record = {
+        ...state.records[index],
+        updatedAt: deliveredAt,
+        deliveredAt,
+        routeResult,
+        lastError: null
       };
+      state.records[index] = record;
+      pruneDeliveredReceipts(state.records, deliveredAt);
+      await this.#write(state);
+      return record;
     });
   }
 
@@ -106,6 +119,9 @@ export class SpectrumDeliveryQueue {
         return null;
       }
       const next = updater(state.records[index]);
+      if (!next) {
+        return null;
+      }
       state.records[index] = {
         ...next,
         updatedAt: next.updatedAt || this.#timestamp()
@@ -259,6 +275,19 @@ function emptyQueue() {
     updatedAt: null,
     records: []
   };
+}
+
+function pruneDeliveredReceipts(records, now) {
+  const cutoff = Date.parse(now) - DELIVERED_RECEIPT_RETENTION_MS;
+  if (!Number.isFinite(cutoff)) {
+    return;
+  }
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const deliveredAt = Date.parse(records[index]?.deliveredAt || "");
+    if (Number.isFinite(deliveredAt) && deliveredAt < cutoff) {
+      records.splice(index, 1);
+    }
+  }
 }
 
 function normalizeTimestamp(value) {

@@ -349,7 +349,7 @@ export async function setupManagedConnector(id, {
       launchAgentsPath,
       dryRun,
       load,
-      reload,
+      reload: Boolean(reload || load),
       launchctlRunner
     });
   const status = dryRun

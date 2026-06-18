@@ -265,6 +265,72 @@ struct WizardCheck: Decodable, Identifiable, Hashable {
     var optional: Bool?
 }
 
+struct OnboardingConnectorDraft: Identifiable, Hashable {
+    var id: String
+    var enabled: Bool
+    var values: [String: String]
+
+    var displayName: String {
+        switch id {
+        case "imessage": return "iMessage"
+        case "discord": return "Discord"
+        case "email": return "Email"
+        default: return id
+        }
+    }
+
+    var subtitle: String {
+        switch id {
+        case "imessage": return "Photon/Spectrum for iMessage and SMS."
+        case "discord": return "A bot token and allowed channels or DMs."
+        case "email": return "IMAP settings for read-only intake."
+        default: return ""
+        }
+    }
+
+    var symbolName: String {
+        switch id {
+        case "imessage": return "message.fill"
+        case "discord": return "bubble.left.and.bubble.right.fill"
+        case "email": return "envelope.fill"
+        default: return "point.3.connected.trianglepath.dotted"
+        }
+    }
+
+    var missingRequiredFields: [String] {
+        requiredFieldIds.filter { trimmedNonEmpty(values[$0]) == nil }
+    }
+
+    var readyForOnboarding: Bool {
+        !enabled || missingRequiredFields.isEmpty
+    }
+
+    private var requiredFieldIds: [String] {
+        switch id {
+        case "imessage": return ["projectIdValue", "projectSecretValue"]
+        case "discord": return ["tokenValue"]
+        case "email": return ["imapHost", "username", "passwordValue"]
+        default: return []
+        }
+    }
+
+    static let defaults = [
+        OnboardingConnectorDraft(id: "imessage", enabled: false, values: [
+            "projectIdEnv": "PHOTON_PROJECT_ID",
+            "projectSecretEnv": "PHOTON_SECRET_KEY",
+            "allowGroupChats": "false"
+        ]),
+        OnboardingConnectorDraft(id: "discord", enabled: false, values: [
+            "tokenEnv": "DISCORD_BOT_TOKEN"
+        ]),
+        OnboardingConnectorDraft(id: "email", enabled: false, values: [
+            "passwordEnv": "WAKEFIELD_EMAIL_PASSWORD",
+            "mailbox": "INBOX",
+            "maxMessagesPerPoll": "10"
+        ])
+    ]
+}
+
 func relativeTime(_ date: Date) -> String {
     let seconds = max(0, Int(Date().timeIntervalSince(date)))
     if seconds < 90 { return "just now" }

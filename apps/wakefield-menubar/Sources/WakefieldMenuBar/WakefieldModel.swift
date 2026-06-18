@@ -14,12 +14,17 @@ final class WakefieldModel: ObservableObject {
     @Published var lastMessage = ""
     @Published var lastError = ""
     @Published var onboardingOpenedCodex = false
+    @Published var onboardingNeedsCodexRestart = false
+    @Published var onboardingWatchingBootstrap = false
+    @Published var onboardingPendingConnectorCount = 0
     @Published var showingOnboarding = false
 
     private var timer: Timer?
     private var controlWindow: NSWindow?
     private var controlWindowDelegate: WindowDelegate?
     private var openedFirstRun = false
+    private var pendingOnboardingConnectors: [OnboardingConnectorDraft] = []
+    private var onboardingShouldOpenConnectors = false
 
     var menuBarSymbol: String {
         guard let snapshot else { return "waveform.path.ecg" }
@@ -142,10 +147,15 @@ final class WakefieldModel: ObservableObject {
         )
     }
 
-    func finishOnboarding(name: String, ownerName: String, soul: String) {
+    func finishOnboarding(name: String, ownerName: String, soul: String, connectors: [OnboardingConnectorDraft]) {
         Task {
             showingOnboarding = true
             onboardingOpenedCodex = false
+            onboardingNeedsCodexRestart = false
+            onboardingWatchingBootstrap = false
+            pendingOnboardingConnectors = connectors.filter { $0.enabled }
+            onboardingPendingConnectorCount = pendingOnboardingConnectors.count
+            onboardingShouldOpenConnectors = !pendingOnboardingConnectors.isEmpty
             var setup = [
                 "setup", "run",
                 "--new-agent",
@@ -168,29 +178,27 @@ final class WakefieldModel: ObservableObject {
             if opened.ok {
                 onboardingOpenedCodex = true
                 lastMessage = "Codex is open with \(name)'s first prompt"
+                await refreshAll()
+                await watchForBootstrapThread()
             } else {
+                await refreshAll()
                 lastError = opened.trimmedOutput
                 lastMessage = "Opening Codex failed"
             }
-            await refreshAll()
         }
     }
 
     func continueOnboardingAfterBootstrap() {
         Task {
-            guard let cwd = agentDetails?.profile?.cwd ?? snapshot?.agent?.cwd else {
-                lastError = "No agent folder is configured yet."
-                return
-            }
-            await performSequence(
-                "Selecting new Codex chat",
-                commands: [["select-thread", "--latest", "--cwd", cwd]],
-                timeout: 90
-            )
-            if lastError.isEmpty {
-                openMainControl(tab: .connectors)
-            }
+            await watchForBootstrapThread()
         }
+    }
+
+    func finishOnboardingAfterCodexRestart() {
+        onboardingNeedsCodexRestart = false
+        onboardingOpenedCodex = false
+        onboardingWatchingBootstrap = false
+        lastMessage = "Setup complete"
     }
 
     func pauseAll() {
@@ -366,6 +374,101 @@ final class WakefieldModel: ObservableObject {
             args: ["managed-connectors", "test", connector.id, "--kind", "status"],
             timeout: 90
         )
+    }
+
+    private func completePendingOnboardingConnectors() async {
+        let drafts = pendingOnboardingConnectors
+        guard !drafts.isEmpty else { return }
+        let commands = drafts.map { onboardingConnectorSetupCommand($0) }
+        await performSequence("Starting selected connectors", commands: commands, timeout: 180)
+        if lastError.isEmpty {
+            pendingOnboardingConnectors = []
+            onboardingPendingConnectorCount = 0
+        }
+    }
+
+    private func onboardingConnectorSetupCommand(_ draft: OnboardingConnectorDraft) -> [String] {
+        var args = [
+            "setup", "connector", draft.id,
+            "--envFile", "~/.wakefield.env",
+            "--overwrite",
+            "--yes"
+        ]
+
+        func addSet(_ key: String, _ value: String?) {
+            guard let value = trimmedNonEmpty(value) else { return }
+            args += ["--set", "\(key)=\(value)"]
+        }
+
+        func addSecret(_ key: String, _ value: String?) {
+            guard let value = trimmedNonEmpty(value) else { return }
+            args += ["--secret", "\(key)=\(value)"]
+        }
+
+        switch draft.id {
+        case "imessage":
+            let projectIdEnv = trimmedNonEmpty(draft.values["projectIdEnv"]) ?? "PHOTON_PROJECT_ID"
+            let projectSecretEnv = trimmedNonEmpty(draft.values["projectSecretEnv"]) ?? "PHOTON_SECRET_KEY"
+            addSet("projectIdEnv", projectIdEnv)
+            addSet("projectSecretEnv", projectSecretEnv)
+            addSecret(projectIdEnv, draft.values["projectIdValue"])
+            addSecret(projectSecretEnv, draft.values["projectSecretValue"])
+            addSet("allowedAddresses", draft.values["allowedAddresses"])
+            addSet("allowedSpaceIds", draft.values["allowedSpaceIds"])
+            addSet("allowGroupChats", draft.values["allowGroupChats"])
+        case "discord":
+            let tokenEnv = trimmedNonEmpty(draft.values["tokenEnv"]) ?? "DISCORD_BOT_TOKEN"
+            addSet("tokenEnv", tokenEnv)
+            addSecret(tokenEnv, draft.values["tokenValue"])
+            addSet("allowedChannelIds", draft.values["allowedChannelIds"])
+            addSet("allowedDmUserIds", draft.values["allowedDmUserIds"])
+            addSet("allowedGuildIds", draft.values["allowedGuildIds"])
+        case "email":
+            let passwordEnv = trimmedNonEmpty(draft.values["passwordEnv"]) ?? "WAKEFIELD_EMAIL_PASSWORD"
+            addSet("imapHost", draft.values["imapHost"])
+            addSet("username", draft.values["username"])
+            addSet("passwordEnv", passwordEnv)
+            addSecret(passwordEnv, draft.values["passwordValue"])
+            addSet("allowedSenders", draft.values["allowedSenders"])
+            addSet("mailbox", draft.values["mailbox"])
+            addSet("processedMailbox", draft.values["processedMailbox"])
+            addSet("maxMessagesPerPoll", draft.values["maxMessagesPerPoll"])
+        default:
+            break
+        }
+
+        return args
+    }
+
+    private func watchForBootstrapThread() async {
+        onboardingWatchingBootstrap = true
+        busy = true
+        lastMessage = "Waiting for the Codex prompt to be sent..."
+        lastError = ""
+        let detected = await WakefieldCLI.run([
+            "agent", "wait-bootstrap-thread",
+            "--timeout-ms", "600000",
+            "--poll-ms", "2000"
+        ], timeout: 610)
+        onboardingWatchingBootstrap = false
+        guard detected.ok else {
+            await refreshAll()
+            busy = false
+            lastError = detected.trimmedOutput
+            lastMessage = "Could not find the new Codex chat"
+            return
+        }
+        busy = false
+        lastMessage = "Wakefield found the new Codex chat"
+        await refreshAll()
+
+        if !pendingOnboardingConnectors.isEmpty {
+            await completePendingOnboardingConnectors()
+        }
+        if lastError.isEmpty {
+            onboardingNeedsCodexRestart = true
+            lastMessage = "Restart Codex to finish loading Wakefield"
+        }
     }
 
     private func perform(_ label: String, args: [String], timeout: TimeInterval = 60) {

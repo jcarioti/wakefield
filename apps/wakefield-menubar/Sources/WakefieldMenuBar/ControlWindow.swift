@@ -138,14 +138,16 @@ private struct SetupPane: View {
     @State private var ownerName = NSFullUserName()
     @State private var selectedPreset = wakefieldSoulPresets[0].id
     @State private var soul = wakefieldSoulPresets[0].text
+    @State private var connectorDrafts = OnboardingConnectorDraft.defaults
+    @State private var onboardingStarted = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 SetupStepPill(index: 0, title: "Name", selected: step == 0, done: step > 0)
                 SetupStepPill(index: 1, title: "Connect", selected: step == 1, done: step > 1)
-                SetupStepPill(index: 2, title: "Wake", selected: step == 2, done: step > 2)
-                SetupStepPill(index: 3, title: "Try", selected: step == 3, done: false)
+                SetupStepPill(index: 2, title: "Codex", selected: step == 2, done: step > 2)
+                SetupStepPill(index: 3, title: "Use", selected: step == 3, done: false)
             }
             .padding(.horizontal, 22)
             .padding(.top, 20)
@@ -160,9 +162,9 @@ private struct SetupPane: View {
                 case 1:
                     connectorsStep
                 case 2:
-                    launchStep
+                    codexStep
                 default:
-                    doneStep
+                    useStep
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -204,6 +206,10 @@ private struct SetupPane: View {
                     .frame(minHeight: 110, maxHeight: 150)
                     .padding(6)
                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 7))
+                    .onChange(of: soul) { _, value in
+                        let presetId = wakefieldPresetId(for: value)
+                        if selectedPreset != presetId { selectedPreset = presetId }
+                    }
             }
             HStack {
                 Spacer()
@@ -221,13 +227,18 @@ private struct SetupPane: View {
         FormPane {
             Text("Connect Channels")
                 .font(.title2.weight(.semibold))
-            Text("Wakefield can listen through iMessage, Discord, and email.")
+            Text("Pick the channels this agent should answer on now.")
                 .foregroundStyle(.secondary)
 
             VStack(spacing: 10) {
-                SetupConnectorRow(symbol: "message.fill", title: "iMessage", subtitle: "Photon/Spectrum for iMessage and SMS.")
-                SetupConnectorRow(symbol: "bubble.left.and.bubble.right.fill", title: "Discord", subtitle: "A bot token and allowed channels or DMs.")
-                SetupConnectorRow(symbol: "envelope.fill", title: "Email", subtitle: "IMAP settings for read-only intake.")
+                ForEach($connectorDrafts) { $draft in
+                    OnboardingConnectorCard(draft: $draft)
+                }
+            }
+
+            if let issue = connectorIssue {
+                Label(issue, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
             }
 
             HStack {
@@ -238,7 +249,17 @@ private struct SetupPane: View {
                 } label: {
                     Label("Continue", systemImage: "arrow.right.circle")
                 }
+                .disabled(!connectorsReady)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var codexStep: some View {
+        if onboardingStarted || model.onboardingOpenedCodex || model.onboardingWatchingBootstrap || model.onboardingNeedsCodexRestart {
+            codexProgressStep
+        } else {
+            launchStep
         }
     }
 
@@ -246,11 +267,17 @@ private struct SetupPane: View {
         FormPane {
             Text("Wake \(name)")
                 .font(.title2.weight(.semibold))
-            Text("Wakefield will create the local agent folder, install the Codex hooks and skills, start the background service, then open Codex with the first prompt ready to send.")
+            Text("Wakefield will create the local agent folder, install Codex hooks and skills, start the background service, then open Codex with the first prompt ready to send.")
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 8) {
                 Label("Agent folder under ~/Wakefield Agents", systemImage: "folder")
                 Label("Private memory under .wakefield/memories", systemImage: "brain.head.profile")
+                if selectedConnectorNames.isEmpty {
+                    Label("No channels selected yet", systemImage: "point.3.connected.trianglepath.dotted")
+                } else {
+                    Label("\(selectedConnectorNames.joined(separator: ", ")) queued for setup", systemImage: "point.3.connected.trianglepath.dotted")
+                }
+                Label("Soul: \(selectedSoulLabel)", systemImage: "sparkles")
                 Label("Codex opens with the bootstrap prompt filled in", systemImage: "bubble.left.and.text.bubble.right")
             }
             .foregroundStyle(.secondary)
@@ -259,8 +286,8 @@ private struct SetupPane: View {
                 Button("Back") { step = 1 }
                 Spacer()
                 Button {
-                    model.finishOnboarding(name: name, ownerName: ownerName, soul: soul)
-                    step = 3
+                    onboardingStarted = true
+                    model.finishOnboarding(name: name, ownerName: ownerName, soul: soul, connectors: connectorDrafts)
                 } label: {
                     Label("Finish Setup", systemImage: "checkmark.circle.fill")
                 }
@@ -269,44 +296,134 @@ private struct SetupPane: View {
         }
     }
 
-    private var doneStep: some View {
+    private var codexProgressStep: some View {
         FormPane {
-            Text(model.onboardingOpenedCodex ? "Press Send In Codex" : "Finishing Setup")
+            Text(codexTitle)
                 .font(.title2.weight(.semibold))
             if model.busy {
                 ProgressView()
             }
-            Text(doneCopy)
+            Text(codexCopy)
                 .foregroundStyle(.secondary)
-            HStack {
-                Button {
-                    model.continueOnboardingAfterBootstrap()
-                } label: {
-                    Label("I Sent It", systemImage: "arrow.triangle.2.circlepath.circle")
+            if model.onboardingNeedsCodexRestart {
+                HStack {
+                    Button {
+                        model.finishOnboardingAfterCodexRestart()
+                        step = 3
+                    } label: {
+                        Label("I Restarted Codex", systemImage: "checkmark.circle")
+                    }
                 }
-                .disabled(model.busy || !model.onboardingOpenedCodex)
-                Button {
-                    model.openMainControl(tab: .connectors)
-                } label: {
-                    Label("Set Up Connectors", systemImage: "point.3.connected.trianglepath.dotted")
+            } else if !model.lastError.isEmpty && model.onboardingOpenedCodex {
+                HStack {
+                    Button {
+                        model.continueOnboardingAfterBootstrap()
+                    } label: {
+                        Label("Keep Watching", systemImage: "arrow.triangle.2.circlepath.circle")
+                    }
+                    .disabled(model.busy)
                 }
             }
-            Divider()
-            Text("First test")
-                .font(.headline)
-            Text("Text or DM \(name): \"Hey \(name), I'm \(ownerName.isEmpty ? "your name" : ownerName).\"")
-                .font(.title3.weight(.medium))
         }
     }
 
-    private var doneCopy: String {
-        if model.onboardingOpenedCodex {
-            return "Codex should be open with the first prompt filled in. Send that prompt, wait for the assistant to answer, then come back here."
+    private var useStep: some View {
+        FormPane {
+            Text("\(name) Is Ready")
+                .font(.title2.weight(.semibold))
+            Text("Try one of these first messages so the assistant can learn who you are in the channel you actually use.")
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 10) {
+                if connectorDrafts.contains(where: { $0.id == "imessage" && $0.enabled }) {
+                    FirstUseCard(
+                        title: "iMessage",
+                        symbolName: "message.fill",
+                        text: "Text \(name): \"Hey \(name), I'm \(ownerDisplayName).\""
+                    )
+                }
+                if connectorDrafts.contains(where: { $0.id == "discord" && $0.enabled }) {
+                    FirstUseCard(
+                        title: "Discord",
+                        symbolName: "bubble.left.and.bubble.right.fill",
+                        text: "DM \(name): \"Hey \(name), I'm \(ownerDisplayName).\""
+                    )
+                }
+                if connectorDrafts.contains(where: { $0.id == "email" && $0.enabled }) {
+                    FirstUseCard(
+                        title: "Email",
+                        symbolName: "envelope.fill",
+                        text: "Send a short test email to the configured mailbox. Email is intake only unless your agent has another reply channel."
+                    )
+                }
+                if selectedConnectorNames.isEmpty {
+                    FirstUseCard(
+                        title: "Codex",
+                        symbolName: "bubble.left.and.text.bubble.right",
+                        text: "Continue the \(name) Codex chat directly whenever you want to shape the assistant."
+                    )
+                }
+            }
+
+            HStack {
+                Spacer()
+                Button {
+                    model.openMainControl(tab: selectedConnectorNames.isEmpty ? .agent : .connectors)
+                } label: {
+                    Label("Open Wakefield", systemImage: "slider.horizontal.3")
+                }
+            }
+        }
+    }
+
+    private var codexTitle: String {
+        if model.onboardingNeedsCodexRestart { return "Restart Codex" }
+        if model.onboardingWatchingBootstrap { return "Send The Prompt In Codex" }
+        if model.onboardingOpenedCodex { return "Waiting For Codex" }
+        return "Finishing Setup"
+    }
+
+    private var codexCopy: String {
+        if model.onboardingNeedsCodexRestart {
+            return "Wakefield found the new Codex chat and finished the local setup. Quit Codex completely, reopen it, then come back here."
         }
         if !model.lastError.isEmpty {
             return model.lastError
         }
+        if model.onboardingWatchingBootstrap {
+            return "Codex should be open with the first prompt filled in. Send that prompt in Codex. Wakefield is watching for it and will continue automatically."
+        }
+        if model.onboardingOpenedCodex {
+            if model.onboardingPendingConnectorCount > 0 {
+                return "Codex should be open with the first prompt filled in. Send that prompt, then Wakefield will detect the new chat and finish the selected connector setup."
+            }
+            return "Codex should be open with the first prompt filled in. Send that prompt, then Wakefield will detect and select the new chat."
+        }
         return "Wakefield is creating the assistant and opening Codex."
+    }
+
+    private var selectedConnectorNames: [String] {
+        connectorDrafts.filter { $0.enabled }.map(\.displayName)
+    }
+
+    private var connectorsReady: Bool {
+        connectorDrafts.allSatisfy(\.readyForOnboarding)
+    }
+
+    private var connectorIssue: String? {
+        guard let draft = connectorDrafts.first(where: { !$0.readyForOnboarding }) else { return nil }
+        return "\(draft.displayName) is missing required setup fields."
+    }
+
+    private var selectedSoulLabel: String {
+        if let preset = wakefieldSoulPresets.first(where: { $0.id == wakefieldPresetId(for: soul) }) {
+            return preset.label
+        }
+        return "Custom"
+    }
+
+    private var ownerDisplayName: String {
+        trimmedNonEmpty(ownerName) ?? "your name"
     }
 }
 
@@ -329,26 +446,140 @@ private struct SetupStepPill: View {
     }
 }
 
-private struct SetupConnectorRow: View {
-    let symbol: String
+private struct FirstUseCard: View {
     let title: String
-    let subtitle: String
+    let symbolName: String
+    let text: String
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: symbol)
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: symbolName)
                 .frame(width: 24)
                 .foregroundStyle(.blue)
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(title)
                     .font(.headline)
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text(text)
+                    .font(.title3.weight(.medium))
+                    .textSelection(.enabled)
             }
-            Spacer()
         }
-        .padding(.vertical, 4)
+        .padding(12)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct OnboardingConnectorCard: View {
+    @Binding var draft: OnboardingConnectorDraft
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: draft.symbolName)
+                    .frame(width: 24)
+                    .foregroundStyle(draft.enabled ? .blue : .secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(draft.displayName)
+                        .font(.headline)
+                    Text(draft.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Toggle("", isOn: $draft.enabled)
+                    .toggleStyle(.switch)
+            }
+
+            if draft.enabled {
+                OnboardingConnectorFields(draft: $draft)
+                if !draft.missingRequiredFields.isEmpty {
+                    Text("Missing required fields")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+        }
+        .padding(12)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct OnboardingConnectorFields: View {
+    @Binding var draft: OnboardingConnectorDraft
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            switch draft.id {
+            case "imessage":
+                LabeledControl("Photon project ID") {
+                    SecureField("project id", text: binding("projectIdValue"))
+                        .textFieldStyle(.roundedBorder)
+                }
+                LabeledControl("Photon secret") {
+                    SecureField("secret", text: binding("projectSecretValue"))
+                        .textFieldStyle(.roundedBorder)
+                }
+                LabeledControl("Allowed people") {
+                    TextField("+15551234567, person@example.com", text: binding("allowedAddresses"))
+                        .textFieldStyle(.roundedBorder)
+                }
+                LabeledControl("Allowed spaces") {
+                    TextField("space ids", text: binding("allowedSpaceIds"))
+                        .textFieldStyle(.roundedBorder)
+                }
+                Toggle("Allow group chats", isOn: Binding(
+                    get: { (draft.values["allowGroupChats"] ?? "false") == "true" },
+                    set: { draft.values["allowGroupChats"] = $0 ? "true" : "false" }
+                ))
+            case "discord":
+                LabeledControl("Discord bot token") {
+                    SecureField("bot token", text: binding("tokenValue"))
+                        .textFieldStyle(.roundedBorder)
+                }
+                LabeledControl("Allowed channels") {
+                    TextField("channel ids", text: binding("allowedChannelIds"))
+                        .textFieldStyle(.roundedBorder)
+                }
+                LabeledControl("Allowed DMs") {
+                    TextField("user ids", text: binding("allowedDmUserIds"))
+                        .textFieldStyle(.roundedBorder)
+                }
+                LabeledControl("Allowed servers") {
+                    TextField("server ids", text: binding("allowedGuildIds"))
+                        .textFieldStyle(.roundedBorder)
+                }
+            case "email":
+                LabeledControl("IMAP host") {
+                    TextField("imap.example.com", text: binding("imapHost"))
+                        .textFieldStyle(.roundedBorder)
+                }
+                LabeledControl("Mailbox username") {
+                    TextField("agent@example.com", text: binding("username"))
+                        .textFieldStyle(.roundedBorder)
+                }
+                LabeledControl("Mailbox password") {
+                    SecureField("password", text: binding("passwordValue"))
+                        .textFieldStyle(.roundedBorder)
+                }
+                LabeledControl("Allowed senders") {
+                    TextField("person@example.com, @example.com", text: binding("allowedSenders"))
+                        .textFieldStyle(.roundedBorder)
+                }
+                LabeledControl("Mailbox") {
+                    TextField("INBOX", text: binding("mailbox"))
+                        .textFieldStyle(.roundedBorder)
+                }
+            default:
+                EmptyView()
+            }
+        }
+    }
+
+    private func binding(_ key: String) -> Binding<String> {
+        Binding(
+            get: { draft.values[key] ?? "" },
+            set: { draft.values[key] = $0 }
+        )
     }
 }
 
@@ -410,6 +641,10 @@ private struct AgentPane: View {
                     .frame(maxWidth: .infinity, minHeight: 120, maxHeight: 190)
                     .padding(6)
                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 7))
+                    .onChange(of: soul) { _, value in
+                        let presetId = wakefieldPresetId(for: value)
+                        if selectedPreset != presetId { selectedPreset = presetId }
+                    }
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
 
@@ -424,7 +659,7 @@ private struct AgentPane: View {
 
     private func load() {
         name = model.agentDetails?.profile?.name ?? model.snapshot?.agent?.name ?? ""
-        let currentSoul = model.agentDetails?.soul ?? ""
+        let currentSoul = wakefieldEditableSoul(from: model.agentDetails?.soul ?? "")
         soul = currentSoul.isEmpty ? wakefieldSoulPresets[0].text : currentSoul
         selectedPreset = wakefieldPresetId(for: soul)
     }
@@ -460,7 +695,16 @@ private let wakefieldSoulPresets = [
 ]
 
 private func wakefieldPresetId(for soul: String) -> String {
-    wakefieldSoulPresets.first(where: { $0.text == soul })?.id ?? "custom"
+    let editable = wakefieldEditableSoul(from: soul)
+    return wakefieldSoulPresets.first(where: { $0.text == editable })?.id ?? "custom"
+}
+
+private func wakefieldEditableSoul(from text: String) -> String {
+    let document = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let soulHeading = document.range(of: "## Soul") else { return document }
+    let afterHeading = document[soulHeading.upperBound...]
+    let sectionEnd = afterHeading.range(of: "\n## ")?.lowerBound ?? afterHeading.endIndex
+    return afterHeading[..<sectionEnd].trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
 private struct ConnectorsPane: View {

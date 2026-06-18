@@ -677,6 +677,9 @@ async function enqueueStartupHistoryReplay({ previousStatus: status }) {
             }),
             source: "startup-history"
           }));
+          if (queued.deliveredAt) {
+            continue;
+          }
           console.log(`Queued undelivered Photon/Spectrum iMessage ${queued.messageId} for ${target.id} from startup history.`);
         }
       }
@@ -741,6 +744,9 @@ async function enqueuePreviousStatusReplay({ previousStatus: status }) {
         }),
         source: "startup-status"
       }));
+      if (queued.deliveredAt) {
+        continue;
+      }
       console.log(`Queued undelivered Photon/Spectrum iMessage ${queued.messageId} for ${target.id} from startup status.`);
     }
   }
