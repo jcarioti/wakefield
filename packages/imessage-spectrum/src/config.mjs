@@ -393,10 +393,10 @@ function applySpectrumEnvOverrides(config, env) {
   const spectrum = config.imessage.spectrum;
   const projectId = env[spectrum.projectIdEnv] || env.SPECTRUM_PROJECT_ID || env.PHOTON_PROJECT_ID;
   const projectSecret = env[spectrum.projectSecretEnv] || env.SPECTRUM_PROJECT_SECRET || env.PHOTON_SECRET_KEY;
-  if (projectId) {
+  if (!spectrum.projectId && projectId) {
     spectrum.projectId = projectId;
   }
-  if (projectSecret) {
+  if (!spectrum.projectSecret && projectSecret) {
     spectrum.projectSecret = projectSecret;
   }
 }

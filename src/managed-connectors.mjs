@@ -1680,7 +1680,7 @@ function inspectSpectrumConnectorConfig(raw, { configPath, targets, selectedTarg
   const ipcExists = ipcSocketPath ? fsAccessSyncish(ipcSocketPath) : false;
   const status = readJsonSyncish(statusPath);
   const projectUsers = normalizePhotonProjectUsersCache(
-    raw.imessage?.spectrum?.projectUsersCache || status?.projectUsers || null
+    status?.projectUsers || raw.imessage?.spectrum?.projectUsersCache || null
   );
   const statusAgeMs = statusPath && status?.updatedAt ? now.getTime() - Date.parse(status.updatedAt) : null;
   checks.push(check("Spectrum IPC path", Boolean(ipcSocketPath), ipcSocketPath || "missing"));

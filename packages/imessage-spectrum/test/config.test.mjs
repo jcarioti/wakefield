@@ -76,6 +76,35 @@ test("loadConnectorConfig normalizes iMessage paths and allowlists", async () =>
   assert.deepEqual([...getAllowedOutboundSpaceIds(config)].sort(), ["any;-;+15559876543", "iMessage;-;group-chat"]);
 });
 
+test("loadConnectorConfig keeps embedded Spectrum credentials ahead of generic env", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "imessage-config-credential-precedence-test-"));
+  const configPath = path.join(root, "config.json");
+  await fs.writeFile(configPath, JSON.stringify({
+    imessage: {
+      spectrum: {
+        projectId: "project-from-file",
+        projectSecret: "secret-from-file"
+      }
+    },
+    targets: [{
+      id: "agent",
+      threadId: "thread-1",
+      cwd: "~/WakefieldAgents/agent"
+    }]
+  }), "utf8");
+
+  const config = await loadConnectorConfig({
+    configPath,
+    env: {
+      PHOTON_PROJECT_ID: "project-from-env",
+      PHOTON_SECRET_KEY: "secret-from-env"
+    }
+  });
+
+  assert.equal(config.imessage.spectrum.projectId, "project-from-file");
+  assert.equal(config.imessage.spectrum.projectSecret, "secret-from-file");
+});
+
 test("loadConnectorConfig normalizes Spectrum receive-loop max age", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "imessage-config-spectrum-age-test-"));
   const configPath = path.join(root, "config.json");

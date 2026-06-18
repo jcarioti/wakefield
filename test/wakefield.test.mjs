@@ -933,6 +933,64 @@ test("managed connector wizards expose package, MCP, daemon, and smoke-test fact
   assert.match(plist, /com.wakefield.test.discord/);
 });
 
+test("managed iMessage status prefers live Spectrum users over stale config cache", async () => {
+  const home = await tempHome();
+  const root = await tempHome();
+  const connector = await createFakeManagedConnector(root, "imessage-spectrum");
+  const config = JSON.parse(await fs.readFile(connector.configPath, "utf8"));
+  config.imessage.spectrum.projectUsersCache = {
+    updatedAt: "2026-06-18T18:00:00.000Z",
+    total: 1,
+    users: [{
+      id: "stale-owner",
+      displayName: "Stale Owner",
+      phoneNumber: "+15550000001",
+      assignedPhoneNumber: "+15550009999",
+      projectOwner: true
+    }]
+  };
+  await fs.writeFile(connector.configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  await fs.writeFile(path.join(root, "spectrum-status.json"), `${JSON.stringify({
+    status: "online",
+    updatedAt: "2026-06-18T19:00:00.000Z",
+    projectUsers: {
+      updatedAt: "2026-06-18T19:00:00.000Z",
+      total: 2,
+      users: [{
+        id: "live-owner",
+        displayName: "Live Owner",
+        phoneNumber: "+15550000001",
+        assignedPhoneNumber: "+15550001111",
+        projectOwner: true
+      }, {
+        id: "live-friend",
+        displayName: "Live Friend",
+        phoneNumber: "+15550000002",
+        assignedPhoneNumber: "+15550002222",
+        projectOwner: false
+      }]
+    }
+  }, null, 2)}\n`, "utf8");
+  await importManagedConnectors([
+    {
+      id: "imessage-spectrum",
+      adapter: "imessage-spectrum",
+      enabled: true,
+      packagePath: connector.packagePath,
+      configPath: connector.configPath,
+      targetId: "self-test",
+      mcp: {
+        codexConfigPath: connector.codexConfigPath
+      }
+    }
+  ], { home });
+
+  const status = await managedConnectorStatus("imessage-spectrum", { home });
+  assert.equal(status.connectorConfig.spectrum.projectUsers.total, 2);
+  assert.equal(status.connectorConfig.spectrum.projectUsers.users[0].displayName, "Live Owner");
+  assert.equal(status.connectorConfig.spectrum.projectUsers.users[0].assignedPhoneNumber, "+15550001111");
+});
+
 test("managed connectors resolve installed package dependencies without packagePath", async () => {
   const home = await tempHome();
   const root = await tempHome();
@@ -1078,6 +1136,7 @@ test("managed connectors initialize local configs and install MCP entries for Di
     assert.equal(imessageConfig.codex.connectorSkillPrompt, "Use $wakefield-imessage for iMessage connector routing.");
     assert.deepEqual(imessageConfig.imessage.allowedOutboundSpaceIds, ["space-7"]);
     assert.equal(imessageConfig.targets[0].allowGroupChats, true);
+    imessageConfig.imessage.spectrum.statusPath = path.join(root, "setup-imessage-status.json");
     imessageConfig.imessage.spectrum.projectUsersCache = {
       updatedAt: "2026-06-18T00:00:00.000Z",
       total: 1,
