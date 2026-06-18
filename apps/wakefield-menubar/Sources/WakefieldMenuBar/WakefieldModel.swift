@@ -14,6 +14,7 @@ final class WakefieldModel: ObservableObject {
     @Published var lastMessage = ""
     @Published var lastError = ""
     @Published var onboardingOpenedCodex = false
+    @Published var showingOnboarding = false
 
     private var timer: Timer?
     private var controlWindow: NSWindow?
@@ -56,7 +57,8 @@ final class WakefieldModel: ObservableObject {
             lastError = ""
             if !openedFirstRun, snapshot?.agent == nil {
                 openedFirstRun = true
-                openControlWindow(tab: .setup)
+                showingOnboarding = true
+                openControlWindow()
             }
         } catch {
             lastError = error.localizedDescription
@@ -64,6 +66,9 @@ final class WakefieldModel: ObservableObject {
     }
 
     func openControlWindow(tab: ControlTab = .agent) {
+        if let snapshot, snapshot.agent == nil {
+            showingOnboarding = true
+        }
         controlTab = tab
         if let controlWindow {
             NSApp.setActivationPolicy(.regular)
@@ -92,6 +97,12 @@ final class WakefieldModel: ObservableObject {
         controlWindow = window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func openMainControl(tab: ControlTab = .agent) {
+        showingOnboarding = false
+        controlTab = tab
+        openControlWindow(tab: tab)
     }
 
     func runServiceOnce() {
@@ -133,6 +144,7 @@ final class WakefieldModel: ObservableObject {
 
     func finishOnboarding(name: String, ownerName: String, soul: String) {
         Task {
+            showingOnboarding = true
             onboardingOpenedCodex = false
             var setup = [
                 "setup", "run",
@@ -176,7 +188,7 @@ final class WakefieldModel: ObservableObject {
                 timeout: 90
             )
             if lastError.isEmpty {
-                controlTab = .connectors
+                openMainControl(tab: .connectors)
             }
         }
     }

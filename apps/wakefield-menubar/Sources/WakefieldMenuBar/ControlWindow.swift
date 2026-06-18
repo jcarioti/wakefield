@@ -4,13 +4,19 @@ struct ControlWindow: View {
     @ObservedObject var model: WakefieldModel
 
     var body: some View {
-        VStack(spacing: 0) {
-            ControlHeader(model: model)
-            Divider()
-            HStack(spacing: 0) {
-                sidebar
-                Divider()
-                content
+        Group {
+            if model.showingOnboarding {
+                SetupPane(model: model)
+            } else {
+                VStack(spacing: 0) {
+                    ControlHeader(model: model)
+                    Divider()
+                    HStack(spacing: 0) {
+                        sidebar
+                        Divider()
+                        content
+                    }
+                }
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
@@ -51,8 +57,6 @@ struct ControlWindow: View {
     @ViewBuilder
     private var content: some View {
         switch model.controlTab {
-        case .setup:
-            SetupPane(model: model)
         case .agent:
             AgentPane(model: model)
         case .connectors:
@@ -98,7 +102,6 @@ private struct ControlHeader: View {
 }
 
 enum ControlTab: String, CaseIterable, Identifiable {
-    case setup
     case agent
     case connectors
     case wakeups
@@ -109,7 +112,6 @@ enum ControlTab: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .setup: return "Setup"
         case .agent: return "Agent"
         case .connectors: return "Connectors"
         case .wakeups: return "Wakeups"
@@ -120,7 +122,6 @@ enum ControlTab: String, CaseIterable, Identifiable {
 
     var symbol: String {
         switch self {
-        case .setup: return "wand.and.stars"
         case .agent: return "sparkles"
         case .connectors: return "point.3.connected.trianglepath.dotted"
         case .wakeups: return "alarm"
@@ -233,11 +234,6 @@ private struct SetupPane: View {
                 Button("Back") { step = 0 }
                 Spacer()
                 Button {
-                    model.controlTab = .connectors
-                } label: {
-                    Label("Open Connector Setup", systemImage: "slider.horizontal.3")
-                }
-                Button {
                     step = 2
                 } label: {
                     Label("Continue", systemImage: "arrow.right.circle")
@@ -290,7 +286,7 @@ private struct SetupPane: View {
                 }
                 .disabled(model.busy || !model.onboardingOpenedCodex)
                 Button {
-                    model.controlTab = .connectors
+                    model.openMainControl(tab: .connectors)
                 } label: {
                     Label("Set Up Connectors", systemImage: "point.3.connected.trianglepath.dotted")
                 }
