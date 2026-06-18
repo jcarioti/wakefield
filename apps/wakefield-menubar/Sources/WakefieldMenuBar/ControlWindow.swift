@@ -257,7 +257,7 @@ private struct SetupPane: View {
 
     @ViewBuilder
     private var codexStep: some View {
-        if onboardingStarted || model.onboardingOpenedCodex || model.onboardingWatchingBootstrap || model.onboardingMcpRefreshFailed || model.onboardingReadyToUse {
+        if onboardingStarted || model.onboardingPhase != .idle || model.onboardingOpenedCodex || model.onboardingWatchingBootstrap || model.onboardingMcpRefreshFailed || model.onboardingReadyToUse {
             codexProgressStep
         } else {
             launchStep
@@ -413,16 +413,38 @@ private struct SetupPane: View {
     }
 
     private var codexTitle: String {
-        if model.onboardingReadyToUse { return "Codex Refreshed" }
+        if model.onboardingReadyToUse { return "Ready" }
         if model.onboardingMcpRefreshFailed { return "Refresh Needed" }
-        if model.onboardingWatchingBootstrap { return "Send The Prompt In Codex" }
-        if model.onboardingOpenedCodex { return "Waiting For Codex" }
-        return "Finishing Setup"
+        if let message = trimmedNonEmpty(model.lastMessage) {
+            return message.replacingOccurrences(of: "...", with: "")
+        }
+        switch model.onboardingPhase {
+        case .creatingAgent:
+            return "Creating Agent"
+        case .openingCodex:
+            return "Opening Codex"
+        case .waitingForPrompt:
+            return "Waiting For Prompt"
+        case .foundChat:
+            return "Found Chat"
+        case .configuringConnectors:
+            return "Configuring Connectors"
+        case .refreshingCodexTools:
+            return "Refreshing Codex Tools"
+        case .ready:
+            return "Ready"
+        case .refreshFailed:
+            return "Refresh Needed"
+        case .failed:
+            return "Needs Attention"
+        case .idle:
+            return "Finishing Setup"
+        }
     }
 
     private var codexCopy: String {
         if model.onboardingMcpRefreshFailed {
-            return "Wakefield finished setup, but Codex did not accept the tool refresh yet. Keep Codex open and try the refresh again."
+            return "Wakefield found the Codex chat and finished setup, but Codex did not accept the tool refresh yet. Keep Codex open and try again."
         }
         if model.onboardingReadyToUse {
             if selectedConnectorNames.isEmpty {
@@ -433,16 +455,27 @@ private struct SetupPane: View {
         if !model.lastError.isEmpty {
             return model.lastError
         }
-        if model.onboardingWatchingBootstrap {
+        switch model.onboardingPhase {
+        case .creatingAgent:
+            return "Wakefield is creating the local agent folder, installing skills and hooks, and starting the background service."
+        case .openingCodex:
+            return "Wakefield is opening Codex with the first prompt filled in."
+        case .waitingForPrompt:
             return "Codex should be open with the first prompt filled in. Send that prompt in Codex. Wakefield is watching for it and will continue automatically."
-        }
-        if model.onboardingOpenedCodex {
-            if model.onboardingPendingConnectorCount > 0 {
-                return "Codex should be open with the first prompt filled in. Send that prompt, then Wakefield will detect the new chat and finish the selected connector setup."
+        case .foundChat:
+            if model.onboardingPendingConnectorCount == 0 {
+                return "Wakefield found the Codex chat and is finishing the final checks."
             }
-            return "Codex should be open with the first prompt filled in. Send that prompt, then Wakefield will detect and select the new chat."
+            return "Wakefield found the Codex chat and is about to configure the selected connectors."
+        case .configuringConnectors:
+            return "Wakefield is installing and starting the selected connectors for this agent."
+        case .refreshingCodexTools:
+            return "Wakefield is asking the live Codex app to reload its tools. This can take a minute while Codex reconnects; a first status check may time out and then recover."
+        case .failed:
+            return "Wakefield could not finish setup. Review the message here and try again."
+        case .idle, .ready, .refreshFailed:
+            return "Wakefield is creating the assistant and opening Codex."
         }
-        return "Wakefield is creating the assistant and opening Codex."
     }
 
     private var selectedConnectorNames: [String] {

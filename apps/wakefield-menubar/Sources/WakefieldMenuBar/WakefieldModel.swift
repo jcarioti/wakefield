@@ -2,6 +2,19 @@ import AppKit
 import Foundation
 import SwiftUI
 
+enum OnboardingPhase {
+    case idle
+    case creatingAgent
+    case openingCodex
+    case waitingForPrompt
+    case foundChat
+    case configuringConnectors
+    case refreshingCodexTools
+    case ready
+    case refreshFailed
+    case failed
+}
+
 @MainActor
 final class WakefieldModel: ObservableObject {
     @Published var snapshot: MenuSnapshot?
@@ -13,6 +26,7 @@ final class WakefieldModel: ObservableObject {
     @Published var busy = false
     @Published var lastMessage = ""
     @Published var lastError = ""
+    @Published var onboardingPhase: OnboardingPhase = .idle
     @Published var onboardingOpenedCodex = false
     @Published var onboardingMcpRefreshFailed = false
     @Published var onboardingWatchingBootstrap = false
@@ -60,7 +74,10 @@ final class WakefieldModel: ObservableObject {
             threads = try await threadsResult.threads
             wizards = try await wizardsResult.wizards
             agentDetails = try? await WakefieldCLI.json(["agent", "status"])
-            lastError = ""
+            if !onboardingMcpRefreshFailed && onboardingPhase != .refreshFailed {
+                lastError = ""
+            }
+            reconcileOnboardingWithSnapshot()
             if !openedFirstRun, snapshot?.agent == nil {
                 openedFirstRun = true
                 showingOnboarding = true
@@ -155,6 +172,7 @@ final class WakefieldModel: ObservableObject {
             onboardingMcpRefreshFailed = false
             onboardingWatchingBootstrap = false
             onboardingReadyToUse = false
+            onboardingPhase = .creatingAgent
             pendingOnboardingConnectors = connectors.filter { $0.enabled }
             onboardingPendingConnectorCount = pendingOnboardingConnectors.count
             onboardingShouldOpenConnectors = !pendingOnboardingConnectors.isEmpty
@@ -175,15 +193,22 @@ final class WakefieldModel: ObservableObject {
                 setup += ["--owner-name", owner]
             }
             await performSequence("Creating \(name)", commands: [setup], timeout: 180)
-            guard lastError.isEmpty else { return }
+            guard lastError.isEmpty else {
+                onboardingPhase = .failed
+                return
+            }
+            onboardingPhase = .openingCodex
+            lastMessage = "Opening Codex"
             let opened = await WakefieldCLI.run(["agent", "open-new-thread"], timeout: 60)
             if opened.ok {
                 onboardingOpenedCodex = true
+                onboardingPhase = .waitingForPrompt
                 lastMessage = "Codex is open with \(name)'s first prompt"
                 await refreshAll()
                 await watchForBootstrapThread()
             } else {
                 await refreshAll()
+                onboardingPhase = .failed
                 lastError = opened.trimmedOutput
                 lastMessage = "Opening Codex failed"
             }
@@ -380,11 +405,14 @@ final class WakefieldModel: ObservableObject {
     private func completePendingOnboardingConnectors() async {
         let drafts = pendingOnboardingConnectors
         guard !drafts.isEmpty else { return }
+        onboardingPhase = .configuringConnectors
         let commands = drafts.map { onboardingConnectorSetupCommand($0) }
-        await performSequence("Starting selected connectors", commands: commands, timeout: 180)
+        await performSequence("Configuring selected connectors", commands: commands, timeout: 180)
         if lastError.isEmpty {
             pendingOnboardingConnectors = []
             onboardingPendingConnectorCount = 0
+        } else {
+            onboardingPhase = .failed
         }
     }
 
@@ -442,24 +470,24 @@ final class WakefieldModel: ObservableObject {
     }
 
     private func watchForBootstrapThread() async {
+        onboardingPhase = .waitingForPrompt
         onboardingWatchingBootstrap = true
         busy = true
-        lastMessage = "Waiting for the Codex prompt to be sent..."
+        lastMessage = "Waiting for the Codex prompt to be sent"
         lastError = ""
-        let detected = await WakefieldCLI.run([
-            "agent", "wait-bootstrap-thread",
-            "--timeout-ms", "600000",
-            "--poll-ms", "2000"
-        ], timeout: 610)
+        let detected = await waitForBootstrapThreadInPollingWindows()
         onboardingWatchingBootstrap = false
         guard detected.ok else {
             await refreshAll()
             busy = false
+            onboardingPhase = .failed
             lastError = detected.trimmedOutput
             lastMessage = "Could not find the new Codex chat"
             return
         }
         busy = false
+        onboardingOpenedCodex = false
+        onboardingPhase = .foundChat
         lastMessage = "Wakefield found the new Codex chat"
         await refreshAll()
 
@@ -472,21 +500,89 @@ final class WakefieldModel: ObservableObject {
     }
 
     private func refreshOnboardingMcp() async {
+        onboardingPhase = .refreshingCodexTools
         busy = true
         onboardingMcpRefreshFailed = false
+        onboardingOpenedCodex = false
+        onboardingWatchingBootstrap = false
         lastError = ""
-        lastMessage = "Refreshing Codex tools..."
-        let reload = await WakefieldCLI.run(["mcp", "reload", "--json"], timeout: 60)
+        lastMessage = "Refreshing Codex tools"
+        let reload = await WakefieldCLI.run([
+            "mcp", "reload",
+            "--timeout-ms", "60000",
+            "--poll-ms", "1000",
+            "--json"
+        ], timeout: 90)
         busy = false
         if reload.ok {
             await refreshAll()
+            onboardingPhase = .ready
             onboardingReadyToUse = true
             onboardingOpenedCodex = false
             lastMessage = "Codex refreshed MCP tools"
         } else {
+            onboardingPhase = .refreshFailed
             onboardingMcpRefreshFailed = true
             lastError = reload.trimmedOutput
             lastMessage = "Codex tool refresh failed"
+        }
+    }
+
+    private func waitForBootstrapThreadInPollingWindows() async -> CommandResult {
+        let deadline = Date().addingTimeInterval(600)
+        var lastResult = CommandResult(status: 1, output: "No Codex thread with the bootstrap prompt was found yet.")
+
+        while Date() < deadline {
+            if snapshotHasSelectedThread {
+                return CommandResult(status: 0, output: "Wakefield found the selected Codex chat.")
+            }
+
+            let result = await WakefieldCLI.run([
+                "agent", "wait-bootstrap-thread",
+                "--timeout-ms", "5000",
+                "--poll-ms", "1000",
+                "--json"
+            ], timeout: 8)
+            if result.ok { return result }
+            lastResult = result
+
+            await refreshAll()
+            if snapshotHasSelectedThread {
+                return CommandResult(status: 0, output: "Wakefield found the selected Codex chat.")
+            }
+            if !isBootstrapWaitTimeout(result) {
+                return result
+            }
+            lastMessage = "Still waiting for the Codex prompt"
+        }
+
+        return lastResult
+    }
+
+    private var snapshotHasSelectedThread: Bool {
+        trimmedNonEmpty(snapshot?.agent?.threadId) != nil
+            || trimmedNonEmpty(snapshot?.threads.selectedThreadId) != nil
+    }
+
+    private func isBootstrapWaitTimeout(_ result: CommandResult) -> Bool {
+        result.status != 0 && result.output.contains("No Codex thread with the bootstrap prompt was found yet.")
+    }
+
+    private func reconcileOnboardingWithSnapshot() {
+        guard snapshotHasSelectedThread else { return }
+        guard onboardingOpenedCodex
+            || onboardingWatchingBootstrap
+            || onboardingPhase == .openingCodex
+            || onboardingPhase == .waitingForPrompt
+        else { return }
+
+        onboardingOpenedCodex = false
+        onboardingWatchingBootstrap = false
+        onboardingPhase = .foundChat
+        if lastMessage.isEmpty
+            || lastMessage.localizedCaseInsensitiveContains("waiting")
+            || lastMessage.localizedCaseInsensitiveContains("Codex is open") {
+            lastMessage = "Wakefield found the new Codex chat"
         }
     }
 
