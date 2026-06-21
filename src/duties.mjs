@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { contextMemory, dutyScope } from "./context-memory.mjs";
 import { routePromptToCodex } from "./codex-ipc.mjs";
 import { dutiesPath, appHome, expandHome } from "./paths.mjs";
 import { readJson, writeJson } from "./json-store.mjs";
@@ -272,20 +271,11 @@ export async function routeForDuty(agent, duty, {
 }
 
 export async function formatDutyPrompt(duty, {
-  agent = null,
   cwd = null,
   now = new Date()
 } = {}) {
   const body = await dutyPromptBody(duty, { cwd });
   const skills = dutySkills(duty);
-  const memory = agent ? await contextMemory(agent, {
-    query: [duty.id, duty.label, duty.dutyIds, skills].flat().filter(Boolean).join(" "),
-    scope: dutyScope(duty),
-    heading: "Wakefield context for this scheduled wakeup",
-    injection: {
-      lane: `scheduled-wakeup:${duty.id}`
-    }
-  }) : "";
   return [
     `Scheduled Wakefield wakeup: ${duty.label || duty.id}`,
     `Use $${SCHEDULED_WAKEUP_SKILL}.`,
@@ -297,8 +287,6 @@ export async function formatDutyPrompt(duty, {
     duty.dutyIds?.length > 0 ? `Duties: ${duty.dutyIds.join(", ")}` : null,
     skills.length > 0 ? `Duty skills: ${skills.map((skill) => `$${skill}`).join(", ")}` : null,
     duty.requiredTools?.length > 0 ? `Required tools: ${duty.requiredTools.join(", ")}` : null,
-    memory ? "" : null,
-    memory || null,
     "",
     body
   ].filter((line) => line != null).join("\n");

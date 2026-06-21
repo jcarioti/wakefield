@@ -2702,7 +2702,7 @@ test("verifyWakefield is a clone-install confidence gate", async () => {
   assert.equal(result.selfTest.steps.find((step) => step.id === "launch-agent-load-plan").ok, true);
 });
 
-test("UserPromptSubmit hook records prompt and injects relevant memory", async () => {
+test("UserPromptSubmit hook records prompt without injecting memory", async () => {
   const home = await tempHome();
   process.env.WAKEFIELD_HOME = home;
   try {
@@ -2724,10 +2724,7 @@ test("UserPromptSubmit hook records prompt and injects relevant memory", async (
       prompt: "Can you make a weekly plan?"
     });
 
-    assert.equal(output.hookSpecificOutput.hookEventName, "UserPromptSubmit");
-    assert.match(output.hookSpecificOutput.additionalContext, /Wakefield scoped memory relevant to this turn/);
-    assert.match(output.hookSpecificOutput.additionalContext, /weekly planning/);
-    assert.doesNotMatch(output.hookSpecificOutput.additionalContext, /Wakefield soul/);
+    assert.equal(output, null);
 
     const inbox = await fs.readFile(profile.memory.inboxPath, "utf8");
     assert.match(inbox, /weekly plan/);
@@ -2736,7 +2733,7 @@ test("UserPromptSubmit hook records prompt and injects relevant memory", async (
   }
 });
 
-test("UserPromptSubmit hook suppresses repeated memory until compaction", async () => {
+test("UserPromptSubmit hook stays record-only across repeats and compaction", async () => {
   const home = await tempHome();
   process.env.WAKEFIELD_HOME = home;
   try {
@@ -2765,7 +2762,7 @@ test("UserPromptSubmit hook suppresses repeated memory until compaction", async 
       prompt: "Can you make another weekly plan?"
     });
 
-    assert.match(first.hookSpecificOutput.additionalContext, /weekly planning/);
+    assert.equal(first, null);
     assert.equal(second, null);
 
     await handleHookInput({
@@ -2790,13 +2787,17 @@ test("UserPromptSubmit hook suppresses repeated memory until compaction", async 
       cwd: profile.cwd,
       prompt: "Can you make another weekly plan?"
     });
-    assert.match(afterCompact.hookSpecificOutput.additionalContext, /weekly planning/);
+    assert.equal(afterCompact, null);
+
+    const inbox = await fs.readFile(profile.memory.inboxPath, "utf8");
+    assert.match(inbox, /weekly plan/);
+    assert.match(inbox, /another weekly plan/);
   } finally {
     delete process.env.WAKEFIELD_HOME;
   }
 });
 
-test("UserPromptSubmit hook skips same-thread source memories until compaction", async () => {
+test("UserPromptSubmit hook does not inject same-thread source memories after compaction", async () => {
   const home = await tempHome();
   process.env.WAKEFIELD_HOME = home;
   try {
@@ -2854,7 +2855,13 @@ test("UserPromptSubmit hook skips same-thread source memories until compaction",
       cwd: profile.cwd,
       prompt: "What should we do about iMessage followups while Photon is down?"
     });
-    assert.match(afterCompact.hookSpecificOutput.additionalContext, /photon-spectrum-imessage-outage/);
+    assert.equal(afterCompact, null);
+
+    const recalled = await recallContext(profile, {
+      query: "Photon Spectrum iMessage",
+      limitMatters: 1
+    });
+    assert.equal(recalled.matters[0].id, "photon-spectrum-imessage-outage");
   } finally {
     delete process.env.WAKEFIELD_HOME;
   }
@@ -3512,7 +3519,8 @@ test("duties can be configured and run through dry-run routing", async () => {
   assert.match(run.results[0].route.prompt, /Scheduled Wakefield wakeup: Morning Check/);
   assert.match(run.results[0].route.prompt, /Use \$wakefield-scheduled-wakeup\./);
   assert.match(run.results[0].route.prompt, /Required tools: calendar/);
-  assert.match(run.results[0].route.prompt, /morning-check-context/);
+  assert.doesNotMatch(run.results[0].route.prompt, /context for this scheduled wakeup/i);
+  assert.doesNotMatch(run.results[0].route.prompt, /morning-check-context/);
   assert.doesNotMatch(run.results[0].route.prompt, /joe-package-chat/);
 
   const after = await dutyStatuses({

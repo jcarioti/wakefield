@@ -1,4 +1,3 @@
-import { contextMemory } from "./context-memory.mjs";
 import { findAgentForHookInput } from "./profile.mjs";
 import { compact, recordMemory } from "./memory.mjs";
 
@@ -15,8 +14,7 @@ export async function handleHookInput(input) {
       source: "codex-hook",
       data: hookData(input)
     });
-    const context = await promptMemoryContext(agent, input.prompt || "");
-    return context ? additionalContext(eventName, context) : null;
+    return null;
   }
 
   if (eventName === "SessionStart") {
@@ -105,33 +103,6 @@ export function hookConfig({ command, statusMessage = null }) {
   };
 }
 
-function additionalContext(eventName, context) {
-  return {
-    hookSpecificOutput: {
-      hookEventName: eventName,
-      additionalContext: context
-    }
-  };
-}
-
-async function promptMemoryContext(agent, query) {
-  const memory = await contextMemory(agent, {
-    query,
-    limitNotes: 2,
-    limitMatters: 2,
-    maxChars: 1000,
-    heading: "Wakefield scoped memory relevant to this turn",
-    injection: {
-      lane: "manual-prompt"
-    }
-  });
-  if (!memory) return "";
-  const lines = [
-    memory,
-    "Use this as background only; the latest user request is authoritative. Do not mention Wakefield memory unless it materially helps."
-  ];
-  return lines.join("\n");
-}
 
 function jsonNoopEvent(eventName) {
   return eventName === "Stop"

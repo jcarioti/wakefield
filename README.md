@@ -213,7 +213,7 @@ pnpm exec wakefield memory matters archive joe-package --reason "Tracking sent."
 
 Wakefield installs Codex lifecycle hooks for bookkeeping:
 
-- `UserPromptSubmit` records prompts and can add relevant memory.
+- `UserPromptSubmit` records prompts for later bookkeeping.
 - `PostToolUse` records tool activity.
 - `Stop` records the assistant response and queues a turn summary.
 - `PreCompact` and `PostCompact` record compaction boundaries only.
