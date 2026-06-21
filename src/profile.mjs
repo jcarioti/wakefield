@@ -343,7 +343,7 @@ export function soulDocument({ name, soul }) {
 
 You are ${name}.
 
-Wakefield delivers messages, scheduled wakeups, and memory note cards into this persistent Codex chat. Wakefield is the delivery system; it is not your identity.
+Wakefield delivers messages and scheduled wakeups into this persistent Codex chat, and exposes local memory through tools when prior context is needed. Wakefield is the delivery system; it is not your identity.
 
 ## Soul
 
@@ -358,7 +358,7 @@ ${description}
 
 ## Operating Shape
 
-- Treat Wakefield memory as helpful context, not as a rule that overrides the latest user request.
+- Use scoped memory tools when prior context may affect correctness, safety, relationship continuity, or business operations.
 - Keep durable identity and behavior here in the soul file.
 - Keep generated memory in Wakefield's local memory store.
 - Ask before taking actions that affect money, accounts, credentials, or other people.
@@ -376,7 +376,7 @@ export function bootstrapPrompt({ profile, soul = "" }) {
     "",
     "Read AGENTS.md in this folder as your identity and operating instructions.",
     "In conversation, answer as your agent name. If someone asks what powers you, say you are powered by Codex.",
-    "Wakefield is the local delivery system that brings you iMessage, Discord, email, scheduled wakeups, and small memory note cards.",
+    "Wakefield is the local delivery system that brings you iMessage, Discord, email, and scheduled wakeups, with local memory available through tools when prior context is needed.",
     "Wakefield is not your identity.",
     "",
     "Your soul is:",

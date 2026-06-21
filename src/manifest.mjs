@@ -99,7 +99,7 @@ export async function wakefieldManifest({
       feature("local-memory", "available", "Record inbox, journal, dreams, and state in local app support storage."),
       feature("scoped-memory-notes", "available", "Store stable durable facts and preferences as scoped notes."),
       feature("active-context-matters", "available", "Track temporary person, room, task, and case context that can resolve or archive."),
-      feature("scoped-memory-recall", "available", "Inject small relevant memory cards into connector, wakeup, and prompt turns."),
+      feature("scoped-memory-recall", "available", "Expose scoped memory recall tools and use memory hints for ordinary connector turns."),
       feature("memory-mcp-tools", "available", "Expose scoped memory recall, notes, and matters as MCP tools for deliberate agent lookup and maintenance."),
       feature("local-dreamer", "available", "Process queued hook events into summaries and Codex-assisted memory capture."),
       feature("external-message-ingest", "available", "Queue normalized connector messages and return Codex routing metadata."),

@@ -12,7 +12,7 @@ const DEFAULT_CONFIG = {
     processLockStaleMs: 10000
   },
   codex: {
-    connectorSkillPrompt: "Use $wakefield-discord for Discord connector routing.",
+    connectorSkillPrompt: "Use $discord-connector for Discord connector routing.",
     socketPath: null,
     connectTimeoutMs: 10000,
     requestTimeoutMs: 30000,

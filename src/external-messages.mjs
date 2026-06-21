@@ -2,7 +2,6 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { CONNECTOR_SETUP_SLOTS } from "./connectors.mjs";
 import { connectorSkillPrompt } from "./connector-skills.mjs";
-import { contextMemory, externalMessageScope } from "./context-memory.mjs";
 import { resolveContact } from "./contacts.mjs";
 import { appendJsonl, readJsonl } from "./json-store.mjs";
 import { compact, recordMemory } from "./memory.mjs";
@@ -167,24 +166,16 @@ export async function acknowledgeExternalMessage(agent, externalMessageId, {
 
 export async function routeForExternalMessage(agent, message) {
   const ready = Boolean(agent?.threadId && agent?.cwd);
-  const memory = await contextMemory(agent, {
-    query: [message.subject, message.text].filter(Boolean).join("\n"),
-    scope: externalMessageScope(message),
-    heading: "Wakefield context for this external message",
-    injection: {
-      lane: `external-message:${message.connector || "connector"}`
-    }
-  });
   return {
     status: ready ? "ready" : "needs-thread",
     reason: ready ? null : "Select a persistent Codex thread before dispatching external messages.",
     threadId: agent?.threadId || null,
     cwd: agent?.cwd || null,
-    prompt: formatExternalPrompt(message, { memory })
+    prompt: formatExternalPrompt(message)
   };
 }
 
-export function formatExternalPrompt(message, { memory = "" } = {}) {
+export function formatExternalPrompt(message) {
   const header = [
     `External ${message.connectorName || message.connector || "connector"} message`,
     `Connector: ${message.connector}`,
@@ -203,8 +194,6 @@ export function formatExternalPrompt(message, { memory = "" } = {}) {
   return [
     ...header,
     connectorSkillPrompt(message.connector) || null,
-    memory ? "" : null,
-    memory || null,
     "",
     "Message:",
     message.text || "",

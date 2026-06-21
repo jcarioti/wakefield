@@ -1,7 +1,7 @@
 import { normalizeAddress } from "./config.mjs";
 import { formatContactAddress } from "./contact-resolver.mjs";
 
-export function formatImessageMessageForCodex({ message, target, contacts = null, connectorGuidance = "Use $wakefield-imessage for iMessage connector routing.", memory = "" }) {
+export function formatImessageMessageForCodex({ message, target, contacts = null, connectorGuidance = "Use $imessage-connector for iMessage connector routing." }) {
   const receivedAt = message.created_at || new Date().toISOString();
   const senderName = message.sender_name || message.sender || "unknown";
   const chatName = message.chat_name || message.chat_identifier || message.chat_guid || message.chat_id || "unknown-chat";
@@ -20,8 +20,6 @@ export function formatImessageMessageForCodex({ message, target, contacts = null
     `Received: ${receivedAt}`,
     connectorGuidance,
     `Reply: ${formatReplyCall(imessageReplyTargetFromMessage(message))}`,
-    memory ? "" : null,
-    memory || null,
     "",
     "Message:",
     message.text || "(no text content)",

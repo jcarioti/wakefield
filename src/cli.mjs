@@ -1093,9 +1093,9 @@ async function main(argv = process.argv.slice(2)) {
         includeArchived: Boolean(options.all || options.includeArchived)
       });
       const formatted = formatContextMemory(recalled, {
-        heading: "Wakefield scoped memory recall"
+        heading: "Scoped memory recall"
       });
-      console.log(options.json ? JSON.stringify(recalled, null, 2) : formatted || "No matching Wakefield scoped memory.");
+      console.log(options.json ? JSON.stringify(recalled, null, 2) : formatted || "No matching scoped memory.");
       return;
     }
 
@@ -1108,7 +1108,7 @@ async function main(argv = process.argv.slice(2)) {
         limitMatters: Number(options.limitMatters || options.limit || 3),
         maxChars: Number(options.maxChars || 1200)
       });
-      console.log(preview || "No matching Wakefield scoped memory.");
+      console.log(preview || "No matching scoped memory.");
       return;
     }
 

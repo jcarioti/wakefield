@@ -1,4 +1,4 @@
-export function formatDiscordMessageForCodex({ message, target, connectorGuidance = "Use $wakefield-discord for Discord connector routing.", memory = "" }) {
+export function formatDiscordMessageForCodex({ message, target, connectorGuidance = "Use $discord-connector for Discord connector routing." }) {
   const authorName = message.member?.displayName || message.author?.globalName || message.author?.username || "unknown";
   const channelName = message.channel?.name ? `#${message.channel.name}` : "direct-message";
   const receivedAt = message.createdAt.toISOString();
@@ -21,8 +21,6 @@ export function formatDiscordMessageForCodex({ message, target, connectorGuidanc
     message.guildId ? `Channel ID: ${message.channelId}` : null,
     `Message ID: ${message.id}`,
     connectorGuidance,
-    memory ? "" : null,
-    memory || null,
     "",
     "Message:",
     message.content || "(no text content)",

@@ -103,7 +103,6 @@ export function hookConfig({ command, statusMessage = null }) {
   };
 }
 
-
 function jsonNoopEvent(eventName) {
   return eventName === "Stop"
     || eventName === "SubagentStop"

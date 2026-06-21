@@ -36,10 +36,10 @@ struct MenuPanel: View {
             }
             StatusPill(
                 text: assistantStatus,
-                tint: model.snapshot?.service.scheduler.loaded == true ? .green : .secondary
+                tint: model.assistantRunning ? .green : .secondary
             )
             Toggle("", isOn: Binding(
-                get: { model.snapshot?.service.scheduler.loaded == true },
+                get: { model.assistantRunning },
                 set: { model.setRuntimeEnabled($0) }
             ))
             .labelsHidden()
@@ -125,7 +125,7 @@ struct MenuPanel: View {
     }
 
     private var assistantStatus: String {
-        model.snapshot?.service.scheduler.loaded == true ? "On" : "Off"
+        model.assistantRunning ? "On" : "Off"
     }
 
     private var threadLine: String {
@@ -141,7 +141,7 @@ struct MenuPanel: View {
     private var accentColor: Color {
         guard let snapshot = model.snapshot else { return .secondary }
         if !snapshot.ready { return .orange }
-        if snapshot.service.scheduler.loaded == true { return .green }
+        if model.assistantRunning { return .green }
         return .secondary
     }
 }

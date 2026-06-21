@@ -91,7 +91,7 @@ test("formatSpectrumMessageForCodex stays compact and includes Spectrum reply ta
     })
   });
   assert.match(text, /^iMessage DM from Joe <\+15551234567>/m);
-  assert.match(text, /Use \$wakefield-imessage for iMessage connector routing\./);
+  assert.match(text, /Use \$imessage-connector for iMessage connector routing\./);
   assert.match(text, /Message:\nhello/);
   assert.match(text, /^Route: spaceId=any;-;\+15551234567 replyToMessageId=spc-msg-1 messageId=spc-msg-1$/m);
   assert.doesNotMatch(text, /Context: no linked prior message was included/);
@@ -101,18 +101,18 @@ test("formatSpectrumMessageForCodex stays compact and includes Spectrum reply ta
   assert.doesNotMatch(text, /Source metadata/);
 });
 
-test("formatSpectrumMessageForCodex can include a bounded Wakefield memory card", () => {
+test("formatSpectrumMessageForCodex ignores connector memory payloads", () => {
   const text = formatSpectrumMessageForCodex({
     space,
     message,
     target: { id: "rick" },
     content: { text: "is Earle closed?", attachments: [] },
-    memory: "Wakefield context for this external message\nActive context:\n- rma-earle-20260514-01: [waiting] Earle RMA"
+    memory: "Context for this external message\nActive context:\n- rma-earle-20260514-01: [waiting] Earle RMA"
   });
 
-  assert.match(text, /Wakefield context for this external message\nActive context:/);
-  assert.match(text, /rma-earle-20260514-01/);
-  assert.match(text, /rma-earle-20260514-01[\s\S]+Message:\nis Earle closed\?/);
+  assert.doesNotMatch(text, /Context for this external message/);
+  assert.doesNotMatch(text, /rma-earle-20260514-01/);
+  assert.match(text, /Message:\nis Earle closed\?/);
 });
 
 test("formatSpectrumMessageForCodex includes quiet group behavior", () => {

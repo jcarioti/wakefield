@@ -2076,12 +2076,13 @@ function managedConnectorSmokePlan(adapter, status, kind) {
 async function inspectManagedConnectorHealth(adapter, { connectorConfig, now = new Date() } = {}) {
   if (adapter.id === "imessage-spectrum") {
     const bridge = await spectrumBridgeStatus(connectorConfig.spectrum?.ipcSocketPath);
-    const status = bridge.ok ? "connected" : "degraded";
+    const status = bridge.ok ? bridge.warning ? "warning" : "connected" : "degraded";
     return {
       id: "spectrum-bridge",
       ok: bridge.ok,
       status,
       detail: bridge.detail,
+      warning: bridge.warning || null,
       checkedAt: now.toISOString(),
       check: check("live bridge", bridge.ok, bridge.detail)
     };
@@ -2115,13 +2116,18 @@ async function spectrumBridgeStatus(ipcSocketPath) {
         const response = JSON.parse(text.trim().split("\n")[0]);
         const recentError = recentSpectrumBridgeError(response.result?.receiveLoop);
         const degradedStatus = degradedSpectrumBridgeStatus(response.result);
+        const warning = spectrumBridgeWarning(response.result);
+        const detail = recentError
+          ? `Recent ${recentError.label}: ${recentError.message}`
+          : degradedStatus
+            ? degradedStatus.detail
+            : response.ok ? response.result?.status || "status returned" : response.error || "status failed";
         resolve({
           ok: Boolean(response.ok) && !recentError && !degradedStatus,
-          detail: recentError
-            ? `Recent ${recentError.label}: ${recentError.message}`
-            : degradedStatus
-              ? degradedStatus.detail
-              : response.ok ? response.result?.status || "status returned" : response.error || "status failed",
+          detail: warning && !recentError && !degradedStatus
+            ? `${detail}; ${warning.detail}`
+            : detail,
+          warning,
           response
         });
       } catch (error) {
@@ -2147,6 +2153,19 @@ function recentSpectrumBridgeError(receiveLoop, { now = Date.now(), maxAgeMs = 1
     at: receiveLoop.lastErrorAt,
     message: firstLine(receiveLoop.lastError),
     label: spectrumBridgeErrorLabel(receiveLoop.lastError)
+  };
+}
+
+function spectrumBridgeWarning(result) {
+  const replay = result?.historyReplay;
+  if (!replay?.lastError) {
+    return null;
+  }
+  return {
+    type: "history-replay",
+    at: replay.lastErrorAt || null,
+    message: firstLine(replay.lastError),
+    detail: `history replay warning: ${firstLine(replay.lastError)}`
   };
 }
 

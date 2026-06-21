@@ -6,7 +6,7 @@ import { readJson, writeJson } from "./json-store.mjs";
 
 const DUTIES_SCHEMA_VERSION = 1;
 const DEFAULT_DISPATCH_MODE = "dry-run";
-const SCHEDULED_WAKEUP_SKILL = "wakefield-scheduled-wakeup";
+const SCHEDULED_WAKEUP_SKILL = "scheduled-wakeup";
 
 export async function loadDuties({
   home = appHome()
@@ -277,7 +277,7 @@ export async function formatDutyPrompt(duty, {
   const body = await dutyPromptBody(duty, { cwd });
   const skills = dutySkills(duty);
   return [
-    `Scheduled Wakefield wakeup: ${duty.label || duty.id}`,
+    `Scheduled wakeup: ${duty.label || duty.id}`,
     `Use $${SCHEDULED_WAKEUP_SKILL}.`,
     "",
     `Wakeup ID: ${duty.id}`,
@@ -294,14 +294,14 @@ export async function formatDutyPrompt(duty, {
 
 export function formatDutyStatuses(document) {
   const wakeups = document.wakeups || [];
-  if (wakeups.length === 0) return "No Wakefield wakeups configured.";
+  if (wakeups.length === 0) return "No wakeups configured.";
   return wakeups
     .map((wakeup) => `${wakeup.id}: ${wakeup.enabled ? "enabled" : "disabled"}${wakeup.due ? ", due" : ""}${formatDutyCadence(wakeup)} - ${wakeup.label}`)
     .join("\n");
 }
 
 export function formatDutyRun(result) {
-  if (result.attempted === 0) return "No Wakefield wakeups were due.";
+  if (result.attempted === 0) return "No wakeups were due.";
   return result.results
     .map((item) => `${item.duty.id}: ${item.status}`)
     .join("\n");

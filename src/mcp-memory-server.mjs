@@ -13,6 +13,13 @@ import {
   upsertMatter,
   upsertNote
 } from "./context-memory.mjs";
+import {
+  configureDuty,
+  configureWakeup,
+  deleteDuty,
+  deleteWakeup,
+  dutyStatuses
+} from "./duties.mjs";
 import { MEMORY_MCP_TOOLS } from "./memory-mcp.mjs";
 import { appHome, expandHome } from "./paths.mjs";
 import { ensureAgentMemory, loadAgent } from "./profile.mjs";
@@ -283,6 +290,151 @@ export function registerWakefieldMemoryTools(server, { agent, home }) {
       return jsonContent({ ok: true, type, id });
     }
   );
+
+  server.registerTool(
+    "wakefield_scheduler_status",
+    {
+      title: "Wakefield Scheduler Status",
+      description: "List configured Wakefield duties and wakeups, including due status and missing duty references.",
+      inputSchema: {
+        includeCompatibilityWakeups: z.boolean().optional(),
+        now: z.string().min(1).optional()
+      }
+    },
+    async ({ includeCompatibilityWakeups = false, now } = {}) => {
+      return jsonContent(await dutyStatuses({
+        home,
+        now: dateFromInput(now),
+        includeCompatibilityWakeups: Boolean(includeCompatibilityWakeups)
+      }));
+    }
+  );
+
+  server.registerTool(
+    "wakefield_scheduler_configure_duty",
+    {
+      title: "Configure Wakefield Duty",
+      description: "Create or update a reusable Wakefield duty definition. Create duties before attaching them to wakeups.",
+      inputSchema: {
+        id: z.string().min(1),
+        label: z.string().min(1).optional(),
+        prompt: z.string().min(1).optional(),
+        promptFile: z.string().min(1).optional(),
+        skills: stringListSchema().optional(),
+        wakeTimes: stringListSchema().optional(),
+        enabled: z.boolean().optional(),
+        intervalMinutes: z.number().int().min(1).optional(),
+        clearInterval: z.boolean().optional(),
+        clearWakeTimes: z.boolean().optional(),
+        dispatchMode: dispatchModeSchema().optional(),
+        requiredTools: stringListSchema().optional(),
+        resetSchedule: z.boolean().optional()
+      }
+    },
+    async (input) => {
+      await configureDuty(input.id, {
+        home,
+        label: input.label ?? null,
+        prompt: input.prompt ?? null,
+        promptFile: input.promptFile ?? null,
+        skills: input.skills == null ? null : stringList(input.skills),
+        wakeTimes: input.wakeTimes == null ? null : stringList(input.wakeTimes),
+        enabled: Object.hasOwn(input, "enabled") ? Boolean(input.enabled) : null,
+        intervalMinutes: input.intervalMinutes ?? null,
+        clearInterval: Boolean(input.clearInterval),
+        clearWakeTimes: Boolean(input.clearWakeTimes),
+        dispatchMode: input.dispatchMode ?? null,
+        requiredTools: input.requiredTools == null ? null : stringList(input.requiredTools),
+        resetSchedule: Boolean(input.resetSchedule)
+      });
+      return jsonContent({
+        ok: true,
+        ...await dutyStatuses({ home, includeCompatibilityWakeups: false })
+      });
+    }
+  );
+
+  server.registerTool(
+    "wakefield_scheduler_configure_wakeup",
+    {
+      title: "Configure Wakefield Wakeup",
+      description: "Create or update a scheduled Wakefield wakeup that runs one or more duties.",
+      inputSchema: {
+        id: z.string().min(1),
+        label: z.string().min(1).optional(),
+        duties: stringListSchema().optional(),
+        skills: stringListSchema().optional(),
+        wakeTimes: stringListSchema().optional(),
+        enabled: z.boolean().optional(),
+        intervalMinutes: z.number().int().min(1).optional(),
+        clearInterval: z.boolean().optional(),
+        clearWakeTimes: z.boolean().optional(),
+        dispatchMode: dispatchModeSchema().optional(),
+        requiredTools: stringListSchema().optional(),
+        resetSchedule: z.boolean().optional()
+      }
+    },
+    async (input) => {
+      await configureWakeup(input.id, {
+        home,
+        label: input.label ?? null,
+        duties: input.duties == null ? null : stringList(input.duties),
+        skills: input.skills == null ? null : stringList(input.skills),
+        wakeTimes: input.wakeTimes == null ? null : stringList(input.wakeTimes),
+        enabled: Object.hasOwn(input, "enabled") ? Boolean(input.enabled) : null,
+        intervalMinutes: input.intervalMinutes ?? null,
+        clearInterval: Boolean(input.clearInterval),
+        clearWakeTimes: Boolean(input.clearWakeTimes),
+        dispatchMode: input.dispatchMode ?? null,
+        requiredTools: input.requiredTools == null ? null : stringList(input.requiredTools),
+        resetSchedule: Boolean(input.resetSchedule)
+      });
+      return jsonContent({
+        ok: true,
+        ...await dutyStatuses({ home, includeCompatibilityWakeups: false })
+      });
+    }
+  );
+
+  server.registerTool(
+    "wakefield_scheduler_delete_duty",
+    {
+      title: "Delete Wakefield Duty",
+      description: "Delete a Wakefield duty. Set removeReferences to also detach it from wakeups.",
+      inputSchema: {
+        id: z.string().min(1),
+        removeReferences: z.boolean().optional()
+      }
+    },
+    async ({ id, removeReferences = false }) => {
+      await deleteDuty(id, {
+        home,
+        removeReferences: Boolean(removeReferences)
+      });
+      return jsonContent({
+        ok: true,
+        ...await dutyStatuses({ home, includeCompatibilityWakeups: false })
+      });
+    }
+  );
+
+  server.registerTool(
+    "wakefield_scheduler_delete_wakeup",
+    {
+      title: "Delete Wakefield Wakeup",
+      description: "Delete a scheduled Wakefield wakeup without deleting its reusable duties.",
+      inputSchema: {
+        id: z.string().min(1)
+      }
+    },
+    async ({ id }) => {
+      await deleteWakeup(id, { home });
+      return jsonContent({
+        ok: true,
+        ...await dutyStatuses({ home, includeCompatibilityWakeups: false })
+      });
+    }
+  );
 }
 
 function jsonContent(value) {
@@ -322,6 +474,10 @@ function stringListSchema() {
   return z.union([z.string(), z.array(z.string())]);
 }
 
+function dispatchModeSchema() {
+  return z.enum(["dry-run", "manual", "ipc", "auto", "steer", "start"]);
+}
+
 function scopeFromInput(input = {}) {
   return normalizeScope({
     people: input.people ?? input.person,
@@ -340,6 +496,13 @@ function stringList(value) {
   if (value == null) return [];
   if (Array.isArray(value)) return value.flatMap(stringList);
   return String(value).split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function dateFromInput(value) {
+  if (!value) return new Date();
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) throw new Error(`Invalid date: ${value}`);
+  return date;
 }
 
 function parseArgs(argv) {

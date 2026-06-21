@@ -24,6 +24,9 @@ rm -rf "$APP_DIR"
 rm -rf "$LEGACY_APP_DIR"
 mkdir -p "$MACOS" "$RESOURCES"
 cp "$PACKAGE/.build/release/WakefieldMenuBar" "$EXECUTABLE"
+if [[ -d "$PACKAGE/Resources" ]]; then
+  cp -R "$PACKAGE/Resources/." "$RESOURCES/"
+fi
 
 cat > "$CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -44,6 +47,8 @@ cat > "$CONTENTS/Info.plist" <<PLIST
   <string>0.1.0</string>
   <key>CFBundleVersion</key>
   <string>1</string>
+  <key>CFBundleIconFile</key>
+  <string>Wakefield</string>
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
   <key>LSUIElement</key>

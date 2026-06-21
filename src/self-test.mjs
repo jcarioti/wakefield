@@ -552,7 +552,7 @@ function imapEnvFileSelfTestEmail() {
 function selfTestDiscordMessage() {
   return {
     type: 0,
-    id: "wakefield-discord-self-test",
+    id: "discord-connector-self-test",
     channel_id: "self-test-channel",
     guild_id: "self-test-guild",
     content: "Discord gateway self-test message.",
@@ -569,7 +569,7 @@ function selfTestDiscordMessage() {
 function selfTestImessageRow() {
   return {
     id: 42,
-    guid: "wakefield-imessage-self-test",
+    guid: "imessage-connector-self-test",
     text: "iMessage chat.db self-test message.",
     date: 1_000_000_000_000_000_000,
     is_from_me: 0,

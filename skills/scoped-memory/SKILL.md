@@ -1,13 +1,13 @@
 ---
-name: wakefield-memory
-description: Use when inspecting, recalling, creating, updating, resolving, archiving, or debugging Wakefield scoped memory: durable notes, temporary active-context matters, memory capture, and Codex-hook/dreamer memory behavior.
+name: scoped-memory
+description: "Use when inspecting, recalling, creating, updating, resolving, archiving, or debugging scoped agent memory: durable notes, temporary active-context matters, memory capture, and Codex-hook/dreamer memory behavior."
 ---
 
-# Wakefield Memory
+# Scoped Memory
 
 ## Overview
 
-Wakefield memory is a small stage-manager layer around a persistent Codex chat. Codex owns the visible transcript and compaction; Wakefield stores only the outside context that should be available later without replaying chat history.
+Scoped memory is a small stage-manager layer around a persistent Codex chat. Codex owns the visible transcript and compaction; memory stores only the outside context that should be available later without replaying chat history.
 
 ## Memory Types
 
@@ -31,7 +31,7 @@ pnpm wakefield memory capture --dry-run --json
 pnpm wakefield memory capture-log --json
 ```
 
-Do not insert `--` after `pnpm wakefield`; Wakefield project scripts pass arguments directly to the CLI wrapper.
+Do not insert `--` after `pnpm wakefield`; project scripts pass arguments directly to the CLI wrapper.
 
 ## Capture And Dreaming
 
@@ -40,7 +40,7 @@ Memory capture reviews compact dream summaries after turns. Treat it as advisory
 - Use `wakefield memory capture --dry-run --json` to inspect what the reviewer would apply without mutating memory.
 - Use `wakefield memory capture-log --json` after service or dreamer runs to inspect what summary was reviewed, which existing notes/matters were shown, what deltas were returned, what was applied, and what was skipped.
 - Use the capture `rationale`, `applied` list, and skipped/ignored deltas to diagnose why a turn did or did not change memory.
-- Wakefield reviews newer summaries first and skips updates to existing memories when the target memory was already updated after the reviewed turn.
+- The capture process reviews newer summaries first and skips updates to existing memories when the target memory was already updated after the reviewed turn.
 - Do not manually replay chat history or inject soul/personality content to fix memory.
 - Do not store "the assistant replied" or politeness facts.
 - If capture misses a meaningful update, improve the capture rules or matching evidence rather than patching around the symptom with duplicate memory.
@@ -52,4 +52,4 @@ For Discord, iMessage, email, or scheduled wakeups, recall should stay scoped to
 - Person follow-ups should recall that person's relevant notes and active matters across connectors.
 - Scheduled wakeups should recall duty/task context, not every recent human conversation.
 - Shared rooms should keep ambient useful facts only when they affect a future task or active matter.
-- Recent facts from the current uncompacted chat normally do not need reinjection; Wakefield suppresses same-session memory where possible.
+- Recent facts from the current uncompacted chat normally do not need reinjection; the memory layer suppresses same-session memory where possible.

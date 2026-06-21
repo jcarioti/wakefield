@@ -8,7 +8,7 @@ const DEFAULT_CONFIG = {
     processLockStaleMs: 10000
   },
   codex: {
-    connectorSkillPrompt: "Use $wakefield-imessage for iMessage connector routing.",
+    connectorSkillPrompt: "Use $imessage-connector for iMessage connector routing.",
     socketPath: null,
     connectTimeoutMs: 10000,
     requestTimeoutMs: 30000,
@@ -58,6 +58,7 @@ const DEFAULT_CONFIG = {
       startupReplayEnabled: true,
       startupReplayLookbackMs: 60 * 60 * 1000,
       startupReplayDelayMs: 30000,
+      historyReplayPollMs: 60000,
       startupReplayPageSize: 30,
       deliveryRetryMs: 60000,
       outboundRequestMinIntervalMs: 2000,
@@ -298,6 +299,10 @@ function normalizeSpectrum(spectrum = {}, { cwd }) {
     startupReplayDelayMs: nonNegativeInteger(
       merged.startupReplayDelayMs,
       DEFAULT_CONFIG.imessage.spectrum.startupReplayDelayMs
+    ),
+    historyReplayPollMs: nonNegativeInteger(
+      merged.historyReplayPollMs,
+      DEFAULT_CONFIG.imessage.spectrum.historyReplayPollMs
     ),
     startupReplayPageSize: positiveInteger(
       merged.startupReplayPageSize,

@@ -43,13 +43,6 @@ struct ControlWindow: View {
                 .buttonStyle(.plain)
             }
             Spacer()
-            Button(role: .destructive) {
-                model.pauseAll()
-            } label: {
-                Label("Turn Everything Off", systemImage: "pause.circle")
-            }
-            .buttonStyle(.borderless)
-            .disabled(model.busy)
         }
         .padding(12)
         .frame(width: 168)
@@ -66,8 +59,6 @@ struct ControlWindow: View {
             WakeupsPane(model: model)
         case .duties:
             DutiesPane(model: model)
-        case .chat:
-            ChatPane(model: model)
         }
     }
 }
@@ -79,22 +70,22 @@ private struct ControlHeader: View {
         HStack(spacing: 12) {
             Image(systemName: model.menuBarSymbol)
                 .font(.title2)
-                .foregroundStyle(model.snapshot?.service.scheduler.loaded == true ? .green : .secondary)
+                .foregroundStyle(model.assistantRunning ? .green : .secondary)
                 .frame(width: 28)
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.snapshot?.agentName ?? "Wakefield")
                     .font(.title3.weight(.semibold))
-                Text(model.snapshot?.service.scheduler.loaded == true ? "Assistant is on" : "Assistant is off")
+                Text(model.assistantRunning ? "Assistant is on" : "Assistant is off")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
             if model.busy { ProgressView().controlSize(.small) }
             Button {
-                model.setRuntimeEnabled(model.snapshot?.service.scheduler.loaded != true)
+                model.setRuntimeEnabled(!model.assistantRunning)
             } label: {
-                Label(model.snapshot?.service.scheduler.loaded == true ? "Turn Off" : "Turn On",
-                      systemImage: model.snapshot?.service.scheduler.loaded == true ? "power.circle.fill" : "power.circle")
+                Label(model.assistantRunning ? "Turn Off" : "Turn On",
+                      systemImage: model.assistantRunning ? "power.circle.fill" : "power.circle")
             }
             .disabled(model.busy)
         }
@@ -107,7 +98,6 @@ enum ControlTab: String, CaseIterable, Identifiable {
     case connectors
     case wakeups
     case duties
-    case chat
 
     var id: String { rawValue }
 
@@ -117,7 +107,6 @@ enum ControlTab: String, CaseIterable, Identifiable {
         case .connectors: return "Connectors"
         case .wakeups: return "Wakeups"
         case .duties: return "Duties"
-        case .chat: return "Codex Chat"
         }
     }
 
@@ -127,7 +116,6 @@ enum ControlTab: String, CaseIterable, Identifiable {
         case .connectors: return "point.3.connected.trianglepath.dotted"
         case .wakeups: return "alarm"
         case .duties: return "checklist"
-        case .chat: return "bubble.left.and.text.bubble.right"
         }
     }
 }
@@ -139,6 +127,7 @@ private struct SetupPane: View {
     @State private var ownerName = NSFullUserName()
     @State private var selectedPreset = wakefieldSoulPresets[0].id
     @State private var soul = wakefieldSoulPresets[0].text
+    @State private var customSoul = wakefieldSoulPresets[0].text
     @State private var connectorDrafts = OnboardingConnectorDraft.defaults
     @State private var onboardingStarted = false
 
@@ -194,7 +183,12 @@ private struct SetupPane: View {
                     Text("Custom").tag("custom")
                 }
                 .pickerStyle(.segmented)
-                .onChange(of: selectedPreset) { _, value in
+                .onChange(of: selectedPreset) { oldValue, value in
+                    if oldValue == "custom" { customSoul = soul }
+                    if value == "custom" {
+                        soul = customSoul
+                        return
+                    }
                     guard let preset = wakefieldSoulPresets.first(where: { $0.id == value }) else { return }
                     soul = preset.text
                 }
@@ -209,6 +203,7 @@ private struct SetupPane: View {
                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 7))
                     .onChange(of: soul) { _, value in
                         let presetId = wakefieldPresetId(for: value)
+                        if presetId == "custom" { customSoul = value }
                         if selectedPreset != presetId { selectedPreset = presetId }
                     }
             }
@@ -718,81 +713,159 @@ private struct AgentPane: View {
     @ObservedObject var model: WakefieldModel
     @State private var name = ""
     @State private var soul = ""
+    @State private var customSoul = ""
     @State private var selectedPreset = wakefieldSoulPresets[0].id
+    @State private var selectedThreadId = ""
+    @State private var savedName = ""
+    @State private var savedSoul = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Agent")
-                    .font(.title3.weight(.semibold))
-                Spacer()
-            }
-
-            HStack(alignment: .bottom, spacing: 12) {
-                LabeledControl("Name") {
-                    TextField("Mira", text: $name)
-                        .textFieldStyle(.roundedBorder)
+        ZStack(alignment: .bottom) {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(alignment: .center, spacing: 12) {
+                    Text("Agent")
+                        .font(.title3.weight(.semibold))
+                    Spacer()
                 }
-                .frame(maxWidth: 360)
 
-                Spacer()
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(alignment: .bottom, spacing: 14) {
+                        LabeledControl("Name") {
+                            TextField("Mira", text: $name)
+                                .textFieldStyle(.roundedBorder)
+                        }
+                        .frame(maxWidth: 420)
 
-                Button("Choose Codex Chat") {
-                    model.controlTab = .chat
-                }
-                Button {
-                    model.saveAgent(name: name, soul: soul)
-                } label: {
-                    Label(model.agentDetails?.profile == nil ? "Create" : "Save", systemImage: "checkmark.circle")
-                }
-                .disabled(model.busy || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
+                        LabeledControl("Codex chat") {
+                            Picker("", selection: $selectedThreadId) {
+                                if selectedThreadId.isEmpty {
+                                    Text("No chat selected").tag("")
+                                }
+                                if !selectedThreadId.isEmpty && !recentThreads.contains(where: { $0.threadId == selectedThreadId }) {
+                                    Text(selectedThreadName).tag(selectedThreadId)
+                                }
+                                ForEach(recentThreads) { thread in
+                                    Text(threadMenuLabel(thread)).tag(thread.threadId)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .onChange(of: selectedThreadId) { _, value in
+                                selectThread(value)
+                            }
+                        }
+                        .frame(maxWidth: 360)
 
-            LabeledControl("Soul Style") {
-                Picker("", selection: $selectedPreset) {
-                    ForEach(wakefieldSoulPresets) { preset in
-                        Text(preset.label).tag(preset.id)
+                        Spacer(minLength: 0)
                     }
-                    Text("Custom").tag("custom")
-                }
-                .pickerStyle(.menu)
-                .onChange(of: selectedPreset) { _, value in
-                    guard let preset = wakefieldSoulPresets.first(where: { $0.id == value }) else { return }
-                    soul = preset.text
-                }
-            }
-            .frame(maxWidth: 360)
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Soul")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                TextEditor(text: $soul)
-                    .font(.body)
-                    .frame(maxWidth: .infinity, minHeight: 120, maxHeight: 190)
-                    .padding(6)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 7))
-                    .onChange(of: soul) { _, value in
-                        let presetId = wakefieldPresetId(for: value)
-                        if selectedPreset != presetId { selectedPreset = presetId }
+                    LabeledControl("Soul style") {
+                        Picker("", selection: $selectedPreset) {
+                            ForEach(wakefieldSoulPresets) { preset in
+                                Text(preset.label).tag(preset.id)
+                            }
+                            Text("Custom").tag("custom")
+                        }
+                        .pickerStyle(.segmented)
+                        .onChange(of: selectedPreset) { oldValue, value in
+                            if oldValue == "custom" { customSoul = soul }
+                            if value == "custom" {
+                                soul = customSoul
+                                return
+                            }
+                            guard let preset = wakefieldSoulPresets.first(where: { $0.id == value }) else { return }
+                            soul = preset.text
+                        }
                     }
-            }
-            .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .frame(maxWidth: 620)
 
-            Spacer(minLength: 0)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Soul")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        TextEditor(text: $soul)
+                            .font(.body)
+                            .frame(maxWidth: .infinity, minHeight: 260, maxHeight: .infinity)
+                            .padding(6)
+                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 7))
+                            .onChange(of: soul) { _, value in
+                                let presetId = wakefieldPresetId(for: value)
+                                if presetId == "custom" { customSoul = value }
+                                if selectedPreset != presetId { selectedPreset = presetId }
+                            }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+            .padding(22)
+            .padding(.bottom, agentDirty ? 54 : 0)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+            BottomSaveAction(
+                title: model.agentDetails?.profile == nil ? "Create Agent" : "Save Agent",
+                systemImage: "checkmark.circle.fill",
+                isVisible: agentDirty,
+                isDisabled: model.busy || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ) {
+                model.saveAgent(name: name, soul: soul)
+            }
         }
-        .padding(22)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear(perform: load)
         .onChange(of: model.agentDetails?.profile?.name) { _, _ in load() }
         .onChange(of: model.agentDetails?.soul) { _, _ in load() }
+        .onChange(of: model.snapshot?.agent?.threadId) { _, _ in syncSelectedThread() }
+        .onChange(of: model.threads) { _, _ in syncSelectedThread() }
     }
 
     private func load() {
         name = model.agentDetails?.profile?.name ?? model.snapshot?.agent?.name ?? ""
         let currentSoul = wakefieldEditableSoul(from: model.agentDetails?.soul ?? "")
         soul = currentSoul.isEmpty ? wakefieldSoulPresets[0].text : currentSoul
+        customSoul = soul
+        savedName = name
+        savedSoul = soul
         selectedPreset = wakefieldPresetId(for: soul)
+        syncSelectedThread()
+    }
+
+    private var agentDirty: Bool {
+        name != savedName || soul != savedSoul
+    }
+
+    private func syncSelectedThread() {
+        selectedThreadId = model.snapshot?.agent?.threadId ?? model.snapshot?.threads.selectedThreadId ?? ""
+    }
+
+    private var recentThreads: [CodexThread] {
+        Array(model.threads.enumerated())
+            .sorted { left, right in
+                let leftDate = left.element.updatedAt.flatMap(parseWakefieldDate) ?? .distantPast
+                let rightDate = right.element.updatedAt.flatMap(parseWakefieldDate) ?? .distantPast
+                if leftDate != rightDate { return leftDate > rightDate }
+                return left.offset < right.offset
+            }
+            .map(\.element)
+    }
+
+    private var selectedThreadName: String {
+        guard !selectedThreadId.isEmpty else { return "No chat selected" }
+        if let thread = recentThreads.first(where: { $0.threadId == selectedThreadId }) {
+            return thread.displayName
+        }
+        return model.snapshot?.agent?.threadId == selectedThreadId ? "Selected Codex chat" : "Codex chat"
+    }
+
+    private func threadMenuLabel(_ thread: CodexThread) -> String {
+        "\(thread.displayName) - \(thread.detail)"
+    }
+
+    private func selectThread(_ threadId: String) {
+        guard !threadId.isEmpty else { return }
+        let currentThreadId = model.snapshot?.agent?.threadId ?? model.snapshot?.threads.selectedThreadId
+        guard threadId != currentThreadId else { return }
+        guard let thread = recentThreads.first(where: { $0.threadId == threadId }) else { return }
+        model.selectThread(thread)
     }
 }
 
@@ -904,48 +977,75 @@ private struct ConnectorDetailPane: View {
     let connector: ManagedConnector
     let wizard: ConnectorWizard?
     @State private var values: [String: String] = [:]
+    @State private var savedValues: [String: String] = [:]
 
     var body: some View {
-        FormPane {
-            HStack {
-                Label(connector.displayName, systemImage: connector.symbolName)
-                    .font(.title3.weight(.semibold))
-                Spacer()
-                StatusPill(text: connector.stateText, tint: connector.isDegraded ? .orange : connector.running && connector.ready ? .green : connector.ready ? .blue : .orange)
-                Toggle("", isOn: Binding(
-                    get: { connector.running },
-                    set: { model.setConnector(connector, running: $0) }
-                ))
-                .toggleStyle(.switch)
-                .disabled(model.busy)
-            }
-
+        ActionFormPane(
+            showsAction: connectorDirty,
+            title: "Save & Start \(connector.displayName)",
+            systemImage: "checkmark.circle.fill",
+            disabled: model.busy
+        ) {
             if let wizard {
-                ConnectorSetupFields(wizard: wizard, values: $values)
-
+                savedValues = values
+                model.setupConnector(wizard, values: values)
+            }
+        } content: {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Button {
-                        model.setupConnector(wizard, values: values)
-                    } label: {
-                        Label("Save & Start", systemImage: "checkmark.circle")
-                    }
+                    Label(connector.displayName, systemImage: connector.symbolName)
+                        .font(.title3.weight(.semibold))
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { connector.running },
+                        set: { model.setConnector(connector, running: $0) }
+                    ))
+                    .toggleStyle(.switch)
                     .disabled(model.busy)
-
+                }
+                HStack(spacing: 10) {
+                    StatusPill(text: connector.stateText, tint: connector.isDegraded ? .orange : connector.running && connector.ready ? .green : connector.ready ? .blue : .orange)
                     Button("Run Check") {
                         model.runConnectorCheck(connector)
                     }
                     .disabled(model.busy)
+                    Spacer()
                 }
+            }
+
+            if let wizard {
+                ConnectorSetupFields(wizard: wizard, values: $values)
             } else {
                 EmptyState(symbol: "wrench.and.screwdriver", title: "Setup unavailable")
             }
         }
         .onAppear {
-            if let wizard { values = connectorValues(from: wizard) }
+            loadValues()
         }
         .onChange(of: wizard) { _, next in
-            if let next { values = connectorValues(from: next) }
+            guard next != nil else { return }
+            loadValues()
         }
+        .onChange(of: connector.id) { _, _ in
+            loadValues()
+        }
+    }
+
+    private var connectorDirty: Bool {
+        wizard != nil && values != savedValues
+    }
+
+    private func loadValues() {
+        guard let wizard else {
+            values = [:]
+            savedValues = [:]
+            return
+        }
+        let next = connectorValues(from: wizard)
+        values = next
+        savedValues = next
     }
 }
 
@@ -1038,49 +1138,180 @@ private struct WakeupsPane: View {
     @ObservedObject var model: WakefieldModel
     @State private var selectedWakeupId: String?
     @State private var draft = WakeupDraft(wakeup: nil)
+    @State private var savedDraft = WakeupDraft(wakeup: nil)
+    @State private var isEditing = false
 
     var body: some View {
-            HStack(spacing: 0) {
-                List(selection: $selectedWakeupId) {
-                ForEach(model.duties.wakeups) { wakeup in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(wakeup.label)
-                                .font(.headline)
-                            Text(wakeup.wakeTimes.joined(separator: ", "))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+        HStack(spacing: 0) {
+            VStack(spacing: 0) {
+                ZStack(alignment: .bottomLeading) {
+                    List(selection: $selectedWakeupId) {
+                        ForEach(model.duties.wakeups) { wakeup in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(wakeup.label)
+                                        .font(.headline)
+                                    Text(wakeup.wakeTimes.joined(separator: ", "))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Toggle("", isOn: Binding(
+                                    get: { wakeup.enabled },
+                                    set: { model.setWakeup(wakeup, enabled: $0) }
+                                ))
+                                .toggleStyle(.switch)
+                            }
+                            .padding(.vertical, 5)
+                            .tag(wakeup.id)
                         }
-                        Spacer()
-                        Toggle("", isOn: Binding(
-                            get: { wakeup.enabled },
-                            set: { model.setWakeup(wakeup, enabled: $0) }
-                        ))
-                        .toggleStyle(.switch)
+                        ListPaneFooterSpacer()
                     }
-                    .padding(.vertical, 5)
-                    .tag(wakeup.id)
+                    ListPaneFooterAction(title: "New Wakeup", systemImage: "plus.circle", disabled: model.busy) {
+                        newWakeup()
+                    }
                 }
             }
             .frame(width: 270)
             Divider()
-            WakeupEditor(model: model, selectedWakeup: selectedWakeup, draft: $draft) {
-                selectedWakeupId = nil
-                draft = WakeupDraft(wakeup: nil, suggestedIndex: model.duties.wakeups.count + 1)
-            }
+            wakeupDetail
         }
         .onAppear {
             let wakeup = selectedWakeup ?? model.duties.wakeups.first
             selectedWakeupId = wakeup?.id
-            draft = WakeupDraft(wakeup: wakeup, suggestedIndex: model.duties.wakeups.count + 1)
+            resetDraft(wakeup: wakeup)
         }
         .onChange(of: selectedWakeupId) { _, _ in
-            draft = WakeupDraft(wakeup: selectedWakeup, suggestedIndex: model.duties.wakeups.count + 1)
+            isEditing = false
+            resetDraft(wakeup: selectedWakeup)
+        }
+        .onChange(of: model.duties.wakeups) { _, _ in
+            if isEditing, selectedWakeupId == draft.id, selectedWakeup != nil {
+                isEditing = false
+                resetDraft(wakeup: selectedWakeup)
+            } else if !isEditing, selectedWakeupId == nil {
+                selectedWakeupId = model.duties.wakeups.first?.id
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var wakeupDetail: some View {
+        if isEditing {
+            WakeupEditor(
+                model: model,
+                selectedWakeup: selectedWakeup,
+                draft: $draft,
+                savedDraft: savedDraft,
+                isNew: selectedWakeup == nil,
+                saveAction: saveWakeup,
+                cancelAction: cancelEdit,
+                deleteAction: deleteWakeup
+            )
+        } else if let selectedWakeup {
+            WakeupDetailPane(wakeup: selectedWakeup, duties: model.duties.duties) {
+                resetDraft(wakeup: selectedWakeup)
+                isEditing = true
+            }
+        } else {
+            EmptyState(symbol: "alarm", title: "No wakeup selected")
         }
     }
 
     private var selectedWakeup: Wakeup? {
         model.duties.wakeups.first(where: { $0.id == selectedWakeupId })
+    }
+
+    private func newWakeup() {
+        selectedWakeupId = nil
+        draft = WakeupDraft(wakeup: nil, suggestedIndex: model.duties.wakeups.count + 1)
+        savedDraft = draft
+        isEditing = true
+    }
+
+    private func resetDraft(wakeup: Wakeup?) {
+        draft = WakeupDraft(wakeup: wakeup, suggestedIndex: model.duties.wakeups.count + 1)
+        savedDraft = draft
+    }
+
+    private func saveWakeup() {
+        selectedWakeupId = draft.id
+        savedDraft = draft
+        model.saveWakeup(draft)
+    }
+
+    private func cancelEdit() {
+        if let selectedWakeup {
+            resetDraft(wakeup: selectedWakeup)
+            isEditing = false
+        } else {
+            selectedWakeupId = model.duties.wakeups.first?.id
+            resetDraft(wakeup: selectedWakeup)
+            isEditing = false
+        }
+    }
+
+    private func deleteWakeup() {
+        guard let selectedWakeup else { return }
+        model.deleteWakeup(selectedWakeup)
+        selectedWakeupId = model.duties.wakeups.first(where: { $0.id != selectedWakeup.id })?.id
+        isEditing = false
+    }
+}
+
+private struct WakeupDetailPane: View {
+    let wakeup: Wakeup
+    let duties: [DutyDefinition]
+    let editAction: () -> Void
+
+    var body: some View {
+        OverviewPane {
+            OverviewHeader(
+                kind: "Wakeup",
+                title: wakeup.label,
+                subtitle: wakeup.enabled ? "Scheduled dispatch into the selected Codex thread." : "Paused until this wakeup is turned back on.",
+                symbolName: "alarm",
+                editAction: editAction
+            ) {
+                OverviewBadge(
+                    title: wakeup.enabled ? "On" : "Off",
+                    systemImage: wakeup.enabled ? "checkmark.circle.fill" : "pause.circle",
+                    tint: wakeup.enabled ? .green : .secondary
+                )
+                OverviewBadge(
+                    title: dispatchLabel(wakeup.dispatchMode ?? "ipc"),
+                    systemImage: "arrowshape.turn.up.right.circle.fill",
+                    tint: .blue
+                )
+            }
+
+            OverviewMetricGrid(metrics: [
+                OverviewMetric(label: "Runs at", value: wakeup.wakeTimes.joined(separator: ", "), symbolName: "clock"),
+                OverviewMetric(label: "Next run", value: nextRunText, symbolName: "calendar")
+            ])
+
+            OverviewSection(title: "Assigned Duties") {
+                OverviewPillList(items: dutyLabels, emptyText: "No duties are attached to this wakeup yet.", symbolName: "checkmark.circle")
+            }
+
+            OverviewSection(title: "Identifier") {
+                OverviewCodeLine(wakeup.id)
+            }
+        }
+    }
+
+    private var dutyLabels: [String] {
+        let selected = wakeup.selectedDutyIds
+        let labels = selected.map { id in
+            duties.first(where: { $0.id == id })?.label ?? id
+        }
+        return labels
+    }
+
+    private var nextRunText: String {
+        if !wakeup.enabled { return "Paused" }
+        if wakeup.due == true { return "Due now" }
+        return formattedWakefieldDate(wakeup.nextRunAt) ?? "Not scheduled"
     }
 }
 
@@ -1088,18 +1319,34 @@ private struct WakeupEditor: View {
     @ObservedObject var model: WakefieldModel
     let selectedWakeup: Wakeup?
     @Binding var draft: WakeupDraft
-    let newAction: () -> Void
+    let savedDraft: WakeupDraft
+    let isNew: Bool
+    let saveAction: () -> Void
+    let cancelAction: () -> Void
+    let deleteAction: () -> Void
 
     var body: some View {
-        FormPane {
+        ActionFormPane(
+            showsAction: isNew || draft != savedDraft,
+            title: isNew ? "Create Wakeup" : "Save Wakeup",
+            systemImage: "checkmark.circle.fill",
+            disabled: model.busy || draft.id.isEmpty || draft.label.isEmpty || draft.times.isEmpty || draft.dutyIds.isEmpty,
+            action: saveAction
+        ) {
             HStack {
-                Text("Wakeup")
+                Text(isNew ? "New Wakeup" : "Edit Wakeup")
                     .font(.title3.weight(.semibold))
                 Spacer()
-                Button {
-                    newAction()
-                } label: {
-                    Label("New", systemImage: "plus.circle")
+                if selectedWakeup != nil {
+                    Button(role: .destructive) {
+                        deleteAction()
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                    .disabled(model.busy)
+                }
+                Button("Cancel") {
+                    cancelAction()
                 }
             }
 
@@ -1142,26 +1389,42 @@ private struct WakeupEditor: View {
                     }
                 }
             }
-
-            HStack {
-                Button {
-                    model.saveWakeup(draft)
-                } label: {
-                    Label("Save Wakeup", systemImage: "checkmark.circle")
-                }
-                .disabled(model.busy || draft.id.isEmpty || draft.label.isEmpty || draft.times.isEmpty || draft.dutyIds.isEmpty)
-
-                if let selectedWakeup {
-                    Button(role: .destructive) {
-                        model.deleteWakeup(selectedWakeup)
-                        newAction()
-                    } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-                    .disabled(model.busy)
-                }
-            }
         }
+    }
+}
+
+private struct ListPaneFooterAction: View {
+    let title: String
+    let systemImage: String
+    let disabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.callout.weight(.semibold))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(disabled ? .tertiary : .secondary)
+        .disabled(disabled)
+        .padding(.leading, 18)
+        .padding(.bottom, 10)
+    }
+}
+
+private struct ListPaneFooterSpacer: View {
+    var body: some View {
+        Color.clear
+            .frame(height: 34)
+            .disabled(true)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
     }
 }
 
@@ -1169,41 +1432,188 @@ private struct DutiesPane: View {
     @ObservedObject var model: WakefieldModel
     @State private var selectedDutyId: String?
     @State private var draft = DutyDraft(duty: nil)
+    @State private var savedDraft = DutyDraft(duty: nil)
+    @State private var isEditing = false
 
     var body: some View {
         HStack(spacing: 0) {
-            List(selection: $selectedDutyId) {
-                ForEach(model.duties.duties) { duty in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(duty.label)
-                            .font(.headline)
-                        Text((duty.skills ?? []).joined(separator: ", "))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+            VStack(spacing: 0) {
+                ZStack(alignment: .bottomLeading) {
+                    List(selection: $selectedDutyId) {
+                        ForEach(model.duties.duties) { duty in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(duty.label)
+                                    .font(.headline)
+                                Text((duty.skills ?? []).joined(separator: ", "))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 5)
+                            .tag(duty.id)
+                        }
+                        ListPaneFooterSpacer()
                     }
-                    .padding(.vertical, 5)
-                    .tag(duty.id)
+                    ListPaneFooterAction(title: "New Duty", systemImage: "plus.circle", disabled: model.busy) {
+                        newDuty()
+                    }
                 }
             }
             .frame(width: 270)
             Divider()
-            DutyEditor(model: model, selectedDuty: selectedDuty, draft: $draft) {
-                selectedDutyId = nil
-                draft = DutyDraft(duty: nil, suggestedIndex: model.duties.duties.count + 1)
-            }
+            dutyDetail
         }
         .onAppear {
             let duty = selectedDuty ?? model.duties.duties.first
             selectedDutyId = duty?.id
-            draft = DutyDraft(duty: duty, suggestedIndex: model.duties.duties.count + 1)
+            resetDraft(duty: duty)
         }
         .onChange(of: selectedDutyId) { _, _ in
-            draft = DutyDraft(duty: selectedDuty, suggestedIndex: model.duties.duties.count + 1)
+            isEditing = false
+            resetDraft(duty: selectedDuty)
+        }
+        .onChange(of: model.duties.duties) { _, _ in
+            if isEditing, selectedDutyId == draft.id, selectedDuty != nil {
+                isEditing = false
+                resetDraft(duty: selectedDuty)
+            } else if !isEditing, selectedDutyId == nil {
+                selectedDutyId = model.duties.duties.first?.id
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var dutyDetail: some View {
+        if isEditing {
+            DutyEditor(
+                model: model,
+                selectedDuty: selectedDuty,
+                draft: $draft,
+                savedDraft: savedDraft,
+                isNew: selectedDuty == nil,
+                saveAction: saveDuty,
+                cancelAction: cancelEdit,
+                deleteAction: deleteDuty
+            )
+        } else if let selectedDuty {
+            DutyDetailPane(duty: selectedDuty, wakeups: model.duties.wakeups) {
+                resetDraft(duty: selectedDuty)
+                isEditing = true
+            }
+        } else {
+            EmptyState(symbol: "checklist", title: "No duty selected")
         }
     }
 
     private var selectedDuty: DutyDefinition? {
         model.duties.duties.first(where: { $0.id == selectedDutyId })
+    }
+
+    private func newDuty() {
+        selectedDutyId = nil
+        draft = DutyDraft(duty: nil, suggestedIndex: model.duties.duties.count + 1)
+        savedDraft = draft
+        isEditing = true
+    }
+
+    private func resetDraft(duty: DutyDefinition?) {
+        draft = DutyDraft(duty: duty, suggestedIndex: model.duties.duties.count + 1)
+        savedDraft = draft
+    }
+
+    private func saveDuty() {
+        selectedDutyId = draft.id
+        savedDraft = draft
+        model.saveDuty(draft)
+    }
+
+    private func cancelEdit() {
+        if let selectedDuty {
+            resetDraft(duty: selectedDuty)
+            isEditing = false
+        } else {
+            selectedDutyId = model.duties.duties.first?.id
+            resetDraft(duty: selectedDuty)
+            isEditing = false
+        }
+    }
+
+    private func deleteDuty() {
+        guard let selectedDuty else { return }
+        model.deleteDuty(selectedDuty)
+        selectedDutyId = model.duties.duties.first(where: { $0.id != selectedDuty.id })?.id
+        isEditing = false
+    }
+}
+
+private struct DutyDetailPane: View {
+    let duty: DutyDefinition
+    let wakeups: [Wakeup]
+    let editAction: () -> Void
+
+    var body: some View {
+        OverviewPane {
+            OverviewHeader(
+                kind: "Duty",
+                title: duty.label,
+                subtitle: duty.enabled == false ? "Disabled duty. Wakeups can keep it attached, but it will not run." : "Reusable work block that wakeups can dispatch.",
+                symbolName: "checklist",
+                editAction: editAction
+            ) {
+                OverviewBadge(
+                    title: duty.enabled == false ? "Off" : "On",
+                    systemImage: duty.enabled == false ? "pause.circle" : "checkmark.circle.fill",
+                    tint: duty.enabled == false ? .secondary : .green
+                )
+                OverviewBadge(
+                    title: skillCountText,
+                    systemImage: "sparkles",
+                    tint: .blue
+                )
+            }
+
+            OverviewMetricGrid(metrics: [
+                OverviewMetric(label: "Status", value: duty.enabled == false ? "Off" : "On", symbolName: duty.enabled == false ? "pause.circle" : "checkmark.circle"),
+                OverviewMetric(label: "Skills", value: skillCountText, symbolName: "sparkles"),
+                OverviewMetric(label: "Wakeups", value: wakeupCountText, symbolName: "alarm")
+            ])
+
+            OverviewSection(title: "Skills") {
+                OverviewPillList(items: duty.skills ?? [], emptyText: "No skills are attached to this duty yet.", symbolName: "bolt.circle")
+            }
+
+            OverviewSection(title: "Scheduled In") {
+                OverviewPillList(items: wakeupLabels, emptyText: "No wakeups currently include this duty.", symbolName: "alarm")
+            }
+
+            OverviewSection(title: "Prompt") {
+                OverviewTextBlock(
+                    text: trimmedNonEmpty(duty.prompt) ?? "No additional prompt. The duty runs from its skills and the agent's general instructions.",
+                    isEmpty: trimmedNonEmpty(duty.prompt) == nil
+                )
+            }
+
+            OverviewSection(title: "Identifier") {
+                OverviewCodeLine(duty.id)
+            }
+        }
+    }
+
+    private var skillCountText: String {
+        let count = duty.skills?.count ?? 0
+        if count == 1 { return "1 skill" }
+        return "\(count) skills"
+    }
+
+    private var wakeupLabels: [String] {
+        wakeups
+            .filter { $0.selectedDutyIds.contains(duty.id) }
+            .map(\.label)
+    }
+
+    private var wakeupCountText: String {
+        let count = wakeupLabels.count
+        if count == 1 { return "1 wakeup" }
+        return "\(count) wakeups"
     }
 }
 
@@ -1211,20 +1621,37 @@ private struct DutyEditor: View {
     @ObservedObject var model: WakefieldModel
     let selectedDuty: DutyDefinition?
     @Binding var draft: DutyDraft
-    let newAction: () -> Void
+    let savedDraft: DutyDraft
+    let isNew: Bool
+    let saveAction: () -> Void
+    let cancelAction: () -> Void
+    let deleteAction: () -> Void
 
     var body: some View {
-        FormPane {
+        ActionFormPane(
+            showsAction: isNew || draft != savedDraft,
+            title: isNew ? "Create Duty" : "Save Duty",
+            systemImage: "checkmark.circle.fill",
+            disabled: model.busy || draft.id.isEmpty || draft.label.isEmpty,
+            action: saveAction
+        ) {
             HStack {
-                Text("Duty")
+                Text(isNew ? "New Duty" : "Edit Duty")
                     .font(.title3.weight(.semibold))
                 Spacer()
-                Button {
-                    newAction()
-                } label: {
-                    Label("New", systemImage: "plus.circle")
+                if selectedDuty != nil {
+                    Button(role: .destructive) {
+                        deleteAction()
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                    .disabled(model.busy)
+                }
+                Button("Cancel") {
+                    cancelAction()
                 }
             }
+
             LabeledControl("Name") {
                 TextField("Inventory Check", text: $draft.label)
                     .textFieldStyle(.roundedBorder)
@@ -1249,88 +1676,84 @@ private struct DutyEditor: View {
                     .padding(6)
                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 7))
             }
-            HStack {
-                Button {
-                    model.saveDuty(draft)
-                } label: {
-                    Label("Save Duty", systemImage: "checkmark.circle")
-                }
-                .disabled(model.busy || draft.id.isEmpty || draft.label.isEmpty)
-
-                if let selectedDuty {
-                    Button(role: .destructive) {
-                        model.deleteDuty(selectedDuty)
-                        newAction()
-                    } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-                    .disabled(model.busy)
-                }
-            }
         }
     }
 }
 
-private struct ChatPane: View {
-    @ObservedObject var model: WakefieldModel
+private struct ActionFormPane<Content: View>: View {
+    let showsAction: Bool
+    let title: String
+    let systemImage: String
+    let disabled: Bool
+    let action: () -> Void
+    let content: Content
 
-    var body: some View {
-        List {
-            Section("Selected") {
-                HStack {
-                    Image(systemName: "bubble.left.and.text.bubble.right.fill")
-                        .foregroundStyle(.blue)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(model.snapshot?.agent?.name ?? "Wakefield")
-                            .font(.headline)
-                        Text(selectedThreadName)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(.vertical, 4)
-            }
-
-            Section("Recent Codex Chats") {
-                ForEach(model.threads) { thread in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(thread.displayName)
-                                .font(.headline)
-                            Text(thread.detail)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                        Spacer()
-                        if thread.threadId == model.snapshot?.agent?.threadId {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                        } else {
-                            Button("Select") {
-                                model.selectThread(thread)
-                            }
-                            .disabled(model.busy)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                    .help(thread.threadId)
-                }
-            }
-        }
+    init(
+        showsAction: Bool,
+        title: String,
+        systemImage: String,
+        disabled: Bool,
+        action: @escaping () -> Void,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.showsAction = showsAction
+        self.title = title
+        self.systemImage = systemImage
+        self.disabled = disabled
+        self.action = action
+        self.content = content()
     }
 
-    private var selectedThreadName: String {
-        guard let threadId = model.snapshot?.agent?.threadId else { return "No chat selected" }
-        if let thread = model.threads.first(where: { $0.threadId == threadId }) {
-            return thread.displayName
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            FormPane(bottomInset: showsAction ? 54 : 0) {
+                content
+            }
+            BottomSaveAction(
+                title: title,
+                systemImage: systemImage,
+                isVisible: showsAction,
+                isDisabled: disabled,
+                action: action
+            )
         }
-        return "Selected Codex chat"
+        .animation(.easeOut(duration: 0.16), value: showsAction)
+    }
+}
+
+private struct BottomSaveAction: View {
+    let title: String
+    let systemImage: String
+    let isVisible: Bool
+    let isDisabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        if isVisible {
+            Button(action: action) {
+                Label(title, systemImage: systemImage)
+                    .font(.headline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white)
+            .background(isDisabled ? Color.accentColor.opacity(0.45) : Color.accentColor)
+            .disabled(isDisabled)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
     }
 }
 
 private struct FormPane<Content: View>: View {
-    @ViewBuilder var content: Content
+    let bottomInset: CGFloat
+    let content: Content
+
+    init(bottomInset: CGFloat = 0, @ViewBuilder content: () -> Content) {
+        self.bottomInset = bottomInset
+        self.content = content()
+    }
 
     var body: some View {
         ScrollView {
@@ -1338,9 +1761,258 @@ private struct FormPane<Content: View>: View {
                 content
             }
             .padding(22)
+            .padding(.bottom, bottomInset)
             .frame(maxWidth: 560, alignment: .leading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+private struct OverviewPane<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                content
+            }
+            .padding(22)
+            .frame(maxWidth: 620, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+private struct OverviewHeader<Badges: View>: View {
+    let kind: String
+    let title: String
+    let subtitle: String
+    let symbolName: String
+    let editAction: () -> Void
+    let badges: Badges
+
+    init(
+        kind: String,
+        title: String,
+        subtitle: String,
+        symbolName: String,
+        editAction: @escaping () -> Void,
+        @ViewBuilder badges: () -> Badges
+    ) {
+        self.kind = kind
+        self.title = title
+        self.subtitle = subtitle
+        self.symbolName = symbolName
+        self.editAction = editAction
+        self.badges = badges()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: symbolName)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .frame(width: 28, height: 28)
+                        .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
+                    Text(kind)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button {
+                    editAction()
+                } label: {
+                    Label("Edit", systemImage: "pencil")
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title)
+                    .font(.title2.weight(.semibold))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(subtitle)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 8) {
+                badges
+            }
+        }
+    }
+}
+
+private struct OverviewBadge: View {
+    let title: String
+    let systemImage: String
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: systemImage)
+            Text(title)
+                .lineLimit(1)
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(tint)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(tint.opacity(0.14), in: Capsule())
+    }
+}
+
+private struct OverviewMetric: Identifiable {
+    let id = UUID()
+    let label: String
+    let value: String
+    let symbolName: String
+}
+
+private struct OverviewMetricGrid: View {
+    let metrics: [OverviewMetric]
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 136), spacing: 8)
+    ]
+
+    var body: some View {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+            ForEach(metrics) { metric in
+                OverviewMetricTile(metric: metric)
+            }
+        }
+    }
+}
+
+private struct OverviewMetricTile: View {
+    let metric: OverviewMetric
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: metric.symbolName)
+                    .frame(width: 16)
+                Text(metric.label)
+                    .lineLimit(1)
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+
+            Text(metric.value.isEmpty ? "None" : metric.value)
+                .font(.title3.weight(.semibold))
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .frame(minHeight: 68, alignment: .topLeading)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct OverviewSection<Content: View>: View {
+    let title: String
+    let content: Content
+
+    init(title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.headline)
+            content
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct OverviewPillList: View {
+    let items: [String]
+    let emptyText: String
+    let symbolName: String
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 150), spacing: 8)
+    ]
+
+    var body: some View {
+        if items.isEmpty {
+            OverviewTextBlock(text: emptyText, isEmpty: true)
+        } else {
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+                ForEach(items, id: \.self) { item in
+                    HStack(spacing: 7) {
+                        Image(systemName: symbolName)
+                            .foregroundStyle(Color.accentColor)
+                            .frame(width: 16)
+                        Text(item)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(.callout.weight(.medium))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        }
+    }
+}
+
+private struct OverviewTextBlock: View {
+    let text: String
+    let isEmpty: Bool
+
+    var body: some View {
+        Text(text)
+            .font(.callout)
+            .foregroundStyle(isEmpty ? .secondary : .primary)
+            .lineLimit(6)
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct OverviewCodeLine: View {
+    let text: String
+
+    init(_ text: String) {
+        self.text = text
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "number")
+                .foregroundStyle(.secondary)
+            Text(text)
+                .font(.system(.body, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 
@@ -1361,6 +2033,27 @@ private struct LabeledControl<Content: View>: View {
             content
         }
     }
+}
+
+private func dispatchLabel(_ value: String) -> String {
+    switch value {
+    case "ipc": return "Codex"
+    case "dry-run": return "Dry run"
+    case "manual": return "Manual"
+    default: return value
+    }
+}
+
+private let wakefieldOverviewDateFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.dateStyle = .medium
+    formatter.timeStyle = .short
+    return formatter
+}()
+
+private func formattedWakefieldDate(_ value: String?) -> String? {
+    guard let value, let date = parseWakefieldDate(value) else { return nil }
+    return wakefieldOverviewDateFormatter.string(from: date)
 }
 
 private struct EmptyState: View {

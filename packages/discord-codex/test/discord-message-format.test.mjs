@@ -46,16 +46,16 @@ test("Discord prompts trigger the Wakefield connector skill", () => {
     }
   });
 
-  assert.match(prompt, /Use \$wakefield-discord for Discord connector routing\./);
+  assert.match(prompt, /Use \$discord-connector for Discord connector routing\./);
   assert.doesNotMatch(prompt, /external-source-replies/);
   assert.doesNotMatch(prompt, /Codex-only replies are not visible to Discord/);
   assert.doesNotMatch(prompt, /Keep reasoning\/tool traces out of Discord/);
 });
 
-test("Discord prompts can include a bounded Wakefield memory card", () => {
+test("Discord prompts ignore connector memory payloads", () => {
   const prompt = formatDiscordMessageForCodex({
     target: { id: "rick", displayName: "Rick" },
-    memory: "Wakefield context for this external message\nActive context:\n- joe-package: [active] Joe package follow-up",
+    memory: "Context for this external message\nActive context:\n- joe-package: [active] Joe package follow-up",
     message: {
       id: "message-1",
       guildId: null,
@@ -69,9 +69,9 @@ test("Discord prompts can include a bounded Wakefield memory card", () => {
     }
   });
 
-  assert.match(prompt, /Wakefield context for this external message\nActive context:/);
-  assert.match(prompt, /joe-package/);
-  assert.match(prompt, /joe-package[\s\S]+Message:\nany update\?/);
+  assert.doesNotMatch(prompt, /Context for this external message/);
+  assert.doesNotMatch(prompt, /joe-package/);
+  assert.match(prompt, /Message:\nany update\?/);
 });
 
 test("DM prompts point Rick at the Discord DM tool", () => {
@@ -92,7 +92,7 @@ test("DM prompts point Rick at the Discord DM tool", () => {
 
   assert.match(prompt, /- Text reply target: discord_send_dm userId=user-1/);
   assert.match(prompt, /- Load recent context batch: discord_read_recent_batch userId=user-1/);
-  assert.match(prompt, /Use \$wakefield-discord for Discord connector routing\./);
+  assert.match(prompt, /Use \$discord-connector for Discord connector routing\./);
   assert.doesNotMatch(prompt, /use `discord_send_message`/);
 });
 
@@ -113,6 +113,6 @@ test("guild prompts keep acknowledgements in the source channel", () => {
   });
 
   assert.match(prompt, /- Text reply target: discord_send_message channelId=channel-1 replyToMessageId=message-1/);
-  assert.match(prompt, /Use \$wakefield-discord for Discord connector routing\./);
+  assert.match(prompt, /Use \$discord-connector for Discord connector routing\./);
   assert.doesNotMatch(prompt, /For long or tool-heavy work/);
 });

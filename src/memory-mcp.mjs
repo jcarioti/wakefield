@@ -16,7 +16,12 @@ export const MEMORY_MCP_TOOLS = [
   "wakefield_memory_get_matter",
   "wakefield_memory_upsert_matter",
   "wakefield_memory_archive_matter",
-  "wakefield_memory_forget"
+  "wakefield_memory_forget",
+  "wakefield_scheduler_status",
+  "wakefield_scheduler_configure_duty",
+  "wakefield_scheduler_configure_wakeup",
+  "wakefield_scheduler_delete_duty",
+  "wakefield_scheduler_delete_wakeup"
 ];
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));

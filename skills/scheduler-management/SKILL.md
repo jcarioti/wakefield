@@ -1,9 +1,9 @@
 ---
-name: wakefield-scheduler-management
-description: Use when a Wakefield agent is asked to add, edit, delete, review, or propose its own duties and wakeups. Covers safe self-management of recurring work through Wakefield CLI commands.
+name: scheduler-management
+description: Use when an agent is asked to add, edit, delete, review, or propose its own duties and wakeups. Covers safe self-management of recurring work through scheduler MCP tools or CLI fallback commands.
 ---
 
-# Wakefield Scheduler Management
+# Scheduler Management
 
 Use this skill when the selected agent needs to manage recurring duties or wakeups through conversation.
 
@@ -16,7 +16,19 @@ Use this skill when the selected agent needs to manage recurring duties or wakeu
 5. Before deleting a duty, check whether wakeups reference it and remove those references or ask before deleting both.
 6. Prefer small, reviewable changes: one duty and one wakeup at a time unless the user asks for a larger setup.
 
-## Useful Commands
+## Preferred MCP Tools
+
+Use the scheduler MCP tools when they are available. They mutate the agent's scheduler state directly, instead of trying to create Codex automations:
+
+- `wakefield_scheduler_status`
+- `wakefield_scheduler_configure_duty`
+- `wakefield_scheduler_configure_wakeup`
+- `wakefield_scheduler_delete_duty`
+- `wakefield_scheduler_delete_wakeup`
+
+Create or change a duty before attaching it to a wakeup. Use `dispatchMode: "ipc"` for real scheduled delivery to the selected Codex thread, and `dispatchMode: "dry-run"` for review/testing.
+
+## CLI Fallback
 
 Review current duties and wakeups:
 

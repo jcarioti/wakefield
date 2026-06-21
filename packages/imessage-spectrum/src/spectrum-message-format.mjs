@@ -26,7 +26,7 @@ export function matchesSpectrumTarget({ space, message, target }) {
   return false;
 }
 
-export function formatSpectrumMessageForCodex({ space, message, target, content, contacts = null, connectorGuidance = "Use $wakefield-imessage for iMessage connector routing.", memory = "" }) {
+export function formatSpectrumMessageForCodex({ space, message, target, content, contacts = null, connectorGuidance = "Use $imessage-connector for iMessage connector routing." }) {
   const sender = message.sender?.id || "unknown";
   const senderLabel = formatContactAddress(sender, contacts);
   const receivedAt = normalizeTimestamp(message.timestamp);
@@ -49,8 +49,6 @@ export function formatSpectrumMessageForCodex({ space, message, target, content,
     `Received: ${receivedAt}`,
     connectorGuidance,
     spaceType === "group" ? "Group behavior: monitor quietly like #boardroom. Reply only when addressed, when a reply was requested, or when customer/business risk or a human-action blocker needs concise clarification." : null,
-    memory ? "" : null,
-    memory || null,
     "",
     reaction ? "Current event:" : "Message:",
     currentEventText,

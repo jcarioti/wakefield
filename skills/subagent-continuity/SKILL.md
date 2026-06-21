@@ -1,11 +1,11 @@
 ---
-name: wakefield-subagent-continuity
-description: "Use when a Wakefield-powered Codex agent spawns, resumes, waits on, or hands work to Codex subagents during long-running sessions that may compact repeatedly. Keeps only validated short-term handles needed across compaction: subagent id, display label, responsibility, and reason."
+name: subagent-continuity
+description: "Use when a Codex agent spawns, resumes, waits on, or hands work to Codex subagents during long-running sessions that may compact repeatedly. Keeps only validated short-term handles needed across compaction: subagent id, display label, responsibility, and reason."
 ---
 
-# Wakefield Subagent Continuity
+# Subagent Continuity
 
-Use this when creating or reusing Codex subagents for a Wakefield-powered agent.
+Use this when creating or reusing Codex subagents for the selected agent.
 
 ## Rule
 
@@ -36,4 +36,4 @@ Keep entries short. Do not create a task database, duplicate the subagent's stat
 
 Use the selected agent's configured continuity location. If no project-specific location exists, use the agent profile's local memory or session summary file.
 
-For Wakefield profiles, prefer a path under the agent's app-support state directory or the selected project cwd's ignored local state. Do not store durable handles in published docs or generated output folders.
+Prefer a path under the agent's app-support state directory or the selected project cwd's ignored local state. Do not store durable handles in published docs or generated output folders.

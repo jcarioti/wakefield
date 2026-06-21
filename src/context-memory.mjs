@@ -160,7 +160,7 @@ export async function contextMemory(agent, {
   limitNotes = 3,
   limitMatters = 3,
   maxChars = 1200,
-  heading = "Wakefield scoped memory",
+  heading = "Scoped memory",
   injection = null
 } = {}) {
   const recalled = await recallContext(agent, {
@@ -185,7 +185,7 @@ export async function contextMemory(agent, {
 }
 
 export function formatContextMemory({ notes = [], matters = [] } = {}, {
-  heading = "Wakefield scoped memory"
+  heading = "Scoped memory"
 } = {}) {
   if (notes.length === 0 && matters.length === 0) return "";
   const lines = [heading];
@@ -202,7 +202,7 @@ export function formatContextMemory({ notes = [], matters = [] } = {}, {
 
 export function formatNotes(document) {
   const notes = normalizeNotesDocument(document).notes;
-  if (notes.length === 0) return "No Wakefield notes.";
+  if (notes.length === 0) return "No scoped notes.";
   return notes.map(formatNoteLine).join("\n");
 }
 
@@ -211,7 +211,7 @@ export function formatMatters(document, {
 } = {}) {
   const matters = normalizeMattersDocument(document).matters
     .filter((matter) => includeArchived || matter.status !== "archived");
-  if (matters.length === 0) return "No Wakefield matters.";
+  if (matters.length === 0) return "No active matters.";
   return matters.map(formatMatterLine).join("\n");
 }
 
@@ -259,18 +259,6 @@ export function scopeFromOptions(options = {}) {
     connector: options.connector,
     sender: options.sender,
     conversation: options.conversation || options.conversationId
-  });
-}
-
-export function externalMessageScope(message) {
-  return normalizeScope({
-    connector: message.connector,
-    sender: message.sender,
-    conversation: message.conversationId,
-    channel: message.conversationId,
-    person: message.contactId || message.contact?.id || message.contact?.displayName || message.sender,
-    room: message.metadata?.roomId || message.metadata?.channelId || message.metadata?.spaceId || null,
-    topic: [message.subject, message.metadata?.topic].filter(Boolean)
   });
 }
 
@@ -589,10 +577,13 @@ function normalizeMatter(matter, { now = new Date() } = {}) {
 }
 
 function rankItems(items, { terms, scope, kind }) {
-  return items
+  const ranked = items
     .filter((item) => !scopeConflicts(item.scope, scope) || queryNamesScopedSubject(item, terms))
-    .map((item) => ({ item, score: scoreItem(item, { terms, scope, kind }) }))
+    .map((item) => ({ item, ...scoreItem(item, { terms, scope, kind }) }))
     .filter(({ score }) => score > 0)
+  const hasQueryMatch = terms.length > 0 && ranked.some(({ queryScore }) => queryScore > 0);
+  return ranked
+    .filter(({ queryScore, strongScopeScore }) => !hasQueryMatch || queryScore > 0 || strongScopeScore > 0)
     .sort((left, right) => right.score - left.score || String(right.item.updatedAt || "").localeCompare(String(left.item.updatedAt || "")))
     .map(({ item }) => item);
 }
@@ -637,13 +628,97 @@ function scopeValuesOverlap(left, right) {
 }
 
 function scoreItem(item, { terms, scope, kind }) {
-  const itemTerms = searchableText(item);
-  const queryScore = terms.reduce((score, term) => score + (itemTerms.includes(term) ? 3 : 0), 0);
+  const evidence = searchEvidence(item, terms);
+  const queryScore = evidence.score;
   const scopeScore = scopeOverlapScore(item.scope, scope);
-  if (terms.length === 0 && scopeScore === 0) return kind === "matter" && ACTIVE_MATTER_STATUSES.has(item.status) ? 1 : 0;
-  if (queryScore === 0 && scopeScore === 0) return 0;
+  const strongScopeScore = strongScopeOverlapScore(item.scope, scope);
+  if (isBroadPolicyMemory(item) && queryScore > 0 && !hasStrongPolicyEvidence(item, evidence, scope)) {
+    return { score: 0, queryScore, scopeScore, strongScopeScore };
+  }
+  if (terms.length === 0 && scopeScore === 0) {
+    return {
+      score: kind === "matter" && ACTIVE_MATTER_STATUSES.has(item.status) ? 1 : 0,
+      queryScore,
+      scopeScore,
+      strongScopeScore
+    };
+  }
+  if (queryScore === 0 && scopeScore === 0) return { score: 0, queryScore, scopeScore, strongScopeScore };
   const statusScore = kind === "matter" ? matterStatusScore(item.status) : 2;
-  return queryScore + scopeScore + statusScore;
+  return {
+    score: queryScore + scopeScore + statusScore,
+    queryScore,
+    scopeScore,
+    strongScopeScore
+  };
+}
+
+function searchEvidence(item, terms) {
+  const idTokens = searchTokenSet([item.id, item.kind]);
+  const titleTokens = searchTokenSet(item.title);
+  const bodyTokens = searchTokenSet([item.text, item.summary, item.nextAction, item.notifyWhen]);
+  const tagTokens = searchTokenSet(item.tags);
+  const scope = normalizeScope(item.scope);
+  const scopeTokens = searchTokenSet(Object.values(scope).flat());
+  const policyScopeTokens = searchTokenSet([scope.tasks, scope.topics, scope.cases].flat());
+  let score = 0;
+  const hits = new Set();
+  let contentHitCount = 0;
+  let scopeHitCount = 0;
+  let policyScopeHitCount = 0;
+
+  for (const term of terms) {
+    let matched = false;
+    if (idTokens.has(term) || titleTokens.has(term)) {
+      score += 5;
+      contentHitCount += 1;
+      matched = true;
+    }
+    if (bodyTokens.has(term)) {
+      score += 3;
+      contentHitCount += 1;
+      matched = true;
+    }
+    if (tagTokens.has(term)) {
+      score += 2;
+      contentHitCount += 1;
+      matched = true;
+    }
+    if (scopeTokens.has(term)) {
+      score += 4;
+      scopeHitCount += 1;
+      matched = true;
+    }
+    if (policyScopeTokens.has(term)) {
+      policyScopeHitCount += 1;
+    }
+    if (matched) hits.add(term);
+  }
+
+  return {
+    score,
+    hitCount: hits.size,
+    contentHitCount,
+    scopeHitCount,
+    policyScopeHitCount
+  };
+}
+
+function isBroadPolicyMemory(item) {
+  const scope = normalizeScope(item.scope);
+  return scope.people.length === 0
+    && scope.rooms.length === 0
+    && scope.channels.length === 0
+    && scope.cases.length === 0
+    && scope.connectors.length === 0
+    && scope.senders.length === 0
+    && scope.conversations.length === 0;
+}
+
+function hasStrongPolicyEvidence(item, evidence, recallScope) {
+  return evidence.policyScopeHitCount > 0
+    || taskTopicCaseOverlapScore(item.scope, recallScope) > 0
+    || evidence.contentHitCount >= 2;
 }
 
 function scopeOverlapScore(left, right) {
@@ -661,26 +736,41 @@ function scopeOverlapScore(left, right) {
   return score;
 }
 
+function taskTopicCaseOverlapScore(left, right) {
+  const normalizedLeft = normalizeScope(left);
+  const normalizedRight = normalizeScope(right);
+  let score = 0;
+  for (const key of ["tasks", "topics", "cases"]) {
+    const wanted = normalizedRight[key];
+    if (wanted.length === 0) continue;
+    const available = new Set(normalizedLeft[key]);
+    for (const value of wanted) {
+      if (available.has(value)) score += 8;
+    }
+  }
+  return score;
+}
+
+function strongScopeOverlapScore(left, right) {
+  const normalizedLeft = normalizeScope(left);
+  const normalizedRight = normalizeScope(right);
+  let score = 0;
+  for (const key of ["rooms", "tasks", "cases", "conversations"]) {
+    const wanted = normalizedRight[key];
+    if (wanted.length === 0) continue;
+    const available = new Set(normalizedLeft[key]);
+    for (const value of wanted) {
+      if (available.has(value)) score += 8;
+    }
+  }
+  return score;
+}
+
 function matterStatusScore(status) {
   if (status === "active") return 4;
   if (status === "waiting") return 3;
   if (status === "resolved") return 1;
   return 0;
-}
-
-function searchableText(item) {
-  return [
-    item.id,
-    item.title,
-    item.text,
-    item.summary,
-    item.kind,
-    item.nextAction,
-    item.notifyWhen,
-    item.tags,
-    item.sources,
-    Object.values(normalizeScope(item.scope)).flat()
-  ].flat().filter(Boolean).join(" ").toLowerCase();
 }
 
 function formatNoteLine(note) {
@@ -758,11 +848,30 @@ function uniqueStrings(values) {
 }
 
 function importantTerms(value) {
-  return uniqueStrings(String(value || "")
-    .toLowerCase()
-    .split(/[^a-z0-9_+.-]+/g)
+  return uniqueStrings(searchTokens(value)
     .filter((term) => term.length >= 3)
     .filter((term) => !STOP_WORDS.has(term)));
+}
+
+function searchTokenSet(value) {
+  return new Set(searchTokens(value));
+}
+
+function searchTokens(value) {
+  return uniqueStrings(optionList(value).join(" ")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/g)
+    .map(normalizeSearchToken)
+    .filter(Boolean));
+}
+
+function normalizeSearchToken(value) {
+  const token = String(value || "").trim();
+  if (!token) return "";
+  if (token.length > 4 && token.endsWith("ies")) return `${token.slice(0, -3)}y`;
+  if (token.length > 4 && token.endsWith("es") && !token.endsWith("ses")) return token.slice(0, -2);
+  if (token.length > 4 && token.endsWith("s") && !token.endsWith("ss")) return token.slice(0, -1);
+  return token;
 }
 
 function firstSentence(value) {
@@ -784,5 +893,7 @@ function slugify(value) {
 
 const STOP_WORDS = new Set([
   "the", "and", "for", "that", "this", "with", "from", "you", "your", "about", "have", "has", "are", "was", "were",
-  "what", "when", "where", "why", "how", "did", "does", "can", "could", "would", "should", "please", "message"
+  "what", "when", "where", "why", "how", "did", "does", "can", "could", "would", "should", "please", "message",
+  "all", "any", "tell", "need", "needs", "needed", "necessary", "include", "including", "item", "items", "sub",
+  "build", "make", "give", "last", "request", "rick", "hey", "hello", "hi", "thanks", "thank"
 ]);

@@ -1,13 +1,13 @@
 ---
-name: wakefield-external-source-replies
-description: "Use when a Wakefield-powered Codex agent handles a request that entered from Discord, iMessage, SMS, email, Slack, MCP, a connector, or any source outside the current Codex UI. Keeps human-visible replies on the source connector, checks stale or replayed events, and keeps private reasoning/tool traces out of external channels."
+name: external-source-replies
+description: "Use when a Codex agent handles a request that entered from Discord, iMessage, SMS, email, Slack, MCP, a connector, or any source outside the current Codex UI. Keeps human-visible replies on the source connector, checks stale or replayed events, and keeps private reasoning/tool traces out of external channels."
 ---
 
-# Wakefield External Source Replies
+# External Source Replies
 
-Use this when a request enters a Wakefield-powered agent from outside the Codex app UI.
+Use this when a request enters the selected Codex agent from outside the Codex app UI.
 
-If the source is a public/shared room, Discord channel, iMessage group, Slack channel, or another multi-person conversation, also use `$wakefield-shared-room-etiquette` before deciding whether a visible reply is appropriate.
+If the source is a public/shared room, Discord channel, iMessage group, Slack channel, or another multi-person conversation, also use `$shared-room-etiquette` before deciding whether a visible reply is appropriate.
 
 ## Rule
 
@@ -35,7 +35,7 @@ If the request needs long-running, live-system, or tool-heavy work, first send a
 - Local iMessage: use the supplied `chatId`, `chatGuid`, `chatIdentifier`, or `to`.
 - Future connectors: use the equivalent source-specific send/reply tool.
 
-Do not broadcast acknowledgements to a public/shared room unless the request originated there and a visible acknowledgement is useful under `$wakefield-shared-room-etiquette`.
+Do not broadcast acknowledgements to a public/shared room unless the request originated there and a visible acknowledgement is useful under `$shared-room-etiquette`.
 
 ## Source Scope
 

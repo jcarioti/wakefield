@@ -1,11 +1,11 @@
 export const WAKEFIELD_CONNECTOR_SKILLS = {
   discord: {
-    name: "wakefield-discord",
-    prompt: "Use $wakefield-discord for Discord connector routing."
+    name: "discord-connector",
+    prompt: "Use $discord-connector for Discord connector routing."
   },
   imessage: {
-    name: "wakefield-imessage",
-    prompt: "Use $wakefield-imessage for iMessage connector routing."
+    name: "imessage-connector",
+    prompt: "Use $imessage-connector for iMessage connector routing."
   }
 };
 

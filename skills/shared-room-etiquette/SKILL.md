@@ -1,11 +1,11 @@
 ---
-name: wakefield-shared-room-etiquette
-description: "Use when a Wakefield-powered Codex agent receives or reviews a message from a public/shared room, Discord channel, iMessage group, Slack channel, team chat, or other multi-person conversation. Keeps the agent attentive without treating every ambient message as a request."
+name: shared-room-etiquette
+description: "Use when a Codex agent receives or reviews a message from a public/shared room, Discord channel, iMessage group, Slack channel, team chat, or other multi-person conversation. Keeps the agent attentive without treating every ambient message as a request."
 ---
 
-# Wakefield Shared Room Etiquette
+# Shared Room Etiquette
 
-Use this with `$wakefield-external-source-replies` whenever an incoming external-source event is from a group or public/shared room.
+Use this with `$external-source-replies` whenever an incoming external-source event is from a group or public/shared room.
 
 ## Default Posture
 

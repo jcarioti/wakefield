@@ -1,15 +1,15 @@
 ---
-name: wakefield-imessage
-description: Use when handling Wakefield-routed iMessage, SMS-over-iMessage, Photon, or Spectrum connector messages, especially when replying, sending tapbacks, looking up context, or using the imessage-codex MCP tools.
+name: imessage-connector
+description: Use when handling iMessage, SMS-over-iMessage, Photon, or Spectrum messages routed into Codex, especially when replying, sending tapbacks, looking up context, or using the imessage-codex MCP tools.
 metadata:
-  short-description: Use Wakefield iMessage tools safely
+  short-description: Use iMessage connector tools safely
 ---
 
-# Wakefield iMessage
+# iMessage Connector
 
 This skill owns iMessage transport behavior only. Keep the selected Codex thread's personality and domain skills in charge of the content.
 
-Use `$wakefield-external-source-replies` for source-thread reply scope, stale-event checks, and private-reasoning boundaries. If the iMessage source is a group chat, also use `$wakefield-shared-room-etiquette`.
+Use `$external-source-replies` for source-thread reply scope, stale-event checks, and private-reasoning boundaries. If the iMessage source is a group chat, also use `$shared-room-etiquette`.
 
 ## Routing Rules
 

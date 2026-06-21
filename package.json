@@ -28,6 +28,7 @@
     "LICENSE",
     "README.md",
     "apps/wakefield-menubar/Package.swift",
+    "apps/wakefield-menubar/Resources",
     "apps/wakefield-menubar/Sources",
     "apps/wakefield-menubar/install.sh",
     "skills",

@@ -41,6 +41,7 @@ test("formatImessageMessageForCodex stays compact and includes reply target and 
   const text = formatImessageMessageForCodex({
     message,
     target: { id: "rick" },
+    memory: "Context for this external message\nActive context:\n- joe-package: [active] Joe package follow-up",
     contacts: createContactResolver({
       phone_numbers: { "+15551234567": "joe" },
       people: { joe: { display_name: "Joe" } }
@@ -48,8 +49,10 @@ test("formatImessageMessageForCodex stays compact and includes reply target and 
   });
   assert.match(text, /^Source: iMessage dm/m);
   assert.match(text, /^From: Joe <\+15551234567>/m);
-  assert.match(text, /Use \$wakefield-imessage for iMessage connector routing\./);
+  assert.match(text, /Use \$imessage-connector for iMessage connector routing\./);
   assert.match(text, /Reply: imessage_send_message\(\{ chatId: 5 \}\)/);
   assert.match(text, /probe.pdf \(application\/pdf\): \/tmp\/probe.pdf/);
+  assert.doesNotMatch(text, /Context for this external message/);
+  assert.doesNotMatch(text, /joe-package/);
   assert.doesNotMatch(text, /Source metadata/);
 });

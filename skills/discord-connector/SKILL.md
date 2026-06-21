@@ -1,15 +1,15 @@
 ---
-name: wakefield-discord
-description: Use when handling Wakefield-routed Discord messages or using Discord connector tools, including channel replies, DMs, and recent context lookup.
+name: discord-connector
+description: Use when handling Discord messages routed into Codex or using Discord connector tools, including channel replies, DMs, and recent context lookup.
 metadata:
-  short-description: Use Wakefield Discord tools safely
+  short-description: Use Discord connector tools safely
 ---
 
-# Wakefield Discord
+# Discord Connector
 
 This skill owns Discord transport behavior only. Keep the selected Codex thread's personality and domain skills in charge of the content.
 
-Use `$wakefield-external-source-replies` for source-thread reply scope, stale-event checks, and private-reasoning boundaries. If the Discord source is a shared channel, also use `$wakefield-shared-room-etiquette`.
+Use `$external-source-replies` for source-thread reply scope, stale-event checks, and private-reasoning boundaries. If the Discord source is a shared channel, also use `$shared-room-etiquette`.
 
 ## Routing Rules
 

@@ -67,6 +67,7 @@ Edit `config.local.json`:
 - `imessage.spectrum.cloudUrl`: optional Photon/Spectrum cloud URL override. Leave unset unless testing against a non-default cloud endpoint.
 - `imessage.spectrum.ipcSocketPath`: local socket used by the MCP server to send replies through the live Spectrum process.
 - `imessage.spectrum.attachmentDir`: where inbound Spectrum attachments are saved before being passed to Codex.
+- `imessage.spectrum.historyReplayPollMs`: how often the live bot asks Photon history for missed messages. Defaults to `60000`; set to `0` to disable periodic replay polling. This is separate from the 60s status heartbeat, which only rewrites the current status snapshot, and from `deliveryRetryMs`, which only drains already queued deliveries.
 - `imessage.imsgPath`: path to `imsg`, usually `imsg`, only for the local provider.
 - `imessage.databasePath`: Messages database for receipt lookups.
 - `imessage.advancedBridgeRequired`: keep this `true` when typing indicators and read receipts are part of the runtime contract.

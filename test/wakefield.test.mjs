@@ -271,12 +271,13 @@ test("memory MCP installs Codex tool config for the selected agent", async () =>
   assert.match(configText, /mcp_servers\.wakefield-memory/);
   assert.match(configText, new RegExp(`command = "${escapeRegExp(nodeExecutable())}"`));
   assert.match(configText, /wakefield_memory_upsert_matter/);
+  assert.match(configText, /wakefield_scheduler_configure_wakeup/);
   assert.match(configText, /--home/);
   assert.match(configText, new RegExp(escapeRegExp(home)));
 
   const status = await memoryMcpStatus({ home, agent: profile });
   assert.equal(status.ok, true);
-  assert.equal(status.tools.length, 10);
+  assert.equal(status.tools.length, 15);
 });
 
 test("memory MCP tools recall, update, archive, and forget scoped memory", async () => {
@@ -325,6 +326,55 @@ test("memory MCP tools recall, update, archive, and forget scoped memory", async
   });
   const notes = await callMcpTool(server, "wakefield_memory_list_notes");
   assert.deepEqual(notes.notes, []);
+});
+
+test("Wakefield MCP tools can manage duties and wakeups", async () => {
+  const home = await tempHome();
+  const profile = await initAgent({ name: "Scheduler Tooling", soul: "", home });
+  const server = fakeMcpServer();
+  registerWakefieldMemoryTools(server, { agent: profile, home });
+
+  const dutyResult = await callMcpTool(server, "wakefield_scheduler_configure_duty", {
+    id: "morning-check",
+    label: "Morning Check",
+    prompt: "Check overnight blockers.",
+    skills: ["morning-skill"],
+    requiredTools: ["calendar"],
+    dispatchMode: "ipc"
+  });
+  assert.equal(dutyResult.ok, true);
+  assert.equal(dutyResult.duties[0].id, "morning-check");
+  assert.deepEqual(dutyResult.duties[0].skills, ["morning-skill"]);
+  assert.deepEqual(dutyResult.duties[0].requiredTools, ["calendar"]);
+
+  const wakeupResult = await callMcpTool(server, "wakefield_scheduler_configure_wakeup", {
+    id: "morning-ops",
+    label: "Morning Ops",
+    wakeTimes: ["08:00"],
+    duties: ["morning-check"],
+    dispatchMode: "ipc"
+  });
+  assert.equal(wakeupResult.ok, true);
+  assert.equal(wakeupResult.wakeups[0].id, "morning-ops");
+  assert.deepEqual(wakeupResult.wakeups[0].dutyIds, ["morning-check"]);
+  assert.equal(wakeupResult.wakeups[0].dispatchMode, "ipc");
+
+  const status = await callMcpTool(server, "wakefield_scheduler_status", {
+    now: "2026-06-20T15:00:00.000Z"
+  });
+  assert.equal(status.duties.length, 1);
+  assert.equal(status.wakeups.length, 1);
+  assert.equal(status.wakeups[0].id, "morning-ops");
+
+  const deleteWakeupResult = await callMcpTool(server, "wakefield_scheduler_delete_wakeup", {
+    id: "morning-ops"
+  });
+  assert.deepEqual(deleteWakeupResult.wakeups, []);
+
+  const deleteDutyResult = await callMcpTool(server, "wakefield_scheduler_delete_duty", {
+    id: "morning-check"
+  });
+  assert.deepEqual(deleteDutyResult.duties, []);
 });
 
 test("Codex MCP reload wrapper reports success and soft failures", async () => {
@@ -415,6 +465,29 @@ test("selectThread attaches the current agent to a persistent Codex thread", asy
 test("install creates an agent and idempotent Codex hook config", async () => {
   const home = await tempHome();
   const codexHomePath = await tempHome();
+  const legacySkills = [
+    "wakefield-codex-tool-refresh",
+    "wakefield-discord",
+    "wakefield-external-source-replies",
+    "wakefield-imessage",
+    "wakefield-memory",
+    "wakefield-scheduled-wakeup",
+    "wakefield-scheduler-management",
+    "wakefield-shared-room-etiquette",
+    "wakefield-subagent-continuity"
+  ];
+  for (const legacySkill of legacySkills) {
+    const legacySkillPath = path.join(codexHomePath, "skills", legacySkill);
+    await fs.mkdir(legacySkillPath, { recursive: true });
+    await fs.writeFile(path.join(legacySkillPath, "SKILL.md"), [
+      "---",
+      `name: ${legacySkill}`,
+      "---",
+      "",
+      `# ${legacySkill}`,
+      ""
+    ].join("\n"), "utf8");
+  }
 
   const first = await installWakefield({
     name: "Wakefield",
@@ -430,6 +503,7 @@ test("install creates an agent and idempotent Codex hook config", async () => {
   assert.equal(second.createdAgent, false);
   assert.equal(second.doctor.ok, true);
   assert.deepEqual(first.skillResult.installed.map((skill) => skill.name), await bundledWakefieldSkillNames());
+  assert.deepEqual(first.skillResult.removedLegacy.map((skill) => skill.name), legacySkills);
   assert.equal(first.skillResult.configured, true);
   assert.equal(second.skillResult.installed.every((skill) => skill.changed === false), true);
 
@@ -446,10 +520,21 @@ test("install creates an agent and idempotent Codex hook config", async () => {
 
   const hooksJson = await fs.readFile(status.hooksPath, "utf8");
   assert.equal((hooksJson.match(/Wakefield memory/g) || []).length, 6);
-  const imessageSkill = await fs.readFile(path.join(codexHomePath, "skills", "wakefield-imessage", "SKILL.md"), "utf8");
+  const imessageSkill = await fs.readFile(path.join(codexHomePath, "skills", "imessage-connector", "SKILL.md"), "utf8");
   assert.match(imessageSkill, /Do not use `phone` as the recipient target/);
   assert.match(imessageSkill, /do not immediately retry the same iMessage action/);
-  const externalSourceSkill = await fs.readFile(path.join(codexHomePath, "skills", "wakefield-external-source-replies", "SKILL.md"), "utf8");
+  for (const legacySkill of legacySkills) {
+    await assert.rejects(
+      fs.access(path.join(codexHomePath, "skills", legacySkill, "SKILL.md")),
+      { code: "ENOENT" }
+    );
+  }
+  const toolRefreshSkill = await fs.readFile(path.join(codexHomePath, "skills", "codex-mcp-tool-refresh", "SKILL.md"), "utf8");
+  assert.match(toolRefreshSkill, /name: codex-mcp-tool-refresh/);
+  assert.match(toolRefreshSkill, /any Codex MCP server/);
+  assert.match(toolRefreshSkill, /wakefield mcp reload --json/);
+  assert.match(toolRefreshSkill, /Recommend restarting Codex only after this live MCP refresh path is unavailable/);
+  const externalSourceSkill = await fs.readFile(path.join(codexHomePath, "skills", "external-source-replies", "SKILL.md"), "utf8");
   assert.match(externalSourceSkill, /external-source requests/);
 });
 
@@ -576,7 +661,7 @@ test("setupStatus gives menu-bar friendly next steps and connector slots", async
   assert.equal(ready.service.environment.configured, false);
   assert.match(ready.nextSteps.join("\n"), /\/hooks/);
 
-  await fs.rm(path.join(codexHomePath, "skills", "wakefield-discord"), { recursive: true, force: true });
+  await fs.rm(path.join(codexHomePath, "skills", "discord-connector"), { recursive: true, force: true });
   const missingSkill = await setupStatus({ home, codexHomePath });
   assert.equal(missingSkill.actions.find((action) => action.id === "install-base-skills").enabled, true);
 });
@@ -866,7 +951,7 @@ test("agent packs install cwd, contacts, and duties without embedding app-specif
     home,
     now: morningRunAt
   });
-  assert.match(run.results[0].route.prompt, /Use \$wakefield-scheduled-wakeup\./);
+  assert.match(run.results[0].route.prompt, /Use \$scheduled-wakeup\./);
   assert.match(run.results[0].route.prompt, /Duty skills: \$pack-duty-skill/);
   assert.match(run.results[0].route.prompt, /Due wake slot: 10:00 local/);
   assert.match(run.results[0].route.prompt, /Run these scheduled duties in this turn:\n- pack-duty: \$pack-duty-skill/);
@@ -978,7 +1063,7 @@ test("managed connector wizards expose package, MCP, daemon, and smoke-test fact
   assert.equal(status.running, false);
   assert.equal(status.package.packageName, "@wakefield/discord-codex");
   assert.equal(status.mcp.tools.includes("discord_send_message"), true);
-  assert.equal(status.connectorSkill.name, "wakefield-discord");
+  assert.equal(status.connectorSkill.name, "discord-connector");
 
   const wizard = await managedConnectorWizard("discord-codex", { home });
   assert.equal(wizard.steps.find((step) => step.id === "codex-tools").status, "complete");
@@ -988,7 +1073,7 @@ test("managed connector wizards expose package, MCP, daemon, and smoke-test fact
   const smoke = await testManagedConnector("discord-codex", { home, kind: "reply-plan" });
   assert.equal(smoke.ok, true);
   assert.match(smoke.plan.summary, /discord_send_message/);
-  assert.match(smoke.plan.items.join("\n"), /\$wakefield-discord/);
+  assert.match(smoke.plan.items.join("\n"), /\$discord-connector/);
 
   const launchStatus = await managedConnectorLaunchAgentStatus("discord-codex", {
     home,
@@ -1160,6 +1245,62 @@ test("managed connector Spectrum bridge check fails explicit degraded status", a
   }
 });
 
+test("managed connector Spectrum bridge check reports replay warnings without failing live bridge", async () => {
+  const home = await tempHome();
+  const root = await tempHome();
+  const connector = await createFakeManagedConnector(root, "imessage-spectrum", {
+    withConfig: true,
+    withMcp: true
+  });
+  await importManagedConnectors([
+    {
+      id: "imessage-spectrum",
+      adapter: "imessage-spectrum",
+      enabled: true,
+      packagePath: connector.packagePath,
+      configPath: connector.configPath,
+      targetId: "self-test",
+      mcp: {
+        codexConfigPath: connector.codexConfigPath
+      }
+    }
+  ], { home });
+
+  const server = net.createServer((socket) => {
+    socket.once("data", () => {
+      socket.end(`${JSON.stringify({
+        id: "wakefield-status",
+        ok: true,
+        result: {
+          status: "online",
+          receiveLoop: {
+            state: "running",
+            lastErrorAt: null,
+            lastError: null
+          },
+          historyReplay: {
+            state: "degraded",
+            lastErrorAt: "2026-06-20T17:00:00.000Z",
+            lastError: "2/4 history replay reads failed: Received HTTP status code 502"
+          }
+        }
+      })}\n`);
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(path.join(root, "spectrum.sock"), resolve);
+  });
+  try {
+    const result = await testManagedConnector("imessage-spectrum", { home, kind: "spectrum-bridge" });
+    assert.equal(result.ok, true);
+    assert.equal(result.bridge.warning.type, "history-replay");
+    assert.match(result.bridge.detail, /online; history replay warning: 2\/4 history replay reads failed/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("managed connectors resolve installed package dependencies without packagePath", async () => {
   const home = await tempHome();
   const root = await tempHome();
@@ -1262,7 +1403,7 @@ test("managed connectors initialize local configs and install MCP entries for Di
     assert.equal(discordInit.changed, true);
     const discordConfig = JSON.parse(await fs.readFile(discord.configPath, "utf8"));
     assert.equal(discordConfig.targets[0].threadId, agent.threadId);
-    assert.equal(discordConfig.codex.connectorSkillPrompt, "Use $wakefield-discord for Discord connector routing.");
+    assert.equal(discordConfig.codex.connectorSkillPrompt, "Use $discord-connector for Discord connector routing.");
     assert.deepEqual(discordConfig.discord.allowedOutboundChannelIds, ["channel-7"]);
 
     const discordMcp = await installManagedConnectorMcp("discord-codex", { home, agent });
@@ -1302,7 +1443,7 @@ test("managed connectors initialize local configs and install MCP entries for Di
     assert.equal(imessageInit.changed, true);
     const imessageConfig = JSON.parse(await fs.readFile(imessage.configPath, "utf8"));
     assert.equal(imessageConfig.identity.contactsPath, "");
-    assert.equal(imessageConfig.codex.connectorSkillPrompt, "Use $wakefield-imessage for iMessage connector routing.");
+    assert.equal(imessageConfig.codex.connectorSkillPrompt, "Use $imessage-connector for iMessage connector routing.");
     assert.deepEqual(imessageConfig.imessage.allowedOutboundSpaceIds, ["space-7"]);
     assert.equal(imessageConfig.targets[0].allowGroupChats, true);
     imessageConfig.imessage.spectrum.statusPath = path.join(root, "setup-imessage-status.json");
@@ -1810,7 +1951,7 @@ test("contacts import legacy people maps and annotate external messages", async 
   assert.match(ingested.route.prompt, /business leadership/);
 });
 
-test("external message memory follows a contact across connectors without leaking to other people", async () => {
+test("external message prompts do not include memory instructions or injected memory", async () => {
   const home = await tempHome();
   const contactsFile = path.join(home, "people.json");
   await fs.mkdir(home, { recursive: true });
@@ -1863,8 +2004,11 @@ test("external message memory follows a contact across connectors without leakin
       authorId: "joe-discord"
     }
   });
-  assert.match(discord.route.prompt, /Wakefield context for this external message/);
-  assert.match(discord.route.prompt, /joe-package-followup/);
+  assert.match(discord.route.prompt, /Contact: Joe \(joe\)/);
+  assert.doesNotMatch(discord.route.prompt, /^Memory$/m);
+  assert.doesNotMatch(discord.route.prompt, /wakefield_memory_recall/);
+  assert.doesNotMatch(discord.route.prompt, /people=joe/);
+  assert.doesNotMatch(discord.route.prompt, /joe-package-followup/);
 
   const imessage = await ingestExternalMessage(profile, {
     home,
@@ -1873,7 +2017,11 @@ test("external message memory follows a contact across connectors without leakin
     messageId: "joe-imessage-1",
     text: "Following up from yesterday on the tracking."
   });
-  assert.match(imessage.route.prompt, /joe-package-followup/);
+  assert.match(imessage.route.prompt, /Contact: Joe \(joe\)/);
+  assert.doesNotMatch(imessage.route.prompt, /^Memory$/m);
+  assert.doesNotMatch(imessage.route.prompt, /wakefield_memory_recall/);
+  assert.doesNotMatch(imessage.route.prompt, /people=joe/);
+  assert.doesNotMatch(imessage.route.prompt, /joe-package-followup/);
 
   const terence = await ingestExternalMessage(profile, {
     home,
@@ -1885,6 +2033,10 @@ test("external message memory follows a contact across connectors without leakin
       authorId: "terence-discord"
     }
   });
+  assert.match(terence.route.prompt, /Contact: Terence \(terence\)/);
+  assert.doesNotMatch(terence.route.prompt, /^Memory$/m);
+  assert.doesNotMatch(terence.route.prompt, /wakefield_memory_recall/);
+  assert.doesNotMatch(terence.route.prompt, /people=terence/);
   assert.doesNotMatch(terence.route.prompt, /joe-package-followup/);
 });
 
@@ -2212,7 +2364,7 @@ test("external inbox queues connector messages with Codex route metadata", async
   assert.equal(first.route.threadId, "thread-abc");
   assert.equal(first.route.cwd, "/tmp/relay");
   assert.match(first.route.prompt, /External Discord message/);
-  assert.match(first.route.prompt, /Use \$wakefield-discord for Discord connector routing\./);
+  assert.match(first.route.prompt, /Use \$discord-connector for Discord connector routing\./);
   assert.match(first.route.prompt, /Wakefield external ID/);
   assert.match(first.route.prompt, /Can you check the release note/);
 
@@ -3467,7 +3619,7 @@ test("dreamer folds compact start and finish into one durable memory", async () 
   }
 });
 
-test("duties can be configured and run through dry-run routing", async () => {
+test("duties can be configured and run through dry-run routing without memory injection", async () => {
   const home = await tempHome();
   const profile = await initAgent({
     name: "Duty Runner",
@@ -3516,10 +3668,10 @@ test("duties can be configured and run through dry-run routing", async () => {
   assert.equal(run.ok, true);
   assert.equal(run.attempted, 1);
   assert.equal(run.results[0].status, "dry-run");
-  assert.match(run.results[0].route.prompt, /Scheduled Wakefield wakeup: Morning Check/);
-  assert.match(run.results[0].route.prompt, /Use \$wakefield-scheduled-wakeup\./);
+  assert.match(run.results[0].route.prompt, /Scheduled wakeup: Morning Check/);
+  assert.match(run.results[0].route.prompt, /Use \$scheduled-wakeup\./);
   assert.match(run.results[0].route.prompt, /Required tools: calendar/);
-  assert.doesNotMatch(run.results[0].route.prompt, /context for this scheduled wakeup/i);
+  assert.doesNotMatch(run.results[0].route.prompt, /Context for this scheduled wakeup/);
   assert.doesNotMatch(run.results[0].route.prompt, /morning-check-context/);
   assert.doesNotMatch(run.results[0].route.prompt, /joe-package-chat/);
 
@@ -3585,7 +3737,7 @@ test("wakeups bundle multiple duties into one scheduled turn", async () => {
   assert.equal(run.attempted, 1);
   assert.match(run.results[0].route.prompt, /Wakeup ID: morning-ops/);
   assert.match(run.results[0].route.prompt, /Duties: inventory, shipping, support/);
-  assert.match(run.results[0].route.prompt, /Use \$wakefield-scheduled-wakeup\./);
+  assert.match(run.results[0].route.prompt, /Use \$scheduled-wakeup\./);
   assert.match(run.results[0].route.prompt, /- inventory: \$inventory-skill/);
   assert.match(run.results[0].route.prompt, /- shipping: \$shipping-skill/);
   assert.match(run.results[0].route.prompt, /- support: \$support-skill/);

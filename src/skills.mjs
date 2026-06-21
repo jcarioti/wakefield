@@ -5,6 +5,17 @@ import { codexHome } from "./hook-manager.mjs";
 import { ensureDir, pathExists } from "./json-store.mjs";
 
 const BUNDLED_SKILLS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "skills");
+const RENAMED_BUNDLED_SKILLS = [
+  ["wakefield-codex-tool-refresh", "codex-mcp-tool-refresh"],
+  ["wakefield-discord", "discord-connector"],
+  ["wakefield-external-source-replies", "external-source-replies"],
+  ["wakefield-imessage", "imessage-connector"],
+  ["wakefield-memory", "scoped-memory"],
+  ["wakefield-scheduled-wakeup", "scheduled-wakeup"],
+  ["wakefield-scheduler-management", "scheduler-management"],
+  ["wakefield-shared-room-etiquette", "shared-room-etiquette"],
+  ["wakefield-subagent-continuity", "subagent-continuity"]
+];
 
 export async function installWakefieldSkills({
   codexHomePath = codexHome()
@@ -12,6 +23,7 @@ export async function installWakefieldSkills({
   const skills = await bundledWakefieldSkillNames();
   const skillsRoot = path.join(codexHomePath, "skills");
   await ensureDir(skillsRoot);
+  const removedLegacy = await removeRenamedBundledSkills(skillsRoot, skills);
 
   const installed = [];
   for (const name of skills) {
@@ -30,6 +42,7 @@ export async function installWakefieldSkills({
   return {
     skillsRoot,
     installed,
+    removedLegacy,
     configured: installed.every((skill) => skill.path)
   };
 }
@@ -75,4 +88,22 @@ async function readOptionalText(file) {
     if (error?.code === "ENOENT") return null;
     throw error;
   }
+}
+
+async function removeRenamedBundledSkills(skillsRoot, bundledNames) {
+  const removed = [];
+  for (const [legacyName, replacementName] of RENAMED_BUNDLED_SKILLS) {
+    if (!bundledNames.includes(replacementName)) continue;
+    const legacyPath = path.join(skillsRoot, legacyName);
+    const legacyText = await readOptionalText(path.join(legacyPath, "SKILL.md"));
+    if (!legacyText) continue;
+    if (!new RegExp(`^name:\\s*${escapeRegExp(legacyName)}\\s*$`, "m").test(legacyText)) continue;
+    await fs.rm(legacyPath, { recursive: true, force: true });
+    removed.push({ name: legacyName, path: legacyPath, replacedBy: replacementName });
+  }
+  return removed;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

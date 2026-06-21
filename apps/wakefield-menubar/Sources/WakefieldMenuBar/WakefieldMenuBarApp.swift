@@ -23,10 +23,15 @@ struct WakefieldMenuBarApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.applicationIconImage = NSImage(
-            systemSymbolName: "waveform.path.ecg.rectangle",
-            accessibilityDescription: "Wakefield"
-        )
+        if let iconURL = Bundle.main.url(forResource: "Wakefield", withExtension: "icns"),
+           let icon = NSImage(contentsOf: iconURL) {
+            NSApp.applicationIconImage = icon
+        } else {
+            NSApp.applicationIconImage = NSImage(
+                systemSymbolName: "waveform.path.ecg.rectangle",
+                accessibilityDescription: "Wakefield"
+            )
+        }
         NSApp.setActivationPolicy(.accessory)
     }
 }

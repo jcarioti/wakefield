@@ -65,6 +65,7 @@ test("loadConnectorConfig normalizes iMessage paths and allowlists", async () =>
   assert.equal(config.imessage.spectrum.startupReplayEnabled, true);
   assert.equal(config.imessage.spectrum.startupReplayLookbackMs, 60 * 60 * 1000);
   assert.equal(config.imessage.spectrum.startupReplayDelayMs, 30000);
+  assert.equal(config.imessage.spectrum.historyReplayPollMs, 60000);
   assert.equal(config.imessage.spectrum.startupReplayPageSize, 30);
   assert.equal(config.imessage.spectrum.deliveryRetryMs, 60000);
   assert.equal(config.imessage.spectrum.outboundRequestMinIntervalMs, 2000);
@@ -105,12 +106,13 @@ test("loadConnectorConfig keeps embedded Spectrum credentials ahead of generic e
   assert.equal(config.imessage.spectrum.projectSecret, "secret-from-file");
 });
 
-test("loadConnectorConfig normalizes Spectrum receive-loop max age", async () => {
+test("loadConnectorConfig normalizes Spectrum timing settings", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "imessage-config-spectrum-age-test-"));
   const configPath = path.join(root, "config.json");
   await fs.writeFile(configPath, JSON.stringify({
     imessage: {
       spectrum: {
+        historyReplayPollMs: 12345,
         receiveLoopMaxAgeMs: 123456,
         appOperationTimeoutMs: 654321
       }
@@ -124,6 +126,7 @@ test("loadConnectorConfig normalizes Spectrum receive-loop max age", async () =>
 
   const config = await loadConnectorConfig({ configPath });
 
+  assert.equal(config.imessage.spectrum.historyReplayPollMs, 12345);
   assert.equal(config.imessage.spectrum.receiveLoopMaxAgeMs, 123456);
   assert.equal(config.imessage.spectrum.appOperationTimeoutMs, 654321);
 });

@@ -25,7 +25,7 @@ import { startCodexFocusMonitor } from "./imessage-focus.mjs";
 import { sendTextToCodexTarget } from "@wakefield/connector-shared/codex-router.mjs";
 import { findThreadRolloutPath, waitForTurnCompletion } from "@wakefield/connector-shared/codex-rollout-watch.mjs";
 import { acquireSingletonProcessLock } from "@wakefield/connector-shared/lock.mjs";
-import { recordWakefieldConnectorTurn, wakefieldMemoryForConnectorMessage } from "@wakefield/connector-shared/wakefield-memory.mjs";
+import { recordWakefieldConnectorTurn } from "@wakefield/connector-shared/wakefield-memory.mjs";
 
 const args = parseCliArgs();
 if (args.help) {
@@ -87,13 +87,11 @@ async function handleImessage(message) {
 
   for (const target of matchedTargets) {
     const replyTarget = imessageReplyTargetFromMessage(message);
-    const memory = await connectorMemoryForImessage({ message, target });
     const text = formatImessageMessageForCodex({
       message,
       target,
       contacts,
-      connectorGuidance: config.codex.connectorSkillPrompt,
-      memory
+      connectorGuidance: config.codex.connectorSkillPrompt
     });
     let stopTyping = () => {};
     try {
@@ -119,28 +117,6 @@ async function handleImessage(message) {
     } finally {
       stopTyping();
     }
-  }
-}
-
-async function connectorMemoryForImessage({ message, target }) {
-  try {
-    return await wakefieldMemoryForConnectorMessage({
-      target,
-      query: [
-        message.text,
-        (message.attachments || []).map((attachment) => attachment.transfer_name || attachment.filename || attachment.converted_mime_type || attachment.mime_type)
-      ].flat().filter(Boolean).join("\n"),
-      scope: {
-        connector: "imessage",
-        sender: message.sender || null,
-        conversation: message.chat_guid || message.chat_identifier || (message.chat_id == null ? null : String(message.chat_id)),
-        channel: message.chat_guid || message.chat_identifier || (message.chat_id == null ? null : String(message.chat_id)),
-        room: message.is_group ? message.chat_guid || message.chat_identifier || (message.chat_id == null ? null : String(message.chat_id)) : null
-      }
-    });
-  } catch (error) {
-    console.warn(`Wakefield memory unavailable for iMessage row ${message.id}: ${error.message}`);
-    return "";
   }
 }
 

@@ -63,7 +63,6 @@ import {
   findEarlierPendingDeliveryInLane
 } from "./spectrum-delivery-queue.mjs";
 import { SpectrumDeliveryLaneScheduler } from "./spectrum-delivery-lanes.mjs";
-import { wakefieldMemoryForSpectrumMessage } from "./spectrum-memory.mjs";
 
 const args = parseCliArgs();
 if (args.help) {
@@ -102,6 +101,8 @@ let lastMatchedInboundMessage = null;
 let projectUsers = null;
 let statusHeartbeat = null;
 let deliveryRetryTimer = null;
+let historyReplayPollTimer = null;
+let historyReplayActive = false;
 const startupReplayTimers = new Set();
 let shuttingDown = false;
 const receiveLoop = {
@@ -115,6 +116,23 @@ const receiveLoop = {
   rotationRequestedAt: null,
   restartStartedAt: null,
   lastRestartCompletedAt: null
+};
+const historyReplay = {
+  state: "idle",
+  pollMs: config.imessage.spectrum.historyReplayPollMs,
+  lookbackMs: config.imessage.spectrum.startupReplayLookbackMs,
+  pageSize: config.imessage.spectrum.startupReplayPageSize,
+  lastStartedAt: null,
+  lastFinishedAt: null,
+  lastSuccessAt: null,
+  lastErrorAt: null,
+  lastError: null,
+  lastReason: null,
+  lastCandidateSpaceCount: 0,
+  lastReadAttemptCount: 0,
+  lastFailedReadCount: 0,
+  lastQueuedCount: 0,
+  consecutiveFailures: 0
 };
 
 app = await createSpectrumAppWithBackoff("startup");
@@ -145,6 +163,7 @@ console.log(`Allowed outbound Spectrum space ids: ${[...getAllowedOutboundSpaceI
 
 scheduleDeliveryRetry();
 scheduleStartupHistoryReplay({ previousStatus, reason: "startup" });
+scheduleHistoryReplayPoll();
 
 superviseReceiveLoop().catch((error) => {
   receiveLoop.state = "failed";
@@ -375,15 +394,13 @@ async function handleSpectrumMessage({ space, message }) {
   const content = await enrichSpectrumContentFromHistory({ space, message, content: liveContent });
 
   for (const target of matchedTargets) {
-    const memory = await connectorMemoryForSpectrum({ space, message, content, target });
     const text = formatSpectrumMessageForCodex({
       space,
       message,
       target,
       content,
       contacts,
-      connectorGuidance: config.codex.connectorSkillPrompt,
-      memory
+      connectorGuidance: config.codex.connectorSkillPrompt
     });
     const record = await deliveryQueue.upsert(createPendingDeliveryRecord({
       target,
@@ -394,10 +411,6 @@ async function handleSpectrumMessage({ space, message }) {
     }));
     await routeDeliveryRecord(record, { space, message, source: "live" });
   }
-}
-
-async function connectorMemoryForSpectrum({ space, message, content, target }) {
-  return wakefieldMemoryForSpectrumMessage({ space, message, content, target });
 }
 
 async function enrichSpectrumContentFromHistory({ space, message, content }) {
@@ -586,6 +599,25 @@ function scheduleDeliveryRetry() {
   deliveryRetryTimer.unref?.();
 }
 
+function scheduleHistoryReplayPoll() {
+  if (!config.imessage.spectrum.startupReplayEnabled) {
+    return;
+  }
+  const pollMs = config.imessage.spectrum.historyReplayPollMs;
+  if (!pollMs || pollMs <= 0) {
+    return;
+  }
+  historyReplayPollTimer = setInterval(() => {
+    runStartupHistoryReplay({
+      previousStatus: currentReplayStatus(),
+      reason: "periodic history poll"
+    }).catch((error) => {
+      console.warn(`Photon/Spectrum periodic history replay unavailable: ${error.message}`);
+    });
+  }, pollMs);
+  historyReplayPollTimer.unref?.();
+}
+
 function scheduleStartupHistoryReplay({ previousStatus, reason }) {
   if (!config.imessage.spectrum.startupReplayEnabled) {
     return;
@@ -609,19 +641,45 @@ function scheduleStartupHistoryReplay({ previousStatus, reason }) {
 }
 
 async function runStartupHistoryReplay({ previousStatus, reason }) {
-  await enqueueStartupHistoryReplay({ previousStatus });
-  await drainPendingDeliveries(reason);
+  if (historyReplayActive) {
+    return;
+  }
+  historyReplayActive = true;
+  historyReplay.state = "running";
+  historyReplay.lastStartedAt = new Date().toISOString();
+  historyReplay.lastReason = reason;
+  await writeCurrentStatus().catch(() => {});
+  try {
+    const stats = await enqueueStartupHistoryReplay({ previousStatus });
+    await drainPendingDeliveries(reason);
+    recordHistoryReplayFinished({ reason, stats });
+  } catch (error) {
+    recordHistoryReplayFailed(reason, error);
+    throw error;
+  } finally {
+    historyReplayActive = false;
+    historyReplay.lastFinishedAt = new Date().toISOString();
+    await writeCurrentStatus().catch(() => {});
+  }
 }
 
 async function enqueueStartupHistoryReplay({ previousStatus: status }) {
+  const stats = {
+    candidateSpaceCount: 0,
+    readAttemptCount: 0,
+    failedReadCount: 0,
+    queuedCount: 0,
+    errors: []
+  };
   if (!config.imessage.spectrum.startupReplayEnabled) {
-    return;
+    return stats;
   }
   await enqueuePreviousStatusReplay({ previousStatus: status });
 
   const candidateSpaceIds = startupReplaySpaceIds({ config, previousStatus: status });
+  stats.candidateSpaceCount = candidateSpaceIds.length;
   if (candidateSpaceIds.length === 0) {
-    return;
+    return stats;
   }
 
   const clientSet = await createPhotonImessageClients({
@@ -634,6 +692,7 @@ async function enqueueStartupHistoryReplay({ previousStatus: status }) {
       for (const spaceId of candidateSpaceIds) {
         let page = null;
         try {
+          stats.readAttemptCount += 1;
           page = await listPhotonMessagesInChat({
             spectrum: config.imessage.spectrum,
             chatGuid: spaceId,
@@ -642,7 +701,12 @@ async function enqueueStartupHistoryReplay({ previousStatus: status }) {
             clientSet
           });
         } catch (error) {
-          recordReceiveLoopDegraded(`startup_replay_${target.id}`, error);
+          stats.failedReadCount += 1;
+          stats.errors.push({
+            targetId: target.id,
+            spaceId,
+            message: error.message
+          });
           console.warn(`Photon/Spectrum startup replay could not read ${spaceId}: ${error.message}`);
           continue;
         }
@@ -658,20 +722,13 @@ async function enqueueStartupHistoryReplay({ previousStatus: status }) {
             message: replay.message,
             attachmentDir: config.imessage.spectrum.attachmentDir
           });
-          const memory = await connectorMemoryForSpectrum({
-            space: replay.space,
-            message: replay.message,
-            content,
-            target
-          });
           const text = formatSpectrumMessageForCodex({
             space: replay.space,
             message: replay.message,
             target,
             content,
             contacts,
-            connectorGuidance: config.codex.connectorSkillPrompt,
-            memory
+            connectorGuidance: config.codex.connectorSkillPrompt
           });
           const queued = await deliveryQueue.upsert(createPendingDeliveryRecord({
             target,
@@ -691,6 +748,7 @@ async function enqueueStartupHistoryReplay({ previousStatus: status }) {
           if (queued.deliveredAt) {
             continue;
           }
+          stats.queuedCount += 1;
           console.log(`Queued undelivered Photon/Spectrum iMessage ${queued.messageId} for ${target.id} from startup history.`);
         }
       }
@@ -698,6 +756,7 @@ async function enqueueStartupHistoryReplay({ previousStatus: status }) {
   } finally {
     await clientSet.closeAll();
   }
+  return stats;
 }
 
 async function enqueuePreviousStatusReplay({ previousStatus: status }) {
@@ -725,20 +784,13 @@ async function enqueuePreviousStatusReplay({ previousStatus: status }) {
         message: replay.message,
         attachmentDir: config.imessage.spectrum.attachmentDir
       });
-      const memory = await connectorMemoryForSpectrum({
-        space: replay.space,
-        message: replay.message,
-        content,
-        target
-      });
       const text = formatSpectrumMessageForCodex({
         space: replay.space,
         message: replay.message,
         target,
         content,
         contacts,
-        connectorGuidance: config.codex.connectorSkillPrompt,
-        memory
+        connectorGuidance: config.codex.connectorSkillPrompt
       });
       const queued = await deliveryQueue.upsert(createPendingDeliveryRecord({
         target,
@@ -772,6 +824,50 @@ function targetForDelivery(record) {
   };
 }
 
+function currentReplayStatus() {
+  const mergedKnownSpaceIds = new Set();
+  for (const value of previousStatus?.knownSpaceIds || []) {
+    addSpaceId(mergedKnownSpaceIds, value);
+  }
+  for (const value of knownSpaces.keys()) {
+    addSpaceId(mergedKnownSpaceIds, value);
+  }
+  return {
+    knownSpaceIds: [...mergedKnownSpaceIds],
+    lastInboundMessage: lastInboundMessage || previousStatus?.lastInboundMessage || null,
+    lastMatchedInboundMessage: lastMatchedInboundMessage || previousStatus?.lastMatchedInboundMessage || null
+  };
+}
+
+function recordHistoryReplayFinished({ reason, stats = {} }) {
+  historyReplay.lastReason = reason;
+  historyReplay.lastCandidateSpaceCount = stats.candidateSpaceCount || 0;
+  historyReplay.lastReadAttemptCount = stats.readAttemptCount || 0;
+  historyReplay.lastFailedReadCount = stats.failedReadCount || 0;
+  historyReplay.lastQueuedCount = stats.queuedCount || 0;
+  if (historyReplay.lastFailedReadCount > 0) {
+    const first = stats.errors?.[0];
+    historyReplay.state = "degraded";
+    historyReplay.lastErrorAt = new Date().toISOString();
+    historyReplay.lastError = `${historyReplay.lastFailedReadCount}/${historyReplay.lastReadAttemptCount} history replay read${historyReplay.lastFailedReadCount === 1 ? "" : "s"} failed${first?.spaceId ? ` for ${first.spaceId}` : ""}: ${first?.message || "unknown error"}`;
+    historyReplay.consecutiveFailures += 1;
+    return;
+  }
+  historyReplay.state = "ok";
+  historyReplay.lastSuccessAt = new Date().toISOString();
+  historyReplay.lastErrorAt = null;
+  historyReplay.lastError = null;
+  historyReplay.consecutiveFailures = 0;
+}
+
+function recordHistoryReplayFailed(reason, error) {
+  historyReplay.state = "degraded";
+  historyReplay.lastReason = reason;
+  historyReplay.lastErrorAt = new Date().toISOString();
+  historyReplay.lastError = error.stack || error.message;
+  historyReplay.consecutiveFailures += 1;
+}
+
 async function handleBridgeRequest(request) {
   if (request.method === "status") {
     return {
@@ -779,7 +875,8 @@ async function handleBridgeRequest(request) {
       knownSpaceIds: [...knownSpaces.keys()],
       lastInboundAt,
       lastMatchedInboundAt,
-      receiveLoop: receiveLoopStatus()
+      receiveLoop: receiveLoopStatus(),
+      historyReplay: historyReplayStatus()
     };
   }
   if (request.method === "send") {
@@ -1227,7 +1324,8 @@ async function writeStatus(status) {
     lastMatchedInboundMessage,
     projectUsers,
     pendingDeliveryCount,
-    receiveLoop: receiveLoopStatus()
+    receiveLoop: receiveLoopStatus(),
+    historyReplay: historyReplayStatus()
   }, null, 2)}\n`, "utf8");
 }
 
@@ -1240,15 +1338,6 @@ function currentBridgeStatus() {
     return "receive-loop-degraded";
   }
   return spectrumServiceStatusForReceiveLoop(receiveLoop.state);
-}
-
-function recordReceiveLoopDegraded(reason, error) {
-  receiveLoop.lastErrorAt = new Date().toISOString();
-  receiveLoop.lastError = error.stack || error.message;
-  receiveLoop.lastRestartReason = reason;
-  writeStatus("receive-loop-degraded").catch((statusError) => {
-    console.warn(`Photon/Spectrum status update failed after ${reason}: ${statusError.message}`);
-  });
 }
 
 async function runProviderOperation(label, operation) {
@@ -1327,6 +1416,9 @@ async function shutdown(signal) {
     }
     if (deliveryRetryTimer) {
       clearInterval(deliveryRetryTimer);
+    }
+    if (historyReplayPollTimer) {
+      clearInterval(historyReplayPollTimer);
     }
     for (const timer of startupReplayTimers) {
       clearTimeout(timer);
@@ -1531,6 +1623,27 @@ function receiveLoopStatus() {
     rotationRequestedAt: receiveLoop.rotationRequestedAt,
     restartStartedAt: receiveLoop.restartStartedAt,
     lastRestartCompletedAt: receiveLoop.lastRestartCompletedAt
+  };
+}
+
+function historyReplayStatus() {
+  return {
+    state: historyReplay.state,
+    active: historyReplayActive,
+    pollMs: historyReplay.pollMs,
+    lookbackMs: historyReplay.lookbackMs,
+    pageSize: historyReplay.pageSize,
+    lastStartedAt: historyReplay.lastStartedAt,
+    lastFinishedAt: historyReplay.lastFinishedAt,
+    lastSuccessAt: historyReplay.lastSuccessAt,
+    lastErrorAt: historyReplay.lastErrorAt,
+    lastError: historyReplay.lastError,
+    lastReason: historyReplay.lastReason,
+    lastCandidateSpaceCount: historyReplay.lastCandidateSpaceCount,
+    lastReadAttemptCount: historyReplay.lastReadAttemptCount,
+    lastFailedReadCount: historyReplay.lastFailedReadCount,
+    lastQueuedCount: historyReplay.lastQueuedCount,
+    consecutiveFailures: historyReplay.consecutiveFailures
   };
 }
 

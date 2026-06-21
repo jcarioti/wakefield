@@ -1,0 +1,4 @@
+interface:
+  display_name: "Scoped Memory"
+  short_description: "Use scoped memory without bloating the thread."
+  default_prompt: "Use $scoped-memory to inspect or maintain notes and active-context matters."

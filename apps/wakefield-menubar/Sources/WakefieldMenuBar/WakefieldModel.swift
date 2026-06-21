@@ -46,7 +46,12 @@ final class WakefieldModel: ObservableObject {
         if busy { return "hourglass" }
         if !snapshot.ready { return "exclamationmark.triangle" }
         if snapshot.service.externalDispatch?.pending ?? 0 > 0 { return "tray.full" }
-        return snapshot.service.enabled ? "waveform.path.ecg.rectangle" : "pause.circle"
+        return assistantRunning ? "waveform.path.ecg.rectangle" : "pause.circle"
+    }
+
+    var assistantRunning: Bool {
+        guard let snapshot else { return false }
+        return snapshot.service.scheduler.loaded == true || snapshot.managedConnectors.contains { $0.running }
     }
 
     init() {
@@ -134,17 +139,26 @@ final class WakefieldModel: ObservableObject {
 
     func setRuntimeEnabled(_ enabled: Bool) {
         Task {
+            let connectors = snapshot?.managedConnectors ?? []
+            let connectorCommands = enabled
+                ? connectors
+                    .filter { $0.enabled && $0.configured && $0.mcp?.ok == true }
+                    .map { ["managed-connectors", "launch-agent", "install", $0.id, "--load"] }
+                : connectors
+                    .filter { $0.running }
+                    .map { ["managed-connectors", "launch-agent", "unload", $0.id] }
+            let commands = enabled
+                ? [
+                    ["service", "configure", "--enable"],
+                    ["service", "launch-agent", "install", "--load"]
+                  ] + connectorCommands
+                : connectorCommands + [
+                    ["service", "launch-agent", "unload"],
+                    ["service", "configure", "--disable"]
+                  ]
             await performSequence(
                 enabled ? "Starting assistant" : "Stopping assistant",
-                commands: enabled
-                    ? [
-                        ["service", "configure", "--enable"],
-                        ["service", "launch-agent", "install", "--load"]
-                    ]
-                    : [
-                        ["service", "launch-agent", "unload"],
-                        ["service", "configure", "--disable"]
-                    ],
+                commands: commands,
                 timeout: 90
             )
         }
@@ -224,17 +238,6 @@ final class WakefieldModel: ObservableObject {
     func retryOnboardingMcpRefresh() {
         Task {
             await refreshOnboardingMcp()
-        }
-    }
-
-    func pauseAll() {
-        Task {
-            var commands = (snapshot?.managedConnectors ?? []).map {
-                ["managed-connectors", "launch-agent", "unload", $0.id]
-            }
-            commands.append(["service", "launch-agent", "unload"])
-            commands.append(["service", "configure", "--disable"])
-            await performSequence("Pausing Wakefield", commands: commands, timeout: 90)
         }
     }
 
