@@ -5,6 +5,7 @@ import {
   normalizeSpectrumReaction,
   readSpectrumMessage,
   reactToSpectrumMessage,
+  resolveSpectrumSpace,
   sendSpectrumMessage,
   startSpectrumTyping,
   stopSpectrumTyping,
@@ -30,6 +31,43 @@ test("spectrumReactionTargetMessageId strips Spectrum reaction event suffixes", 
     "spc-msg-1"
   );
   assert.equal(spectrumReactionTargetMessageId("spc-msg-1"), "spc-msg-1");
+});
+
+test("resolveSpectrumSpace rehydrates direct-message spaceIds through Spectrum 5 namespaces", async () => {
+  const space = await resolveSpectrumSpace({
+    app: fakeSpectrum5App(),
+    target: { spaceId: "any;-;+15551234567" }
+  });
+
+  assert.equal(space.id, "any;-;+15551234567");
+  assert.equal(space.type, "dm");
+  assert.equal(space.phone, "shared");
+  assert.equal(typeof space.send, "function");
+  assert.equal(typeof space.getMessage, "function");
+});
+
+test("sendSpectrumMessage can send to a direct-message spaceId that is not already known", async () => {
+  const calls = [];
+  const app = fakeSpectrum5App({
+    sendText: async (chat, text, options) => {
+      calls.push({ chat, text, options });
+      return { guid: "sent-guid", dateCreated: new Date("2026-06-22T12:00:00Z") };
+    }
+  });
+
+  const result = await sendSpectrumMessage({
+    app,
+    target: { spaceId: "any;-;+15551234567" },
+    text: "plain reply"
+  });
+
+  assert.equal(result.id, "sent-guid");
+  assert.equal(result.space.id, "any;-;+15551234567");
+  assert.deepEqual(calls, [{
+    chat: "any;-;+15551234567",
+    text: "plain reply",
+    options: {}
+  }]);
 });
 
 test("reactToSpectrumMessage reacts to a known Spectrum message", async () => {
@@ -293,3 +331,21 @@ test("startSpectrumTyping and stopSpectrumTyping use known spaces", async () => 
   );
   assert.deepEqual(calls, ["start", "stop"]);
 });
+
+function fakeSpectrum5App({ sendText = async () => ({ guid: "sent-guid", dateCreated: new Date("2026-06-22T12:00:00Z") }) } = {}) {
+  return {
+    __providers: [],
+    __internal: {
+      platforms: new Map([["iMessage", {
+        client: [{
+          phone: "shared",
+          client: {
+            messages: { sendText }
+          }
+        }],
+        config: { local: false },
+        store: {}
+      }]])
+    }
+  };
+}

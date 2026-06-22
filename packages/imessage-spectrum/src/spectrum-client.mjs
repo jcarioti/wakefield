@@ -222,17 +222,28 @@ export async function resolveSpectrumSpace({ app, target, knownSpaces = new Map(
     return knownSpaces.get(target.spaceId);
   }
 
+  const platform = imessage(app);
+  const options = target.phone ? { phone: target.phone } : undefined;
+  if (target.spaceId && typeof platform.space?.get === "function") {
+    return platform.space.get(target.spaceId, options);
+  }
+
   const to = target.to || target.sender || addressFromSpectrumSpaceId(target.spaceId);
   if (!to) {
     throw new Error("Photon/Spectrum iMessage target requires to, sender, or a known live DM/group spaceId.");
   }
 
-  const platform = imessage(app);
-  const user = await platform.user(to);
-  if (target.phone) {
-    return platform.space(user, { phone: target.phone });
+  if (typeof platform.user !== "function") {
+    throw new Error("Photon/Spectrum iMessage platform does not expose user lookup.");
   }
-  return platform.space(user);
+  const user = await platform.user(to);
+  if (typeof platform.space === "function") {
+    return options ? platform.space(user, options) : platform.space(user);
+  }
+  if (typeof platform.space?.create === "function") {
+    return platform.space.create(user, options);
+  }
+  throw new Error("Photon/Spectrum iMessage platform does not expose space creation.");
 }
 
 export function buildSpectrumContent({ text = "", files = [] }) {
