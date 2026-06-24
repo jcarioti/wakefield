@@ -20,7 +20,7 @@ import { configureDuty, configureWakeup, deleteDuty, deleteWakeup, dutyStatuses,
 import { pollEmailImap } from "../src/email-imap.mjs";
 import { ingestEmailRfc822, parseRfc822 } from "../src/email-rfc822.mjs";
 import { acknowledgeExternalMessage, ingestExternalMessage, listExternalMessages } from "../src/external-messages.mjs";
-import { hooksStatus, wakefieldHookCommand } from "../src/hook-manager.mjs";
+import { hooksStatus, installHooks, wakefieldHookCommand } from "../src/hook-manager.mjs";
 import { handleHookInput } from "../src/hooks.mjs";
 import { startHttpIntakeServer } from "../src/http-intake.mjs";
 import { dispatchExternalMessage } from "../src/inbox-dispatch.mjs";
@@ -536,6 +536,40 @@ test("install creates an agent and idempotent Codex hook config", async () => {
   assert.match(toolRefreshSkill, /Recommend restarting Codex only after this live MCP refresh path is unavailable/);
   const externalSourceSkill = await fs.readFile(path.join(codexHomePath, "skills", "external-source-replies", "SKILL.md"), "utf8");
   assert.match(externalSourceSkill, /external-source requests/);
+});
+
+test("hooksStatus accepts a symlinked node path for the same hook target", async () => {
+  const home = await tempHome();
+  const codexHomePath = await tempHome();
+  const runtime = await tempHome();
+  const binDir = path.join(runtime, "bin");
+  const cliDir = path.join(runtime, "src");
+  await fs.mkdir(binDir, { recursive: true });
+  await fs.mkdir(cliDir, { recursive: true });
+  const realNode = path.join(binDir, "node-24.16.0");
+  const aliasNode = path.join(binDir, "node-lts");
+  const cliPath = path.join(cliDir, "cli.mjs");
+  await fs.writeFile(realNode, "#!/bin/sh\n", { mode: 0o755 });
+  await fs.symlink(realNode, aliasNode);
+  await fs.writeFile(cliPath, "", "utf8");
+
+  await installHooks({
+    command: `env WAKEFIELD_HOME='${home}' '${realNode}' '${cliPath}' hook`,
+    codexHomePath
+  });
+
+  const status = await hooksStatus({
+    command: `env WAKEFIELD_HOME='${home}' '${aliasNode}' '${cliPath}' hook`,
+    codexHomePath
+  });
+  assert.equal(status.configured, true);
+  assert.equal(status.commandExists, true);
+
+  const wrongHomeStatus = await hooksStatus({
+    command: `env WAKEFIELD_HOME='${path.join(home, "other")}' '${aliasNode}' '${cliPath}' hook`,
+    codexHomePath
+  });
+  assert.equal(wrongHomeStatus.configured, false);
 });
 
 test("Photon native fallbacks are skipped during transient upstream pressure", () => {

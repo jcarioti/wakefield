@@ -48,7 +48,9 @@ export async function hooksStatus({
   }
   const config = await readJson(file, {});
   const commands = wakefieldCommands(config);
-  const configured = command ? commands.includes(command) : commands.length > 0;
+  const configured = command
+    ? await hasMatchingWakefieldCommand(commands, command)
+    : commands.length > 0;
   const commandExists = commands.length > 0
     ? await hookCommandExists(commands[0])
     : false;
@@ -110,6 +112,122 @@ function wakefieldCommands(config) {
     }
   }
   return [...new Set(commands)];
+}
+
+async function hasMatchingWakefieldCommand(commands, command) {
+  if (commands.includes(command)) return true;
+  const expected = hookCommandTarget(command);
+  if (!expected) return false;
+  for (const existing of commands) {
+    const actual = hookCommandTarget(existing);
+    if (actual && await sameHookCommandTarget(actual, expected)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hookCommandTarget(command) {
+  const words = splitCommandWords(String(command));
+  if (words.length === 0) return null;
+
+  let commandStart = 0;
+  let home = null;
+  if (words[0] === "env") {
+    commandStart = 1;
+    while (commandStart < words.length && envAssignmentName(words[commandStart])) {
+      if (envAssignmentName(words[commandStart]) === "WAKEFIELD_HOME") {
+        home = envAssignmentValue(words[commandStart]);
+      }
+      commandStart += 1;
+    }
+  }
+
+  const cliIndex = words.findIndex((word, index) => (
+    index >= commandStart && word.endsWith("cli.mjs") && words[index + 1] === "hook"
+  ));
+  if (cliIndex < 0) return null;
+
+  return {
+    home,
+    nodePath: cliIndex > commandStart ? words[cliIndex - 1] : null,
+    cliPath: words[cliIndex]
+  };
+}
+
+async function sameHookCommandTarget(left, right) {
+  if (left.home !== right.home) return false;
+  if (!await samePath(left.cliPath, right.cliPath)) return false;
+  if (!left.nodePath || !right.nodePath) return left.nodePath === right.nodePath;
+  return samePath(left.nodePath, right.nodePath);
+}
+
+async function samePath(left, right) {
+  if (left === right) return true;
+  if (!path.isAbsolute(left) || !path.isAbsolute(right)) return false;
+  try {
+    return await fs.realpath(left) === await fs.realpath(right);
+  } catch {
+    return false;
+  }
+}
+
+function splitCommandWords(value) {
+  const words = [];
+  let current = "";
+  let quote = null;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (quote === "'") {
+      if (char === "'") {
+        quote = null;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (quote === "\"") {
+      if (char === "\"") {
+        quote = null;
+      } else if (char === "\\" && index + 1 < value.length) {
+        index += 1;
+        current += value[index];
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        words.push(current);
+        current = "";
+      }
+      continue;
+    }
+    if (char === "'" || char === "\"") {
+      quote = char;
+      continue;
+    }
+    if (char === "\\" && index + 1 < value.length) {
+      index += 1;
+      current += value[index];
+      continue;
+    }
+    current += char;
+  }
+  if (current) words.push(current);
+  return words;
+}
+
+function envAssignmentName(word) {
+  const separator = word.indexOf("=");
+  if (separator <= 0) return null;
+  const name = word.slice(0, separator);
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : null;
+}
+
+function envAssignmentValue(word) {
+  return word.slice(word.indexOf("=") + 1);
 }
 
 function isWakefieldHook(hook) {
