@@ -23,6 +23,8 @@ test("Discord content is rendered as a compact external message event", () => {
   assert.match(prompt, /^From: Joe <user-1>/m);
   assert.match(prompt, /^Channel ID: channel-1/m);
   assert.match(prompt, /^Message ID: message-1/m);
+  assert.match(prompt, /^Shared Discord room: use \$shared-room-etiquette; default to silent observation unless clearly asked\./m);
+  assert.match(prompt, /^If ambiguous, check recent room context before replying\./m);
   assert.match(prompt, /Message:\nhello ``` prompt boundary/);
   assert.match(prompt, /^- Load recent context batch: discord_read_recent_batch channelId=channel-1/m);
   assert.doesNotMatch(prompt, /Source metadata:/);
@@ -47,6 +49,7 @@ test("Discord prompts trigger the Wakefield connector skill", () => {
   });
 
   assert.match(prompt, /Use \$discord-connector for Discord connector routing\./);
+  assert.match(prompt, /use \$shared-room-etiquette/);
   assert.doesNotMatch(prompt, /external-source-replies/);
   assert.doesNotMatch(prompt, /Codex-only replies are not visible to Discord/);
   assert.doesNotMatch(prompt, /Keep reasoning\/tool traces out of Discord/);
@@ -93,6 +96,8 @@ test("DM prompts point Rick at the Discord DM tool", () => {
   assert.match(prompt, /- Text reply target: discord_send_dm userId=user-1/);
   assert.match(prompt, /- Load recent context batch: discord_read_recent_batch userId=user-1/);
   assert.match(prompt, /Use \$discord-connector for Discord connector routing\./);
+  assert.doesNotMatch(prompt, /shared-room-etiquette/);
+  assert.doesNotMatch(prompt, /default to silent observation/);
   assert.doesNotMatch(prompt, /use `discord_send_message`/);
 });
 

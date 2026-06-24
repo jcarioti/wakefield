@@ -21,6 +21,8 @@ export function formatDiscordMessageForCodex({ message, target, connectorGuidanc
     message.guildId ? `Channel ID: ${message.channelId}` : null,
     `Message ID: ${message.id}`,
     connectorGuidance,
+    message.guildId ? "Shared Discord room: use $shared-room-etiquette; default to silent observation unless clearly asked." : null,
+    message.guildId ? "If ambiguous, check recent room context before replying." : null,
     "",
     "Message:",
     message.content || "(no text content)",
