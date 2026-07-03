@@ -31,6 +31,7 @@ import {
 } from "./spectrum-app-gate.mjs";
 import {
   isSpectrumOperationTimeoutError,
+  shouldRotateReceiveLoopAfterHistoryReplay,
   spectrumServiceStatusForReceiveLoop,
   withSpectrumOperationTimeout
 } from "./spectrum-receive-loop-health.mjs";
@@ -116,6 +117,11 @@ const receiveLoop = {
   rotationRequestedAt: null,
   restartStartedAt: null,
   lastRestartCompletedAt: null
+};
+const bridgeOperation = {
+  lastLabel: null,
+  lastErrorAt: null,
+  lastError: null
 };
 const historyReplay = {
   state: "idle",
@@ -235,17 +241,11 @@ async function runReceiveLoop() {
 
   if (maxAgeMs > 0) {
     rotationTimer = setTimeout(() => {
-      if (shuttingDown) {
-        return;
-      }
-      receiveLoop.state = "rotating";
-      receiveLoop.lastRestartReason = "max_age";
-      receiveLoop.rotationRequestedAt = new Date().toISOString();
-      writeStatus("receive-loop-rotating").catch((error) => {
-        console.warn(`Photon/Spectrum status update failed during max-age rotation: ${error.message}`);
+      requestReceiveLoopRotation({
+        app: currentApp,
+        reason: "max_age",
+        log: `Photon/Spectrum app.messages reached max age ${maxAgeMs}ms; rotating subscription.`
       });
-      console.log(`Photon/Spectrum app.messages reached max age ${maxAgeMs}ms; rotating subscription.`);
-      queueSpectrumAppStop(currentApp, "max-age rotation");
     }, maxAgeMs);
     rotationTimer.unref?.();
   }
@@ -316,31 +316,64 @@ function queueSpectrumAppStop(targetApp, reason) {
   });
 }
 
+function requestReceiveLoopRotation({ app: targetApp = app, reason, log }) {
+  if (shuttingDown || !targetApp) {
+    return false;
+  }
+  if (receiveLoop.state === "rotating" || receiveLoop.state === "restarting" || receiveLoop.restartStartedAt) {
+    return false;
+  }
+  receiveLoop.state = "rotating";
+  receiveLoop.lastRestartReason = reason || "rotation_requested";
+  receiveLoop.rotationRequestedAt = new Date().toISOString();
+  writeStatus("receive-loop-rotating").catch((error) => {
+    console.warn(`Photon/Spectrum status update failed during receive-loop rotation: ${error.message}`);
+  });
+  if (log) {
+    console.log(log);
+  }
+  queueSpectrumAppStop(targetApp, reason || "receive-loop rotation");
+  return true;
+}
+
 async function runBridgeAppOperation(label, operation, { retryOnChannelShutdown = false } = {}) {
   return appOperationGate.run(async () => {
     try {
-      return await operation();
+      const result = await operation();
+      clearBridgeOperationError();
+      return result;
     } catch (error) {
       if (!retryOnChannelShutdown || shuttingDown || !isSpectrumChannelShutdownError(error)) {
-        receiveLoop.lastErrorAt = new Date().toISOString();
-        receiveLoop.lastError = error.stack || error.message;
-        receiveLoop.lastRestartReason = `${label}_error`;
+        recordBridgeOperationError(label, error);
         await writeCurrentStatus().catch((statusError) => {
           console.warn(`Photon/Spectrum status update failed after ${label} error: ${statusError.message}`);
         });
         throw error;
       }
       console.warn(`Photon/Spectrum ${label} hit a closed channel; recreating Spectrum app and retrying once: ${error.message}`);
-      receiveLoop.lastErrorAt = new Date().toISOString();
-      receiveLoop.lastError = error.stack || error.message;
+      recordBridgeOperationError(label, error);
       receiveLoop.lastRestartReason = `${label}_channel_shutdown`;
       receiveLoop.restartCount += 1;
       receiveLoop.restartStartedAt = new Date().toISOString();
       await writeStatus("bridge-channel-restarting").catch(() => {});
       await recreateSpectrumAppNow(`${label} channel-shutdown retry`);
-      return operation();
+      const result = await operation();
+      clearBridgeOperationError();
+      return result;
     }
   });
+}
+
+function recordBridgeOperationError(label, error) {
+  bridgeOperation.lastLabel = label;
+  bridgeOperation.lastErrorAt = new Date().toISOString();
+  bridgeOperation.lastError = error.stack || error.message;
+}
+
+function clearBridgeOperationError() {
+  bridgeOperation.lastLabel = null;
+  bridgeOperation.lastErrorAt = null;
+  bridgeOperation.lastError = null;
 }
 
 async function createSpectrumAppWithBackoff(context) {
@@ -653,6 +686,12 @@ async function runStartupHistoryReplay({ previousStatus, reason }) {
     const stats = await enqueueStartupHistoryReplay({ previousStatus });
     await drainPendingDeliveries(reason);
     recordHistoryReplayFinished({ reason, stats });
+    if (shouldRotateReceiveLoopAfterHistoryReplay({ reason, stats })) {
+      requestReceiveLoopRotation({
+        reason: "history_replay_recovered_missed_message",
+        log: `Photon/Spectrum history replay recovered ${stats.queuedCount} missed inbound message${stats.queuedCount === 1 ? "" : "s"}; rotating live receive stream.`
+      });
+    }
   } catch (error) {
     recordHistoryReplayFailed(reason, error);
     throw error;
@@ -876,6 +915,7 @@ async function handleBridgeRequest(request) {
       lastInboundAt,
       lastMatchedInboundAt,
       receiveLoop: receiveLoopStatus(),
+      bridgeOperation: bridgeOperationStatus(),
       historyReplay: historyReplayStatus()
     };
   }
@@ -1325,6 +1365,7 @@ async function writeStatus(status) {
     projectUsers,
     pendingDeliveryCount,
     receiveLoop: receiveLoopStatus(),
+    bridgeOperation: bridgeOperationStatus(),
     historyReplay: historyReplayStatus()
   }, null, 2)}\n`, "utf8");
 }
@@ -1337,7 +1378,15 @@ function currentBridgeStatus() {
   if (receiveLoop.lastError) {
     return "receive-loop-degraded";
   }
+  if (bridgeOperation.lastError && isRecentStatusError(bridgeOperation.lastErrorAt)) {
+    return "bridge-operation-degraded";
+  }
   return spectrumServiceStatusForReceiveLoop(receiveLoop.state);
+}
+
+function isRecentStatusError(value, { now = Date.now(), maxAgeMs = 10 * 60 * 1000 } = {}) {
+  const at = Date.parse(value || "");
+  return Number.isFinite(at) && now - at <= maxAgeMs;
 }
 
 async function runProviderOperation(label, operation) {
@@ -1623,6 +1672,14 @@ function receiveLoopStatus() {
     rotationRequestedAt: receiveLoop.rotationRequestedAt,
     restartStartedAt: receiveLoop.restartStartedAt,
     lastRestartCompletedAt: receiveLoop.lastRestartCompletedAt
+  };
+}
+
+function bridgeOperationStatus() {
+  return {
+    lastLabel: bridgeOperation.lastLabel,
+    lastErrorAt: bridgeOperation.lastErrorAt,
+    lastError: bridgeOperation.lastError
   };
 }
 

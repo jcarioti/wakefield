@@ -2174,7 +2174,7 @@ function degradedSpectrumBridgeStatus(result) {
   if (!/degraded|failed|errored|rate-limited|offline|restarting|rotating|stopping/i.test(status)) {
     return null;
   }
-  const error = firstLine(result?.receiveLoop?.lastError);
+  const error = firstLine(result?.receiveLoop?.lastError) || firstLine(result?.bridgeOperation?.lastError);
   return {
     status,
     detail: error ? `${status}: ${error}` : status

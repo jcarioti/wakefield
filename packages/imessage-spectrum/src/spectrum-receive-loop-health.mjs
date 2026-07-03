@@ -71,3 +71,11 @@ export function spectrumServiceStatusForReceiveLoop(state) {
       return state ? `receive-loop-${state}` : "unknown";
   }
 }
+
+export function shouldRotateReceiveLoopAfterHistoryReplay({ reason, stats } = {}) {
+  const recovered = Number(stats?.queuedCount || 0);
+  if (!Number.isFinite(recovered) || recovered <= 0) {
+    return false;
+  }
+  return /periodic history poll/i.test(String(reason || ""));
+}

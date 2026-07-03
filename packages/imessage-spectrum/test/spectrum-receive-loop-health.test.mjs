@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   SpectrumOperationTimeoutError,
+  shouldRotateReceiveLoopAfterHistoryReplay,
   spectrumServiceStatusForReceiveLoop,
   withSpectrumOperationTimeout
 } from "../src/spectrum-receive-loop-health.mjs";
@@ -62,4 +63,19 @@ test("spectrumServiceStatusForReceiveLoop maps internal state to service status"
   assert.equal(spectrumServiceStatusForReceiveLoop("restarting"), "receive-loop-restarting");
   assert.equal(spectrumServiceStatusForReceiveLoop("rate-limited"), "rate-limited");
   assert.equal(spectrumServiceStatusForReceiveLoop("failed"), "receive-loop-failed");
+});
+
+test("shouldRotateReceiveLoopAfterHistoryReplay rotates only after periodic replay recovers messages", () => {
+  assert.equal(shouldRotateReceiveLoopAfterHistoryReplay({
+    reason: "periodic history poll",
+    stats: { queuedCount: 1 }
+  }), true);
+  assert.equal(shouldRotateReceiveLoopAfterHistoryReplay({
+    reason: "startup",
+    stats: { queuedCount: 1 }
+  }), false);
+  assert.equal(shouldRotateReceiveLoopAfterHistoryReplay({
+    reason: "periodic history poll",
+    stats: { queuedCount: 0 }
+  }), false);
 });
