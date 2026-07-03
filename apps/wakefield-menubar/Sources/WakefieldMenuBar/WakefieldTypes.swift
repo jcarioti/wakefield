@@ -106,6 +106,33 @@ struct Wakeup: Decodable, Identifiable, Hashable {
     var selectedDutyIds: [String] {
         dutyIds ?? duties ?? []
     }
+
+    var earliestWakeTimeMinute: Int {
+        wakeTimes.compactMap(Self.minuteOfDay).min() ?? Int.max
+    }
+
+    static func orderedByWakeTime(_ wakeups: [Wakeup]) -> [Wakeup] {
+        wakeups.sorted { left, right in
+            if left.earliestWakeTimeMinute != right.earliestWakeTimeMinute {
+                return left.earliestWakeTimeMinute < right.earliestWakeTimeMinute
+            }
+            let labelOrder = left.label.localizedStandardCompare(right.label)
+            if labelOrder != .orderedSame {
+                return labelOrder == .orderedAscending
+            }
+            return left.id.localizedStandardCompare(right.id) == .orderedAscending
+        }
+    }
+
+    private static func minuteOfDay(_ value: String) -> Int? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = trimmed.split(separator: ":", maxSplits: 1).compactMap { Int($0) }
+        guard parts.count == 2 else { return nil }
+        let hour = parts[0]
+        let minute = parts[1]
+        guard (0...23).contains(hour), (0...59).contains(minute) else { return nil }
+        return hour * 60 + minute
+    }
 }
 
 struct ThreadSummary: Decodable {

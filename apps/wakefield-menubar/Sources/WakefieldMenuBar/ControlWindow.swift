@@ -1146,7 +1146,7 @@ private struct WakeupsPane: View {
             VStack(spacing: 0) {
                 ZStack(alignment: .bottomLeading) {
                     List(selection: $selectedWakeupId) {
-                        ForEach(model.duties.wakeups) { wakeup in
+                        ForEach(model.orderedWakeups) { wakeup in
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(wakeup.label)
@@ -1177,7 +1177,7 @@ private struct WakeupsPane: View {
             wakeupDetail
         }
         .onAppear {
-            let wakeup = selectedWakeup ?? model.duties.wakeups.first
+            let wakeup = selectedWakeup ?? model.orderedWakeups.first
             selectedWakeupId = wakeup?.id
             resetDraft(wakeup: wakeup)
         }
@@ -1190,7 +1190,7 @@ private struct WakeupsPane: View {
                 isEditing = false
                 resetDraft(wakeup: selectedWakeup)
             } else if !isEditing, selectedWakeupId == nil {
-                selectedWakeupId = model.duties.wakeups.first?.id
+                selectedWakeupId = model.orderedWakeups.first?.id
             }
         }
     }
@@ -1245,7 +1245,7 @@ private struct WakeupsPane: View {
             resetDraft(wakeup: selectedWakeup)
             isEditing = false
         } else {
-            selectedWakeupId = model.duties.wakeups.first?.id
+            selectedWakeupId = model.orderedWakeups.first?.id
             resetDraft(wakeup: selectedWakeup)
             isEditing = false
         }
@@ -1254,7 +1254,7 @@ private struct WakeupsPane: View {
     private func deleteWakeup() {
         guard let selectedWakeup else { return }
         model.deleteWakeup(selectedWakeup)
-        selectedWakeupId = model.duties.wakeups.first(where: { $0.id != selectedWakeup.id })?.id
+        selectedWakeupId = model.orderedWakeups.first(where: { $0.id != selectedWakeup.id })?.id
         isEditing = false
     }
 }
@@ -1495,7 +1495,7 @@ private struct DutiesPane: View {
                 deleteAction: deleteDuty
             )
         } else if let selectedDuty {
-            DutyDetailPane(duty: selectedDuty, wakeups: model.duties.wakeups) {
+            DutyDetailPane(duty: selectedDuty, wakeups: model.orderedWakeups) {
                 resetDraft(duty: selectedDuty)
                 isEditing = true
             }

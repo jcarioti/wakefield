@@ -3814,6 +3814,42 @@ test("wakeup lists can hide compatibility rows and delete wakeups and duties cle
   assert.deepEqual((await dutyStatuses({ home, includeCompatibilityWakeups: true })).wakeups, []);
 });
 
+test("wakeup statuses are ordered by wake time", async () => {
+  const home = await tempHome();
+  await configureWakeup("afternoon-ops", {
+    home,
+    label: "Afternoon Ops",
+    wakeTimes: ["16:00"]
+  });
+  await configureWakeup("early-morning-ops", {
+    home,
+    label: "Early Morning Ops",
+    wakeTimes: ["04:00"]
+  });
+  await configureWakeup("evening-ops", {
+    home,
+    label: "Evening Ops",
+    wakeTimes: ["20:00"]
+  });
+  await configureWakeup("midday-ops", {
+    home,
+    label: "Midday Ops",
+    wakeTimes: ["12:00"]
+  });
+  await configureWakeup("morning-ops", {
+    home,
+    label: "Morning Ops",
+    wakeTimes: ["08:00"]
+  });
+
+  const statuses = await dutyStatuses({ home, includeCompatibilityWakeups: false });
+
+  assert.deepEqual(
+    statuses.wakeups.map((wakeup) => wakeup.id),
+    ["early-morning-ops", "morning-ops", "midday-ops", "afternoon-ops", "evening-ops"]
+  );
+});
+
 test("duties configure CLI preserves required tools when changing dispatch mode", async () => {
   const home = await tempHome();
   await configureDuty("morning-check", {

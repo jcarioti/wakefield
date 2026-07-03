@@ -54,6 +54,10 @@ final class WakefieldModel: ObservableObject {
         return snapshot.service.scheduler.loaded == true || snapshot.managedConnectors.contains { $0.running }
     }
 
+    var orderedWakeups: [Wakeup] {
+        Wakeup.orderedByWakeTime(duties.wakeups)
+    }
+
     init() {
         timer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             Task { await self?.refreshAll() }

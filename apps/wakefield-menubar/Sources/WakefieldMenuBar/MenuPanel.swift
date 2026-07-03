@@ -76,7 +76,7 @@ struct MenuPanel: View {
 
     private var wakeupsSection: some View {
         SectionBlock(title: "Wakeups", symbol: "alarm") {
-            let wakeups = model.duties.wakeups
+            let wakeups = model.orderedWakeups
             if wakeups.isEmpty {
                 Text("No wakeups configured")
                     .font(.caption)

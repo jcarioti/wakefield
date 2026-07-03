@@ -373,7 +373,22 @@ function wakeupStatuses(document, { now, includeCompatibilityWakeups = true }) {
     : [];
   return [...explicitWakeups, ...compatibilityWakeups]
     .map((wakeup) => wakeupStatus(wakeup, { now }))
-    .sort((left, right) => left.id.localeCompare(right.id));
+    .sort(compareWakeupsByWakeTime);
+}
+
+function compareWakeupsByWakeTime(left, right) {
+  const leftMinute = firstWakeTimeMinute(left);
+  const rightMinute = firstWakeTimeMinute(right);
+  if (leftMinute !== rightMinute) return leftMinute - rightMinute;
+  const labelOrder = left.label.localeCompare(right.label, undefined, { numeric: true });
+  if (labelOrder !== 0) return labelOrder;
+  return left.id.localeCompare(right.id, undefined, { numeric: true });
+}
+
+function firstWakeTimeMinute(wakeup) {
+  const wakeTimes = wakeup.wakeTimes || [];
+  if (wakeTimes.length === 0) return Number.POSITIVE_INFINITY;
+  return Math.min(...wakeTimes.map(timeOfDayMinutes));
 }
 
 function resolveWakeup(wakeup, dutiesById, state) {
