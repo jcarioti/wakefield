@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   FrameDecoder,
+  createClientDiscoveryResponse,
   createTurnStartParams,
   createRestoreMessage,
   createTextInput,
@@ -46,6 +47,14 @@ test("createRestoreMessage matches the renderer steering shape", () => {
   assert.deepEqual(createTextInput("hello"), [{ type: "text", text: "hello", text_elements: [] }]);
 });
 
+test("client discovery response matches the ChatGPT/Codex envelope", () => {
+  assert.deepEqual(createClientDiscoveryResponse({ requestId: "request-1" }), {
+    type: "client-discovery-response",
+    requestId: "request-1",
+    response: { canHandle: false }
+  });
+});
+
 test("full-access target permissions become Codex turn settings", () => {
   assert.deepEqual(normalizeCodexPermissions({ mode: "full-access" }), {
     approvalPolicy: "never",
@@ -69,5 +78,10 @@ test("full-access target permissions become Codex turn settings", () => {
 test("thread follower methods use app IPC protocol version 1", () => {
   assert.equal(methodVersion("thread-follower-start-turn"), 1);
   assert.equal(methodVersion("thread-follower-steer-turn"), 1);
+  assert.equal(methodVersion("thread-follower-submit-user-input"), 1);
+});
+
+test("thread follower interrupt uses app IPC protocol version 2", () => {
+  assert.equal(methodVersion("thread-follower-interrupt-turn"), 2);
   assert.equal(methodVersion("initialize"), 0);
 });

@@ -2,7 +2,7 @@
   "name": "@wakefield/discord-codex",
   "version": "0.1.0",
   "type": "module",
-  "description": "Discord inbound bridge and Discord MCP tools for live Codex app threads.",
+  "description": "Discord inbound bridge and Discord MCP tools for live ChatGPT/Codex tasks.",
   "license": "MIT",
   "repository": {
     "type": "git",

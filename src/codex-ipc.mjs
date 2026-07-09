@@ -50,6 +50,14 @@ export function createTextInput(text) {
   return [{ type: "text", text, text_elements: [] }];
 }
 
+export function createClientDiscoveryResponse({ requestId, canHandle = false }) {
+  return {
+    type: "client-discovery-response",
+    requestId,
+    response: { canHandle }
+  };
+}
+
 export function createRestoreMessage({ text, cwd, id = randomUUID(), createdAt = Date.now() }) {
   return {
     id,
@@ -206,7 +214,7 @@ export async function resolveCodexIpcSocket({
     entries = await fs.readdir(directory);
   } catch (error) {
     if (error?.code === "ENOENT") {
-      throw new CodexIpcError(`Codex app IPC socket directory does not exist at ${directory}.`, {
+      throw new CodexIpcError(`Codex IPC socket directory does not exist at ${directory}. Open ChatGPT desktop and load the target Codex task.`, {
         code: "socket-directory-missing"
       });
     }
@@ -227,7 +235,7 @@ export async function resolveCodexIpcSocket({
   candidates.sort((left, right) => right.mtimeMs - left.mtimeMs);
   if (candidates[0]) return candidates[0].candidate;
 
-  throw new CodexIpcError(`No Codex app IPC socket found under ${directory}.`, {
+  throw new CodexIpcError(`No Codex IPC socket found under ${directory}. Open ChatGPT desktop and load the target Codex task.`, {
     code: "socket-missing"
   });
 }
@@ -374,12 +382,9 @@ export class CodexIpcClient {
     }
 
     if (message.type === "client-discovery-request" && message.requestId) {
-      this.socket?.write(encodeFrame({
-        type: "client-discovery-response",
-        requestId: message.requestId,
-        sourceClientId: this.clientId,
-        result: { canHandle: false }
-      }));
+      this.socket?.write(encodeFrame(createClientDiscoveryResponse({
+        requestId: message.requestId
+      })));
     }
   }
 

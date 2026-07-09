@@ -56,10 +56,14 @@ export function codexNewThreadUrl({ cwd, prompt = "" }) {
   return `codex://threads/new?${params.toString()}`;
 }
 
-export async function resolveCodexCli(explicit = null) {
+export async function resolveCodexCli(explicit = null, {
+  env = process.env,
+  access = fs.access
+} = {}) {
   const candidates = [
     explicit,
-    process.env.CODEX_CLI_PATH,
+    env.CODEX_CLI_PATH,
+    "/Applications/ChatGPT.app/Contents/Resources/codex",
     "/Applications/Codex.app/Contents/Resources/codex",
     "/Applications/Codex.app/Contents/MacOS/codex",
     "codex"
@@ -68,7 +72,7 @@ export async function resolveCodexCli(explicit = null) {
   for (const candidate of candidates) {
     if (candidate === "codex") return candidate;
     try {
-      await fs.access(expandHome(candidate));
+      await access(expandHome(candidate));
       return expandHome(candidate);
     } catch {
       // Try the next candidate.

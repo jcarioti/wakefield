@@ -5,6 +5,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { formatAgentPackInspection, formatAgentPackInstall, inspectAgentPack, installAgentPack } from "./agent-packs.mjs";
 import { listRecentThreads, waitForThreadByPrompt } from "./codex-sessions.mjs";
+import { codexRuntimeProbeExitCode, formatCodexRuntimeProbe, probeCodexRuntime } from "./codex-runtime-probe.mjs";
 import { asArray, configureConnector, connectorStatuses, connectorWizard, connectorWizards, CONNECTOR_SETUP_SLOTS, formatConnectorStatuses, formatConnectorWizard, parseSettings } from "./connectors.mjs";
 import { formatContactResolution, formatContacts, importContactsFile, loadContacts, resolveContact } from "./contacts.mjs";
 import { archiveMatter, contextMemory, forgetMemoryItem, formatContextMemory, formatMatters, formatNotes, loadMatters, loadNotes, matterFromCli, noteFromCli, recallContext, scopeFromOptions, upsertMatter, upsertNote } from "./context-memory.mjs";
@@ -68,6 +69,14 @@ async function main(argv = process.argv.slice(2)) {
     const result = await doctor();
     console.log(options.json ? JSON.stringify(result, null, 2) : formatDoctor(result));
     process.exitCode = result.ok ? 0 : 1;
+    return;
+  }
+
+  if (command === "codex" && rest[0] === "runtime") {
+    const options = parseOptions(rest.slice(1));
+    const result = await probeCodexRuntime();
+    console.log(options.json ? JSON.stringify(result, null, 2) : formatCodexRuntimeProbe(result));
+    process.exitCode = codexRuntimeProbeExitCode(result.status);
     return;
   }
 
@@ -1276,6 +1285,7 @@ function usage() {
     "  wakefield self-test [--keep] [--json]",
     "  wakefield verify [--keep] [--json]",
     "  wakefield doctor [--json]",
+    "  wakefield codex runtime [--json]",
     "  wakefield setup status [--json]",
     "  wakefield setup next [--json]",
     "  wakefield setup actions [--json]",

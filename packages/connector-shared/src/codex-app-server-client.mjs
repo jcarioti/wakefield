@@ -76,7 +76,7 @@ export class CodexAppServerClient {
     this.remoteControlStatus = status;
     if (this.requireRemoteControlConnected && status?.status !== "connected") {
       throw new CodexAppServerError(
-        `Codex remote control is ${status?.status || "unknown"}; open the Codex app before routing external messages.`,
+        `Codex remote control is ${status?.status || "unknown"}; open ChatGPT desktop and load Codex before routing external messages.`,
         {
           code: "remote-control-not-connected",
           method: "remoteControl/status/read",

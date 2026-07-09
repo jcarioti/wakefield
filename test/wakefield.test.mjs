@@ -44,6 +44,16 @@ import { bundledWakefieldSkillNames, wakefieldSkillsStatus } from "../src/skills
 import { verifyWakefield } from "../src/verify.mjs";
 
 const execFileAsync = promisify(execFile);
+const compatibleRuntimeProbe = async ({ sessionsPath = "/tmp/codex-sessions" } = {}) => ({
+  status: "compatible",
+  reason: "initialize-succeeded",
+  scope: "socket-and-initialize-only",
+  followerProtocolTested: false,
+  socketPath: "/tmp/codex-ipc.sock",
+  sessionsPath,
+  sessionsReadable: true,
+  error: null
+});
 
 test("init creates a normal app-support profile and memory files", async () => {
   const home = await tempHome();
@@ -63,11 +73,12 @@ test("init creates a normal app-support profile and memory files", async () => {
   assert.equal(profile.memory.mattersPath, path.join(profile.cwd, "memory", "matters.json"));
   assert.equal((await loadAgent(null, home)).id, profile.id);
 
-  const report = await doctor({ home });
+  const report = await doctor({ home, runtimeProbe: compatibleRuntimeProbe });
   assert.equal(report.ok, false);
   assert.equal(report.checks.find((check) => check.label === "Soul file").ok, true);
   assert.equal(report.checks.find((check) => check.label === "External inbox").ok, true);
   assert.equal(report.checks.find((check) => check.label === "Codex thread").ok, false);
+  assert.equal(report.checks.find((check) => check.label === "ChatGPT/Codex IPC").ok, true);
   assert.match(await fs.readFile(profile.memory.externalMessagesPath, "utf8"), /^$/);
   assert.match(await fs.readFile(profile.memory.capturePath, "utf8"), /^$/);
   assert.deepEqual(JSON.parse(await fs.readFile(profile.memory.notesPath, "utf8")).notes, []);
@@ -457,7 +468,7 @@ test("selectThread attaches the current agent to a persistent Codex thread", asy
   assert.equal(attached.threadId, "thread-123");
   assert.equal(attached.cwd, "/tmp/threadwell");
 
-  const report = await doctor({ home, codexHomePath });
+  const report = await doctor({ home, codexHomePath, runtimeProbe: compatibleRuntimeProbe });
   assert.equal(report.ok, false);
   assert.equal(report.checks.find((check) => check.label === "Codex thread").ok, true);
 });

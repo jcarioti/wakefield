@@ -1,10 +1,16 @@
+import path from "node:path";
 import { appConfigPath, appHome } from "./paths.mjs";
+import { probeCodexRuntime } from "./codex-runtime-probe.mjs";
 import { hooksStatus, wakefieldHookCommand } from "./hook-manager.mjs";
 import { listAgents, loadAgent } from "./profile.mjs";
 import { pathExists } from "./json-store.mjs";
 import { wakefieldSkillsStatus } from "./skills.mjs";
 
-export async function doctor({ home = appHome(), codexHomePath = null } = {}) {
+export async function doctor({
+  home = appHome(),
+  codexHomePath = null,
+  runtimeProbe = probeCodexRuntime
+} = {}) {
   const agents = await listAgents(home);
   const current = await loadAgent(null, home);
   const hooks = await hooksStatus({
@@ -12,6 +18,9 @@ export async function doctor({ home = appHome(), codexHomePath = null } = {}) {
     codexHomePath: codexHomePath || undefined
   });
   const skills = await wakefieldSkillsStatus({ codexHomePath: codexHomePath || undefined });
+  const codexRuntime = await runtimeProbe({
+    ...(codexHomePath ? { sessionsPath: path.join(codexHomePath, "sessions") } : {})
+  });
   const checks = [];
 
   checks.push(check("Wakefield home", true, home));
@@ -22,6 +31,18 @@ export async function doctor({ home = appHome(), codexHomePath = null } = {}) {
     checks.push(check("Codex hook command", hooks.commandExists, hooks.commands?.[0] || "not found"));
   }
   checks.push(check("Codex Wakefield skills", skills.configured, skills.installed.map((skill) => `${skill.name}:${skill.installed ? "installed" : "missing"}`).join(", ")));
+  checks.push(check(
+    "ChatGPT/Codex IPC",
+    codexRuntime.status === "compatible",
+    formatRuntimeDetail(codexRuntime),
+    { optional: codexRuntime.status === "unavailable" }
+  ));
+  checks.push(check(
+    "Codex session rollouts",
+    codexRuntime.sessionsReadable,
+    codexRuntime.sessionsPath,
+    { optional: true }
+  ));
 
   if (current) {
     checks.push(check("Current agent", true, `${current.name} (${current.id})`));
@@ -42,6 +63,7 @@ export async function doctor({ home = appHome(), codexHomePath = null } = {}) {
     home,
     hooks,
     skills,
+    codexRuntime,
     checks
   };
 }
@@ -57,4 +79,14 @@ export function formatDoctor(result) {
 
 function check(label, ok, detail, { optional = false } = {}) {
   return { label, ok: Boolean(ok), detail, optional };
+}
+
+function formatRuntimeDetail(runtime) {
+  if (runtime.status === "compatible") {
+    return `${runtime.socketPath}; initialize succeeded; follower protocol not tested`;
+  }
+  if (runtime.status === "unavailable") {
+    return `${runtime.reason}; ChatGPT desktop may be closed`;
+  }
+  return `${runtime.reason}; IPC initialize or access check failed`;
 }

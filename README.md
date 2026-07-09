@@ -58,19 +58,26 @@ Check the install:
 ```bash
 pnpm exec wakefield setup status
 pnpm exec wakefield doctor
+pnpm exec wakefield codex runtime
 ```
 
-The selected Codex chat is the personality. Wakefield does not replace the
-Codex app; it routes work into that same conversation.
+The selected Codex chat is the personality. Wakefield does not replace Codex
+inside the ChatGPT desktop app; it routes work into that same conversation.
 
 For a new assistant, open Codex in the agent workspace shown by
 `wakefield setup status`, start the chat there, then select it with
 `wakefield select-thread --latest`. That workspace contains the generated
 `AGENTS.md` soul.
 
-After Wakefield installs Codex tools, it asks the live Codex Desktop runtime to
+After Wakefield installs Codex tools, it asks the live ChatGPT-hosted Codex runtime to
 refresh MCP servers through Codex's remote-control stream, then verifies the
 loaded MCP server status before continuing.
+
+`wakefield codex runtime` is non-mutating: it discovers the app-owned IPC socket,
+performs only the `initialize` handshake, and checks whether Codex session
+rollouts are readable. It explicitly does not exercise the private task-follower
+methods. After a ChatGPT desktop update, follow it with an attended managed
+connector `follower-probe` against a disposable or confirmed-idle task.
 
 ## Connectors
 
@@ -284,8 +291,8 @@ pnpm exec wakefield service configure \
   --dispatch-limit 3
 ```
 
-Use `dry-run` or `manual` while testing. Use `ipc` when the Codex app is running
-and the selected Codex chat is available.
+Use `dry-run` or `manual` while testing. Use `ipc` when ChatGPT desktop is running
+with Codex and the selected task is available.
 
 ## Package For Reuse
 
@@ -429,7 +436,7 @@ domain skills, duties, wakeups, and operating policy.
 
 - macOS
 - Node.js 20 or newer
-- Codex desktop app
+- ChatGPT desktop app with Codex
 - npm, pnpm, or yarn
 - Optional connector credentials for Discord, Photon/Spectrum, or IMAP
 

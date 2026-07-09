@@ -49,6 +49,14 @@ export function createTextInput(text) {
   return [{ type: "text", text, text_elements: [] }];
 }
 
+export function createClientDiscoveryResponse({ requestId, canHandle = false }) {
+  return {
+    type: "client-discovery-response",
+    requestId,
+    response: { canHandle }
+  };
+}
+
 export function fullAccessTurnSettings() {
   return {
     approvalPolicy: "never",
@@ -126,7 +134,7 @@ export async function resolveCodexIpcSocket({
   } catch (error) {
     if (error?.code === "ENOENT") {
       throw new CodexIpcError(
-        `Codex app IPC socket directory does not exist at ${directory}. Start the Codex app and open the target thread.`,
+        `Codex IPC socket directory does not exist at ${directory}. Open ChatGPT desktop and load the target Codex task.`,
         { code: "socket-directory-missing" }
       );
     }
@@ -155,7 +163,7 @@ export async function resolveCodexIpcSocket({
   }
 
   throw new CodexIpcError(
-    `No Codex app IPC socket found under ${directory}. Start the Codex app and open the target thread.`,
+    `No Codex IPC socket found under ${directory}. Open ChatGPT desktop and load the target Codex task.`,
     { code: "socket-missing" }
   );
 }
@@ -317,12 +325,9 @@ export class CodexIpcClient {
     }
 
     if (message.type === "client-discovery-request" && message.requestId) {
-      this.#send({
-        type: "client-discovery-response",
+      this.#send(createClientDiscoveryResponse({
         requestId: message.requestId,
-        sourceClientId: this.clientId,
-        result: { canHandle: false }
-      });
+      }));
     }
   }
 
@@ -353,9 +358,10 @@ export function methodVersion(method) {
   switch (method) {
     case "thread-follower-start-turn":
     case "thread-follower-steer-turn":
-    case "thread-follower-interrupt-turn":
     case "thread-follower-submit-user-input":
       return 1;
+    case "thread-follower-interrupt-turn":
+      return 2;
     default:
       return 0;
   }

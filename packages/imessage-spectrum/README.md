@@ -1,6 +1,6 @@
 # iMessage Codex Connector
 
-Standalone connector for routing iMessage/SMS messages into a live Codex app thread and giving that thread tools to send iMessage/SMS replies.
+Standalone connector for routing iMessage/SMS messages into a live Codex task in the ChatGPT desktop app and giving that task tools to send iMessage/SMS replies.
 
 This connector supports two iMessage providers:
 
@@ -74,7 +74,7 @@ Edit `config.local.json`:
 - `imessage.typing.showWhileThinking`: defaults to `true`, matching Discord. The connector shows typing while the routed Codex turn is active, then stops when the turn completes.
 - `targets[].threadId`: Codex conversation id for the persistent agent personality.
 - `targets[].cwd`: workspace used when starting the Codex turn. Point this at the agent workspace whose `AGENTS.md` should be active.
-- `codex.socketPath`: optional explicit Codex app IPC socket path. Leave unset to discover the active app-owned socket.
+- `codex.socketPath`: optional explicit Codex IPC socket path. Leave unset to discover the active ChatGPT-owned socket.
 - `codex.deepLinkWake`: optional recovery for a missing app-owned follower. Defaults to opening `codex://threads/<threadId>` with `/usr/bin/open`, polling follower IPC for up to 30 seconds, and re-opening the deep link every 6 seconds while the app is still starting.
 - `codex.appServer`: diagnostic-only remote-control daemon settings. Do not use this path for production iMessage routing unless Codex adds a UI-synced remote-control ingest method.
 - `allowAllAddresses`: route every inbound Spectrum iMessage into the selected agent. Keep this true only for a dedicated Photon project owned by that agent.

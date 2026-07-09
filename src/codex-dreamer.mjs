@@ -8,17 +8,18 @@ import { expandHome } from "./paths.mjs";
 const DEFAULT_TIMEOUT_MS = 300000;
 const DEFAULT_DREAM_MODEL = "gpt-5.4-mini";
 const DEFAULT_CODEX_PATHS = [
+  "/Applications/ChatGPT.app/Contents/Resources/codex",
   "/Applications/Codex.app/Contents/Resources/codex",
   "/opt/homebrew/bin/codex",
   "/usr/local/bin/codex"
 ];
 
-export function codexDreamerConfig(env = process.env) {
+export function codexDreamerConfig(env = process.env, { exists = existsSync } = {}) {
   const provider = String(env.WAKEFIELD_MEMORY_PROVIDER || "codex").trim().toLowerCase();
   return {
     provider,
     enabled: provider === "codex",
-    codexPath: env.WAKEFIELD_DREAM_CODEX_PATH || env.WAKEFIELD_CODEX_PATH || defaultCodexPath(),
+    codexPath: env.WAKEFIELD_DREAM_CODEX_PATH || env.WAKEFIELD_CODEX_PATH || defaultCodexPath({ exists }),
     codexHome: env.WAKEFIELD_DREAM_CODEX_HOME || null,
     model: env.WAKEFIELD_DREAM_MODEL || env.WAKEFIELD_MEMORY_MODEL || DEFAULT_DREAM_MODEL,
     reasoningEffort: env.WAKEFIELD_DREAM_REASONING_EFFORT || "low",
@@ -28,8 +29,8 @@ export function codexDreamerConfig(env = process.env) {
   };
 }
 
-function defaultCodexPath() {
-  return DEFAULT_CODEX_PATHS.find((candidate) => existsSync(candidate)) || "codex";
+export function defaultCodexPath({ exists = existsSync } = {}) {
+  return DEFAULT_CODEX_PATHS.find((candidate) => exists(candidate)) || "codex";
 }
 
 export async function createCodexStructuredMemoryResponse({
