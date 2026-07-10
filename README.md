@@ -269,6 +269,11 @@ The Wakefield service tick is the background loop:
 4. optionally dispatch pending external messages
 5. record service status
 
+When enabled, the health monitor also records scheduled Codex dispatches,
+checks turn completion, and uses a separate LaunchAgent to detect a stale
+Wakefield service. Configure an alert command that can contact the owner
+without depending on the possibly stuck Codex thread:
+
 Configure it:
 
 ```bash
@@ -280,6 +285,12 @@ pnpm exec wakefield service configure \
 pnpm exec wakefield service run-once
 pnpm exec wakefield service launch-agent install --load
 pnpm exec wakefield service launch-agent status
+
+pnpm exec wakefield service configure \
+  --enable-health \
+  --health-alert-command /absolute/path/to/health-alert
+pnpm exec wakefield health launch-agent install --load
+pnpm exec wakefield health status
 ```
 
 External message dispatch is opt-in:

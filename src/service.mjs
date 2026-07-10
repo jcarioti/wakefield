@@ -15,11 +15,13 @@ import { processDreams } from "./memory.mjs";
 import { nodeExecutable } from "./node-runtime.mjs";
 import { appHome, expandHome, launchAgentsDir, logsDir, serviceConfigPath } from "./paths.mjs";
 import { loadAgent } from "./profile.mjs";
+import { normalizeHealth, runHealthCheck } from "./health.mjs";
 
 const DEFAULT_INTERVAL_MINUTES = 15;
 const DEFAULT_DISPATCH_LIMIT = 3;
 const DEFAULT_DISPATCH_MODE = "ipc";
 export const LAUNCH_AGENT_LABEL = "com.wakefield.service";
+export const HEALTH_LAUNCH_AGENT_LABEL = "com.wakefield.health";
 const execFileAsync = promisify(execFile);
 
 export async function serviceStatus({
@@ -43,6 +45,7 @@ export async function serviceStatus({
       ...config.externalDispatch,
       pending: pendingExternalMessages
     },
+    health: config.health,
     duties: {
       total: duties.wakeups.length,
       enabled: duties.wakeups.filter((duty) => duty.enabled).length,
@@ -69,7 +72,8 @@ export async function configureService({
   dispatchMode = null,
   dispatchLimit = null,
   envFile = null,
-  clearEnvFile = false
+  clearEnvFile = false,
+  health = null
 } = {}) {
   const current = await loadServiceConfig(home);
   const hasEnvFile = envFile != null && envFile !== false;
@@ -88,6 +92,7 @@ export async function configureService({
       mode: dispatchMode == null ? current.externalDispatch.mode : normalizeDispatchMode(dispatchMode),
       limit: dispatchLimit == null ? current.externalDispatch.limit : normalizeDispatchLimit(dispatchLimit)
     },
+    health: health == null ? current.health : normalizeHealth(health),
     updatedAt: new Date().toISOString()
   };
   await writeJson(serviceConfigPath(home), next);
@@ -156,6 +161,13 @@ export async function runServiceOnce({
   };
   await writeJson(serviceConfigPath(home), nextConfig);
 
+  const health = await runHealthCheck({
+    home,
+    now,
+    dutyResults: duties,
+    serviceRun: true
+  });
+
   return {
     ok: true,
     ranAt: now.toISOString(),
@@ -165,6 +177,7 @@ export async function runServiceOnce({
     duties,
     connectorPolls,
     externalDispatch,
+    health,
     service: await serviceStatus({ home, now })
   };
 }
@@ -175,6 +188,7 @@ export function formatServiceStatus(status) {
     `enabled: ${status.enabled ? "yes" : "no"}`,
     `interval: ${status.intervalMinutes} minutes`,
     `external dispatch: ${status.externalDispatch.enabled ? `${status.externalDispatch.mode}, limit ${status.externalDispatch.limit}` : "disabled"}`,
+    `health monitor: ${status.health?.enabled ? "enabled" : "disabled"}`,
     `env file: ${formatEnvironment(status.environment)}`,
     `duties: ${status.duties.enabled}/${status.duties.total} enabled, ${status.duties.due} due`,
     `pending external messages: ${status.externalDispatch.pending}`,
@@ -193,33 +207,35 @@ export function formatServiceRun(result) {
 
 export async function launchAgentStatus({
   home = appHome(),
-  launchAgentsPath = launchAgentsDir()
+  launchAgentsPath = launchAgentsDir(),
+  label = LAUNCH_AGENT_LABEL
 } = {}) {
-  const plistPath = launchAgentPath({ launchAgentsPath });
+  const plistPath = launchAgentPath({ launchAgentsPath, label });
   const installed = await pathExists(plistPath);
-  const loaded = await launchAgentLoaded(launchAgentsPath);
-  const launchctl = launchctlContext();
+  const loaded = await launchAgentLoaded(launchAgentsPath, label);
+  const launchctl = launchctlContext(label);
   return {
     kind: "launch-agent",
     supported: launchAgentSupported(launchAgentsPath),
     canLoad: launchctl.supported,
     launchctlTarget: launchctl.serviceTarget,
-    label: LAUNCH_AGENT_LABEL,
+    label,
     installed,
     loaded,
     plistPath,
-    expectedProgram: launchAgentCommand()[0],
+    expectedProgram: launchAgentCommand(label)[0],
     home
   };
 }
 
 export async function launchAgentPlist({
   home = appHome(),
-  intervalMinutes = null
+  intervalMinutes = null,
+  label = LAUNCH_AGENT_LABEL
 } = {}) {
   const config = await loadServiceConfig(home);
   const interval = normalizeInterval(intervalMinutes || config.intervalMinutes);
-  const [nodePath, cliPath, ...args] = launchAgentCommand();
+  const [nodePath, cliPath, ...args] = launchAgentCommand(label);
   const logRoot = logsDir(home);
   const env = {
     WAKEFIELD_HOME: home
@@ -228,7 +244,7 @@ export async function launchAgentPlist({
   if (process.env.CODEX_HOME) env.CODEX_HOME = process.env.CODEX_HOME;
 
   return plist({
-    Label: LAUNCH_AGENT_LABEL,
+    Label: label,
     ProgramArguments: [nodePath, cliPath, ...args],
     StartInterval: interval * 60,
     RunAtLoad: true,
@@ -245,16 +261,19 @@ export async function installLaunchAgent({
   dryRun = false,
   load = false,
   reload = false,
+  label = LAUNCH_AGENT_LABEL,
   launchctlRunner = execFileAsync
 } = {}) {
   const config = await loadServiceConfig(home);
   const interval = normalizeInterval(intervalMinutes || config.intervalMinutes);
-  const plistText = await launchAgentPlist({ home, intervalMinutes: interval });
-  const plistPath = launchAgentPath({ launchAgentsPath });
+  const plistText = await launchAgentPlist({ home, intervalMinutes: interval, label });
+  const plistPath = launchAgentPath({ launchAgentsPath, label });
 
   if (!dryRun) {
     assertLaunchAgentSupported(launchAgentsPath);
-    await configureService({ home, enabled: true, intervalMinutes: interval });
+    if (label === LAUNCH_AGENT_LABEL) {
+      await configureService({ home, enabled: true, intervalMinutes: interval });
+    }
     await ensureDir(launchAgentsPath);
     await ensureDir(logsDir(home));
     await fs.writeFile(plistPath, plistText);
@@ -265,6 +284,7 @@ export async function installLaunchAgent({
     ? await loadLaunchAgent({
       home,
       launchAgentsPath,
+      label,
       dryRun,
       reload: Boolean(reload),
       launchctlRunner
@@ -275,11 +295,11 @@ export async function installLaunchAgent({
     dryRun: Boolean(dryRun),
     action: "install",
     plistPath,
-    label: LAUNCH_AGENT_LABEL,
+    label,
     intervalMinutes: interval,
     plist: plistText,
     loadResult,
-    status: dryRun ? await launchAgentStatus({ home, launchAgentsPath }) : await launchAgentStatus({ home, launchAgentsPath })
+    status: await launchAgentStatus({ home, launchAgentsPath, label })
   };
 }
 
@@ -288,14 +308,16 @@ export async function uninstallLaunchAgent({
   launchAgentsPath = launchAgentsDir(),
   dryRun = false,
   unload = false,
+  label = LAUNCH_AGENT_LABEL,
   launchctlRunner = execFileAsync
 } = {}) {
-  const plistPath = launchAgentPath({ launchAgentsPath });
+  const plistPath = launchAgentPath({ launchAgentsPath, label });
   const existed = await pathExists(plistPath);
   const unloadResult = unload
     ? await unloadLaunchAgent({
       home,
       launchAgentsPath,
+      label,
       dryRun,
       launchctlRunner
     })
@@ -304,17 +326,17 @@ export async function uninstallLaunchAgent({
     assertLaunchAgentSupported(launchAgentsPath);
     await fs.unlink(plistPath);
   }
-  if (!dryRun) {
+  if (!dryRun && label === LAUNCH_AGENT_LABEL) {
     await configureService({ home, enabled: false });
   }
   return {
     dryRun: Boolean(dryRun),
     action: "uninstall",
     plistPath,
-    label: LAUNCH_AGENT_LABEL,
+    label,
     removed: existed && !dryRun,
     unloadResult,
-    status: await launchAgentStatus({ home, launchAgentsPath })
+    status: await launchAgentStatus({ home, launchAgentsPath, label })
   };
 }
 
@@ -323,18 +345,19 @@ export async function loadLaunchAgent({
   launchAgentsPath = launchAgentsDir(),
   dryRun = false,
   reload = false,
+  label = LAUNCH_AGENT_LABEL,
   launchctlRunner = execFileAsync
 } = {}) {
-  const plistPath = launchAgentPath({ launchAgentsPath });
-  const context = launchctlContext();
+  const plistPath = launchAgentPath({ launchAgentsPath, label });
+  const context = launchctlContext(label);
   const installed = await pathExists(plistPath);
-  const commands = launchAgentLoadCommands({ plistPath, reload, context });
+  const commands = launchAgentLoadCommands({ plistPath, reload, context, label });
 
   if (!dryRun) {
     assertLaunchAgentSupported(launchAgentsPath);
     assertLaunchctlSupported(context);
     if (!installed) throw new Error(`Wakefield LaunchAgent is not installed: ${plistPath}`);
-    const loaded = await launchAgentLoaded(launchAgentsPath);
+    const loaded = await launchAgentLoaded(launchAgentsPath, label);
     if (loaded && !reload) {
       return launchctlResult({
         action: "load",
@@ -344,7 +367,7 @@ export async function loadLaunchAgent({
         plistPath,
         commands: [],
         skipped: "already-loaded",
-        status: await launchAgentStatus({ home, launchAgentsPath })
+        status: await launchAgentStatus({ home, launchAgentsPath, label })
       });
     }
     await runLaunchctlCommands(commands, { runner: launchctlRunner, ignoreFirstBootoutFailure: Boolean(reload) });
@@ -358,7 +381,7 @@ export async function loadLaunchAgent({
     plistPath,
     commands,
     skipped: !context.supported ? "launchctl-unavailable" : null,
-    status: await launchAgentStatus({ home, launchAgentsPath })
+    status: await launchAgentStatus({ home, launchAgentsPath, label })
   });
 }
 
@@ -366,11 +389,12 @@ export async function unloadLaunchAgent({
   home = appHome(),
   launchAgentsPath = launchAgentsDir(),
   dryRun = false,
+  label = LAUNCH_AGENT_LABEL,
   launchctlRunner = execFileAsync
 } = {}) {
-  const plistPath = launchAgentPath({ launchAgentsPath });
-  const context = launchctlContext();
-  const commands = launchAgentUnloadCommands({ context });
+  const plistPath = launchAgentPath({ launchAgentsPath, label });
+  const context = launchctlContext(label);
+  const commands = launchAgentUnloadCommands({ context, label });
 
   if (!dryRun) {
     assertLaunchAgentSupported(launchAgentsPath);
@@ -386,7 +410,7 @@ export async function unloadLaunchAgent({
     plistPath,
     commands,
     skipped: !context.supported ? "launchctl-unavailable" : null,
-    status: await launchAgentStatus({ home, launchAgentsPath })
+    status: await launchAgentStatus({ home, launchAgentsPath, label })
   });
 }
 
@@ -443,7 +467,8 @@ async function loadServiceConfig(home) {
     externalDispatch: normalizeExternalDispatch(current.externalDispatch),
     envFile: normalizeEnvFile(current.envFile || process.env.WAKEFIELD_ENV_FILE || null),
     lastRunAt: current.lastRunAt || null,
-    updatedAt: current.updatedAt || null
+    updatedAt: current.updatedAt || null,
+    health: normalizeHealth(current.health)
   };
 }
 
@@ -571,16 +596,16 @@ function nextRunAt(config) {
   return new Date(last.getTime() + config.intervalMinutes * 60 * 1000).toISOString();
 }
 
-function launchAgentPath({ launchAgentsPath = launchAgentsDir() } = {}) {
-  return path.join(launchAgentsPath, `${LAUNCH_AGENT_LABEL}.plist`);
+function launchAgentPath({ launchAgentsPath = launchAgentsDir(), label = LAUNCH_AGENT_LABEL } = {}) {
+  return path.join(launchAgentsPath, `${label}.plist`);
 }
 
-async function launchAgentLoaded(launchAgentsPath) {
+async function launchAgentLoaded(launchAgentsPath, label = LAUNCH_AGENT_LABEL) {
   if (process.platform !== "darwin" || !isDefaultLaunchAgentsPath(launchAgentsPath) || typeof process.getuid !== "function") {
     return null;
   }
   try {
-    await execFileAsync("launchctl", ["print", `gui/${process.getuid()}/${LAUNCH_AGENT_LABEL}`]);
+    await execFileAsync("launchctl", ["print", `gui/${process.getuid()}/${label}`]);
     return true;
   } catch {
     return false;
@@ -607,17 +632,17 @@ function isDefaultLaunchAgentsPath(value) {
   return path.resolve(value) === path.resolve(launchAgentsDir({}));
 }
 
-function launchctlContext() {
+function launchctlContext(label = LAUNCH_AGENT_LABEL) {
   const hasUid = typeof process.getuid === "function";
   const userTarget = hasUid ? `gui/${process.getuid()}` : null;
   return {
     supported: process.platform === "darwin" && hasUid,
     userTarget,
-    serviceTarget: userTarget ? `${userTarget}/${LAUNCH_AGENT_LABEL}` : null
+    serviceTarget: userTarget ? `${userTarget}/${label}` : null
   };
 }
 
-function launchAgentLoadCommands({ plistPath, reload, context }) {
+function launchAgentLoadCommands({ plistPath, reload, context, label = LAUNCH_AGENT_LABEL }) {
   const commands = [];
   if (!context.userTarget || !context.serviceTarget) return commands;
   if (reload) commands.push(["bootout", context.serviceTarget]);
@@ -627,7 +652,7 @@ function launchAgentLoadCommands({ plistPath, reload, context }) {
   return commands.map(launchctlCommand);
 }
 
-function launchAgentUnloadCommands({ context }) {
+function launchAgentUnloadCommands({ context, label = LAUNCH_AGENT_LABEL }) {
   if (!context.serviceTarget) return [];
   return [launchctlCommand(["bootout", context.serviceTarget])];
 }
@@ -670,16 +695,16 @@ function launchctlResult({
     ok: Boolean(ok),
     supported: Boolean(supported),
     plistPath,
-    label: LAUNCH_AGENT_LABEL,
+    label: status?.label || LAUNCH_AGENT_LABEL,
     commands,
     skipped,
     status
   };
 }
 
-function launchAgentCommand() {
+function launchAgentCommand(label = LAUNCH_AGENT_LABEL) {
   const cliPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "cli.mjs");
-  return [nodeExecutable(), cliPath, "service", "run-once"];
+  return [nodeExecutable(), cliPath, label === HEALTH_LAUNCH_AGENT_LABEL ? "health" : "service", "run-once"];
 }
 
 function plist(value) {

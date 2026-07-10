@@ -152,15 +152,16 @@ export async function installAgentPack(file, {
     });
   }
 
-  if (enableService || pack.service.enabled) {
+  if (enableService || pack.service.enabled || pack.service.health) {
     const service = await configureService({
       home,
-      enabled: true,
+      enabled: enableService || pack.service.enabled ? true : null,
       intervalMinutes: pack.service.intervalMinutes || null,
       dispatchEnabled: pack.service.externalDispatch?.enabled == null ? null : pack.service.externalDispatch.enabled,
       dispatchMode: pack.service.externalDispatch?.mode || null,
       dispatchLimit: pack.service.externalDispatch?.limit || null,
-      envFile: pack.service.envFile || null
+      envFile: pack.service.envFile || null,
+      health: pack.service.health || null
     });
     actions.push({
       id: "service",

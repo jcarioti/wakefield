@@ -73,6 +73,10 @@ export function serviceConfigPath(home = appHome()) {
   return path.join(home, "service.json");
 }
 
+export function healthStatePath(home = appHome()) {
+  return path.join(home, "health.json");
+}
+
 export function contactsPath(home = appHome()) {
   return path.join(home, "contacts.json");
 }

@@ -31,11 +31,12 @@ import { compact, formatDreamResult, memoryContext, processDreams, recordMemory 
 import { openCodexNewThread, openCodexWorkspace } from "./codex-app.mjs";
 import { appHome, defaultAgentHome, expandHome, liveCodexConfigPath } from "./paths.mjs";
 import { agentStatus, bootstrapPrompt, configureAgent, ensureAgentMemory, initAgent, loadAgent, selectThread, SOUL_PRESETS, soulFromPreset, slugifyName } from "./profile.mjs";
-import { configureService, formatLaunchAgentResult, formatLaunchAgentStatus, formatServiceRun, formatServiceStatus, installLaunchAgent, launchAgentPlist, launchAgentStatus, loadLaunchAgent, runServiceOnce, serviceStatus, uninstallLaunchAgent, unloadLaunchAgent } from "./service.mjs";
+import { configureService, formatLaunchAgentResult, formatLaunchAgentStatus, formatServiceRun, formatServiceStatus, HEALTH_LAUNCH_AGENT_LABEL, installLaunchAgent, launchAgentPlist, launchAgentStatus, loadLaunchAgent, runServiceOnce, serviceStatus, uninstallLaunchAgent, unloadLaunchAgent } from "./service.mjs";
 import { formatSelfTest, runSelfTest } from "./self-test.mjs";
 import { formatActions, formatConnectors, formatNextSteps, formatSetupStatus, setupStatus } from "./setup.mjs";
 import { formatSetupRun, runSetup } from "./setup-runner.mjs";
 import { formatVerification, verifyWakefield } from "./verify.mjs";
+import { formatHealthStatus, healthStatus, runHealthCheck } from "./health.mjs";
 
 async function main(argv = process.argv.slice(2)) {
   const [command, ...rest] = argv;
@@ -1155,6 +1156,54 @@ async function main(argv = process.argv.slice(2)) {
     return;
   }
 
+  if (command === "health" && (rest[0] === "status" || !rest[0])) {
+    const options = parseOptions(rest[0] === "status" ? rest.slice(1) : rest);
+    const status = await healthStatus({});
+    console.log(options.json ? JSON.stringify(status, null, 2) : formatHealthStatus(status));
+    return;
+  }
+
+  if (command === "health" && rest[0] === "run-once") {
+    const options = parseOptions(rest.slice(1));
+    const result = await runHealthCheck({});
+    console.log(options.json ? JSON.stringify(result, null, 2) : formatHealthStatus(result));
+    process.exitCode = result.ok ? 0 : 1;
+    return;
+  }
+
+  if (command === "health" && rest[0] === "launch-agent") {
+    const action = rest[1] || "status";
+    const options = parseOptions(rest.slice(2));
+    const label = HEALTH_LAUNCH_AGENT_LABEL;
+    if (action === "status") {
+      const status = await launchAgentStatus({ label });
+      console.log(options.json ? JSON.stringify(status, null, 2) : formatLaunchAgentStatus(status));
+      return;
+    }
+    if (action === "print") {
+      process.stdout.write(await launchAgentPlist({ label }));
+      return;
+    }
+    if (action === "install" || action === "reload" || action === "load") {
+      const result = await installLaunchAgent({
+        label,
+        dryRun: Boolean(options.dryRun),
+        load: action !== "install" || Boolean(options.load || options.reload),
+        reload: action === "reload" || Boolean(options.reload)
+      });
+      console.log(options.json ? JSON.stringify(result, null, 2) : formatLaunchAgentResult(result));
+      return;
+    }
+    if (action === "uninstall" || action === "unload") {
+      const result = action === "uninstall"
+        ? await uninstallLaunchAgent({ label, dryRun: Boolean(options.dryRun), unload: Boolean(options.unload) })
+        : await unloadLaunchAgent({ label, dryRun: Boolean(options.dryRun) });
+      console.log(options.json ? JSON.stringify(result, null, 2) : formatLaunchAgentResult(result));
+      return;
+    }
+    throw new Error(`Unknown health launch-agent action: ${action}`);
+  }
+
   if (command === "service" && (rest[0] === "status" || !rest[0])) {
     const options = parseOptions(rest[0] === "status" ? rest.slice(1) : rest);
     const status = await serviceStatus();
@@ -1171,7 +1220,15 @@ async function main(argv = process.argv.slice(2)) {
       dispatchMode: options.dispatchMode,
       dispatchLimit: options.dispatchLimit,
       envFile: options.envFile || null,
-      clearEnvFile: Boolean(options.clearEnvFile)
+      clearEnvFile: Boolean(options.clearEnvFile),
+      health: options.enableHealth || options.disableHealth || options.healthAlertCommand
+        ? {
+          enabled: options.enableHealth ? true : options.disableHealth ? false : undefined,
+          serviceStaleMinutes: options.healthServiceStaleMinutes,
+          turnStallMinutes: options.healthTurnStallMinutes,
+          alertCommand: options.healthAlertCommand || null
+        }
+        : null
     });
     console.log(options.json ? JSON.stringify(status, null, 2) : formatServiceStatus(status));
     return;
@@ -1352,8 +1409,11 @@ function usage() {
     "  wakefield remember --text TEXT [--kind KIND] [--channel journal|inbox|dreams]",
     "  wakefield recall --query TEXT [--limit N]",
     "  wakefield dream [--limit N] [--dry-run] [--no-capture] [--json]",
+    "  wakefield health status [--json]",
+    "  wakefield health run-once [--json]",
+    "  wakefield health launch-agent status|print|install|load|reload|unload|uninstall [--json]",
     "  wakefield service status [--json]",
-    "  wakefield service configure [--enable|--disable] [--interval-minutes N] [--enable-dispatch|--disable-dispatch] [--dispatch-mode MODE] [--dispatch-limit N] [--envFile PATH|--clearEnvFile] [--json]",
+    "  wakefield service configure [--enable|--disable] [--interval-minutes N] [--enable-dispatch|--disable-dispatch] [--dispatch-mode MODE] [--dispatch-limit N] [--enable-health|--disable-health] [--health-alert-command PATH] [--envFile PATH|--clearEnvFile] [--json]",
     "  wakefield service run-once [--limit N] [--no-capture] [--json]",
     "  wakefield service launch-agent status [--json]",
     "  wakefield service launch-agent print",
