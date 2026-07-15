@@ -11,6 +11,7 @@ import { nodeExecutable } from "./node-runtime.mjs";
 import { appHome, connectorConfigPath, expandHome, launchAgentsDir, logsDir, managedConnectorsConfigPath, serviceConfigPath } from "./paths.mjs";
 import { loadEnvFile } from "./service-env.mjs";
 import { connectorSkill, connectorSkillPrompt } from "./connector-skills.mjs";
+import { sameCodexPermissions } from "./codex-permissions.mjs";
 import { formatCodexMcpReload, reloadCodexMcpServers } from "./codex-mcp-reload.mjs";
 import { upsertContact } from "./contacts.mjs";
 import { loadConnectorConfig as loadImessageConnectorConfig } from "../packages/imessage-spectrum/src/config.mjs";
@@ -656,12 +657,17 @@ export async function retargetManagedConnectorConfigs({
         id: target.id || targetId,
         displayName: agent.name || target.displayName || targetId,
         threadId: agent.threadId,
-        cwd: agent.cwd
+        cwd: agent.cwd,
+        ...(Object.prototype.hasOwnProperty.call(agent, "codexPermissions")
+          ? { codexPermissions: agent.codexPermissions }
+          : {})
       };
       changed = changed
         || target.threadId !== next.threadId
         || !sameResolvedPath(target.cwd, next.cwd)
-        || target.displayName !== next.displayName;
+        || target.displayName !== next.displayName
+        || (Object.prototype.hasOwnProperty.call(agent, "codexPermissions")
+          && !sameCodexPermissions(target.codexPermissions, next.codexPermissions));
       return next;
     });
     if (changed) {
@@ -672,12 +678,55 @@ export async function retargetManagedConnectorConfigs({
     }
     results.push({ id: config.id, changed, skipped: null, path: config.configPath });
   }
+  results.push(...await retargetLocalConnectorConfigs({ agent }));
   return {
     ok: true,
     changed: results.filter((result) => result.changed).length,
     skipped: results.filter((result) => result.skipped),
     results
   };
+}
+
+async function retargetLocalConnectorConfigs({ agent }) {
+  const root = agent?.agentHome ? path.join(agent.agentHome, "local", "connectors") : null;
+  if (!root || !await pathExists(root)) return [];
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  const results = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const configPath = path.join(root, entry.name, "config.local.json");
+    if (!await pathExists(configPath)) continue;
+    const raw = await readJson(configPath, {});
+    if (!Array.isArray(raw.targets) || raw.targets.length === 0) continue;
+    const matchingIndex = raw.targets.findIndex((target) => target.id === agent.id);
+    const selectedIndex = matchingIndex >= 0 ? matchingIndex : raw.targets.length === 1 ? 0 : -1;
+    if (selectedIndex < 0) {
+      results.push({ id: `local:${entry.name}`, changed: false, skipped: "target-not-found", path: configPath });
+      continue;
+    }
+    const target = raw.targets[selectedIndex];
+    const nextTarget = {
+      ...target,
+      displayName: agent.name || target.displayName || agent.id,
+      threadId: agent.threadId,
+      cwd: agent.cwd,
+      ...(Object.prototype.hasOwnProperty.call(agent, "codexPermissions")
+        ? { codexPermissions: agent.codexPermissions }
+        : {})
+    };
+    const changed = target.threadId !== nextTarget.threadId
+      || target.cwd !== nextTarget.cwd
+      || target.displayName !== nextTarget.displayName
+      || (Object.prototype.hasOwnProperty.call(agent, "codexPermissions")
+        && !sameCodexPermissions(target.codexPermissions, nextTarget.codexPermissions));
+    if (changed) {
+      const nextTargets = raw.targets.slice();
+      nextTargets[selectedIndex] = nextTarget;
+      await writeJson(configPath, { ...raw, targets: nextTargets });
+    }
+    results.push({ id: `local:${entry.name}`, changed, skipped: null, path: configPath });
+  }
+  return results;
 }
 
 export function formatManagedConnectorSetup(result) {
@@ -1313,7 +1362,8 @@ function managedConnectorConfigTemplate(adapter, config, agent, settings, { home
     id: targetId,
     displayName: setting(settings, "displayName", agent.name || targetId),
     threadId: setting(settings, "threadId", agent.threadId),
-    cwd: setting(settings, "cwd", agent.cwd)
+    cwd: setting(settings, "cwd", agent.cwd),
+    codexPermissions: agent.codexPermissions || null
   };
   const eventLogPath = setting(settings, "eventLogPath", "");
   if (eventLogPath) target.eventLogPath = eventLogPath;
@@ -1595,6 +1645,7 @@ async function inspectConnectorConfig(adapter, config, { agent, now }) {
     displayName: target.displayName || target.id || null,
     threadId: target.threadId || null,
     cwd: target.cwd ? resolveConfigPath(target.cwd, { cwd: path.dirname(configPath) }) : null,
+    codexPermissions: target.codexPermissions || null,
     allowedGuildIds: asList(target.allowedGuildIds),
     allowedChannelIds: asList(target.allowedChannelIds),
     allowedUserIds: asList(target.allowedUserIds),

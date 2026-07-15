@@ -12,6 +12,68 @@ export async function findThreadRolloutPath(threadId, {
   return matches[0]?.path || null;
 }
 
+export async function findTurnForPrompt({
+  rolloutPath,
+  prompt,
+  afterTimestamp = null
+} = {}) {
+  if (!rolloutPath || !prompt) return null;
+  let text;
+  try {
+    text = await fs.readFile(rolloutPath, "utf8");
+  } catch {
+    return null;
+  }
+
+  const after = afterTimestamp ? Date.parse(afterTimestamp) : null;
+  let acceptedAt = null;
+  let turnId = null;
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const timestamp = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : NaN;
+    if (Number.isFinite(after) && Number.isFinite(timestamp) && timestamp < after) continue;
+    if (!containsPrompt(entry, prompt)) continue;
+    acceptedAt = entry.timestamp || acceptedAt;
+    turnId = findTurnId(entry) || turnId;
+    if (turnId) break;
+  }
+  return acceptedAt || turnId
+    ? { acceptedAt, turnId }
+    : null;
+}
+
+export async function waitForTurnForPrompt({
+  rolloutPath = null,
+  threadId = null,
+  codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex"),
+  prompt,
+  afterTimestamp = null,
+  timeoutMs = 30000,
+  pollMs = 500
+} = {}) {
+  const startedAt = Date.now();
+  do {
+    const resolvedRolloutPath = rolloutPath || (threadId
+      ? await findThreadRolloutPath(threadId, { codexHome })
+      : null);
+    const match = await findTurnForPrompt({
+      rolloutPath: resolvedRolloutPath,
+      prompt,
+      afterTimestamp
+    });
+    if (match) return { ...match, rolloutPath: resolvedRolloutPath };
+    if (Date.now() - startedAt >= timeoutMs) break;
+    await sleep(Math.min(pollMs, Math.max(1, timeoutMs - (Date.now() - startedAt))));
+  } while (Date.now() - startedAt < timeoutMs);
+  return null;
+}
+
 export async function waitForTurnCompletion({
   rolloutPath,
   turnId,
@@ -235,6 +297,32 @@ async function walkRecentSessionFiles(directory, matches, threadId, depth = 0) {
       matches.push({ path: entryPath, mtimeMs: stat?.mtimeMs ?? 0 });
     }
   }
+}
+
+function findTurnId(value) {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const match = findTurnId(item);
+      if (match) return match;
+    }
+    return null;
+  }
+  if (!value || typeof value !== "object") return null;
+  for (const key of ["turn_id", "turnId"]) {
+    if (typeof value[key] === "string") return value[key];
+  }
+  for (const child of Object.values(value)) {
+    const match = findTurnId(child);
+    if (match) return match;
+  }
+  return null;
+}
+
+function containsPrompt(value, prompt) {
+  if (typeof value === "string") return value.includes(prompt);
+  if (Array.isArray(value)) return value.some((item) => containsPrompt(item, prompt));
+  if (!value || typeof value !== "object") return false;
+  return Object.values(value).some((child) => containsPrompt(child, prompt));
 }
 
 function sleep(ms) {

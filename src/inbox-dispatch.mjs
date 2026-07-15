@@ -37,6 +37,7 @@ export async function dispatchExternalMessage(agent, {
       threadId: route.threadId,
       cwd: route.cwd,
       prompt: route.prompt,
+      permissions: route.permissions,
       mode: normalizedMode === "ipc" ? "auto" : normalizedMode,
       client,
       socketPath

@@ -5,10 +5,16 @@ import { configureConnector } from "./connectors.mjs";
 import { importContactsFile } from "./contacts.mjs";
 import { importDuties } from "./duties.mjs";
 import { installWakefield } from "./install.mjs";
-import { importManagedConnectors } from "./managed-connectors.mjs";
+import {
+  importManagedConnectors,
+  loadManagedConnectorLaunchAgent,
+  managedConnectorLaunchAgentStatus,
+  retargetManagedConnectorConfigs
+} from "./managed-connectors.mjs";
 import { configureService } from "./service.mjs";
 import { appHome, expandHome } from "./paths.mjs";
 import { ensureDir, pathExists } from "./json-store.mjs";
+import { normalizeCodexPermissions } from "./codex-permissions.mjs";
 
 const PACK_SCHEMA_VERSION = 1;
 
@@ -76,6 +82,7 @@ export async function installAgentPack(file, {
     soul: await packSoul(pack),
     threadId: threadId || await maybeLatestThreadId({ latestThread, codexHomePath }),
     cwd: pack.agent.cwd,
+    codexPermissions: pack.agent.codexPermissions,
     overwriteAgent,
     skipHooks,
     home,
@@ -149,6 +156,28 @@ export async function installAgentPack(file, {
       id: "managed-connectors",
       status: "configured",
       detail: `${managed.imported} connector package(s)`
+    });
+  }
+
+  if (pack.agent.codexPermissions !== undefined) {
+    const retargeted = await retargetManagedConnectorConfigs({
+      home,
+      agent: install.profile
+    });
+    const reloaded = [];
+    for (const result of retargeted.results || []) {
+      if (!result.changed) continue;
+      const launchAgent = await managedConnectorLaunchAgentStatus(result.id, { home });
+      if (!launchAgent.loaded) continue;
+      await loadManagedConnectorLaunchAgent(result.id, { home, reload: true });
+      reloaded.push(result.id);
+    }
+    actions.push({
+      id: "managed-connector-targets",
+      status: retargeted.ok ? "retargeted" : "skipped",
+      detail: retargeted.ok
+        ? `${retargeted.changed} connector target(s) updated${reloaded.length > 0 ? `; reloaded ${reloaded.join(", ")}` : ""}`
+        : retargeted.reason
     });
   }
 
@@ -227,7 +256,10 @@ function normalizeAgentPack(raw, { packPath }) {
       name: agent.name || source.name || "Wakefield",
       soul: agent.soul || source.soul || "",
       soulFile: agent.soulFile ? resolvePackPath(packDir, agent.soulFile) : null,
-      cwd: agent.cwd ? resolvePackPath(packDir, agent.cwd) : null
+      cwd: agent.cwd ? resolvePackPath(packDir, agent.cwd) : null,
+      ...(agent.codexPermissions === undefined
+        ? {}
+        : { codexPermissions: normalizeCodexPermissions(agent.codexPermissions) })
     },
     contacts: {
       file: source.contacts?.file ? resolvePackPath(packDir, source.contacts.file) : null,

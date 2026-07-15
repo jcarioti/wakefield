@@ -8,6 +8,7 @@ import { compact, recordMemory } from "./memory.mjs";
 import { appHome } from "./paths.mjs";
 
 const DEFAULT_LIMIT = 20;
+const MAX_EXTERNAL_PROMPT_TEXT_CHARS = 128_000;
 const MESSAGE_EVENT_KIND = "external-message";
 const STATUS_EVENT_KIND = "external-status";
 
@@ -171,11 +172,21 @@ export async function routeForExternalMessage(agent, message) {
     reason: ready ? null : "Select a persistent Codex thread before dispatching external messages.",
     threadId: agent?.threadId || null,
     cwd: agent?.cwd || null,
+    permissions: agent?.codexPermissions || null,
     prompt: formatExternalPrompt(message)
   };
 }
 
 export function formatExternalPrompt(message) {
+  const attachments = Array.isArray(message.metadata?.attachments)
+    ? message.metadata.attachments
+      .map((attachment) => {
+        const filename = attachment.filename || "unnamed attachment";
+        const contentType = attachment.contentType ? ` (${attachment.contentType})` : "";
+        return `${filename}${contentType}`;
+      })
+      .filter(Boolean)
+    : [];
   const header = [
     `External ${message.connectorName || message.connector || "connector"} message`,
     `Connector: ${message.connector}`,
@@ -188,7 +199,8 @@ export function formatExternalPrompt(message) {
     message.subject ? `Subject: ${message.subject}` : null,
     message.messageId ? `Message ID: ${message.messageId}` : null,
     message.url ? `URL: ${message.url}` : null,
-    message.id ? `Wakefield external ID: ${message.id}` : null
+    message.id ? `Wakefield external ID: ${message.id}` : null,
+    attachments.length > 0 ? `Attachments: ${attachments.join(", ")}` : null
   ].filter(Boolean);
 
   return [
@@ -196,10 +208,22 @@ export function formatExternalPrompt(message) {
     connectorSkillPrompt(message.connector) || null,
     "",
     "Message:",
-    message.text || "",
+    safeExternalPromptText(message),
     "",
     "Handle this through the selected Wakefield personality. Keep the source metadata available for any connector reply tool, and do not claim a reply was sent unless a connector transport actually sends it."
   ].filter((line) => line != null).join("\n");
+}
+
+function safeExternalPromptText(message) {
+  let text = String(message.text || "");
+  if (message.connector === "email") {
+    text = text.replace(
+      /\n--[^\n]+\nContent-Type:[^\n]*\n(?:[^\n]*\n)*?Content-Disposition:[ \t]*attachment\b[\s\S]*$/i,
+      "\n[Email attachment omitted from prompt.]"
+    );
+  }
+  if (text.length <= MAX_EXTERNAL_PROMPT_TEXT_CHARS) return text;
+  return `${text.slice(0, MAX_EXTERNAL_PROMPT_TEXT_CHARS)}\n\n[External message text truncated by Wakefield.]`;
 }
 
 export function formatExternalMessages(messages) {

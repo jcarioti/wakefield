@@ -1310,6 +1310,7 @@ private struct WakeupDetailPane: View {
 
     private var nextRunText: String {
         if !wakeup.enabled { return "Paused" }
+        if wakeup.dispatchState == "awaiting-confirmation" { return "Awaiting confirmation" }
         if wakeup.due == true { return "Due now" }
         return formattedWakefieldDate(wakeup.nextRunAt) ?? "Not scheduled"
     }

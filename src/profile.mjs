@@ -18,6 +18,7 @@ import {
   expandHome,
   isPathInside
 } from "./paths.mjs";
+import { normalizeCodexPermissions } from "./codex-permissions.mjs";
 import { ensureDir, pathExists, readJson, touch, writeJson } from "./json-store.mjs";
 
 export function slugifyName(name) {
@@ -65,6 +66,7 @@ export async function initAgent({
   threadId = null,
   cwd = null,
   agentHome = null,
+  codexPermissions = null,
   home = appHome(),
   overwrite = false
 }) {
@@ -123,6 +125,7 @@ export async function initAgent({
     localDir,
     threadId,
     cwd: resolvedCwd,
+    codexPermissions: normalizeCodexPermissions(codexPermissions),
     soulPath: resolvedSoulPath,
     bootstrapPromptPath: resolvedAgentHome ? path.join(localDir, "bootstrap-prompt.md") : null,
     memory,
@@ -289,7 +292,23 @@ export async function selectThread({
     threadId: String(threadId).trim(),
     cwd: cwd ? path.resolve(expandHome(cwd)) : profile.cwd
   };
-  return saveAgent(next, home);
+  const saved = await saveAgent(next, home);
+  const { retargetManagedConnectorConfigs } = await import("./managed-connectors.mjs");
+  await retargetManagedConnectorConfigs({ agent: saved, home });
+  await purgePendingDispatchesForThread({ agent: saved, home });
+  return saved;
+}
+
+async function purgePendingDispatchesForThread({ agent, home }) {
+  const { loadDuties, saveDuties } = await import("./duties.mjs");
+  const duties = await loadDuties({ home });
+  const pendingDispatches = Array.isArray(duties.pendingDispatches) ? duties.pendingDispatches : [];
+  const stale = pendingDispatches.filter((pending) => pending.threadId && pending.threadId !== agent.threadId);
+  if (stale.length === 0) return;
+  await saveDuties({
+    ...duties,
+    pendingDispatches: pendingDispatches.filter((pending) => !pending.threadId || pending.threadId === agent.threadId)
+  }, { home });
 }
 
 export async function listAgents(home = appHome()) {

@@ -1,12 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { routePromptToCodex } from "./codex-ipc.mjs";
+import { CodexDispatchUncertainError, routePromptToCodex } from "./codex-ipc.mjs";
+import { findTurnForPrompt, findThreadRolloutPath } from "../packages/connector-shared/src/codex-rollout-watch.mjs";
 import { dutiesPath, appHome, expandHome } from "./paths.mjs";
 import { readJson, writeJson } from "./json-store.mjs";
 
 const DUTIES_SCHEMA_VERSION = 1;
 const DEFAULT_DISPATCH_MODE = "dry-run";
 const SCHEDULED_WAKEUP_SKILL = "scheduled-wakeup";
+const PENDING_DISPATCH_GRACE_MINUTES = 5;
 
 export async function loadDuties({
   home = appHome()
@@ -40,7 +42,8 @@ export async function importDuties(duties, {
     schemaVersion: DUTIES_SCHEMA_VERSION,
     source: source || current.source,
     duties: mergeDuties(current.duties, incomingRaw.duties || [], { replace }),
-    wakeups: mergeWakeups(current.wakeups, incomingRaw.wakeups || [], { replace })
+    wakeups: mergeWakeups(current.wakeups, incomingRaw.wakeups || [], { replace }),
+    pendingDispatches: current.pendingDispatches
   }, { home });
 }
 
@@ -161,30 +164,42 @@ export async function runDueDuties(agent, {
   now = new Date(),
   dispatchClient = null,
   dispatchSocketPath = null,
+  codexHomePath = null,
+  acceptanceReconcileMs = null,
   only = null,
   force = false
 } = {}) {
   if (!agent) throw new Error("runDueDuties needs an agent profile.");
   const document = await loadDuties({ home });
-  const selected = wakeupStatuses(document, { now, includeCompatibilityWakeups: true })
+  const reconciliation = await reconcilePendingDispatches(document, { home, now });
+  let nextDocument = reconciliation.document;
+  const pendingWakeupIds = new Set(nextDocument.pendingDispatches.map((item) => item.wakeupId));
+  const selected = wakeupStatuses(nextDocument, { now, includeCompatibilityWakeups: true })
     .filter((duty) => !only || duty.id === only)
+    .filter((duty) => !pendingWakeupIds.has(duty.id))
     .filter((duty) => duty.enabled && (force || duty.due));
-  const results = [];
-  let nextDocument = document;
+  const results = [...reconciliation.results];
 
   for (const duty of selected) {
     const result = await runDuty(agent, duty, {
       dispatchClient,
       dispatchSocketPath,
+      codexHomePath,
+      acceptanceReconcileMs,
       now
     });
     results.push(result);
     if (result.ok) {
       nextDocument = updateWakeupRunState(nextDocument, duty, now);
+    } else if (result.status === "uncertain" && result.pendingDispatch) {
+      nextDocument.pendingDispatches = [
+        ...nextDocument.pendingDispatches.filter((item) => item.id !== result.pendingDispatch.id),
+        result.pendingDispatch
+      ];
     }
   }
 
-  if (results.some((result) => result.ok)) {
+  if (reconciliation.changed || results.some((result) => result.ok) || results.some((result) => result.status === "uncertain")) {
     await saveDuties(nextDocument, { home });
   }
 
@@ -202,6 +217,8 @@ export async function runDueDuties(agent, {
 export async function runDuty(agent, duty, {
   dispatchClient = null,
   dispatchSocketPath = null,
+  codexHomePath = null,
+  acceptanceReconcileMs = null,
   now = new Date()
 } = {}) {
   const route = await routeForDuty(agent, duty, { now });
@@ -232,9 +249,13 @@ export async function runDuty(agent, duty, {
       threadId: route.threadId,
       cwd: route.cwd,
       prompt: route.prompt,
+      permissions: route.permissions,
       mode: mode === "ipc" ? "auto" : mode,
       client: dispatchClient,
-      socketPath: dispatchSocketPath
+      socketPath: dispatchSocketPath,
+      codexHomePath,
+      attemptedAt: now.toISOString(),
+      ...(acceptanceReconcileMs == null ? {} : { acceptanceReconcileMs })
     });
     return {
       ok: true,
@@ -245,6 +266,26 @@ export async function runDuty(agent, duty, {
       ranAt: now.toISOString()
     };
   } catch (error) {
+    if (error instanceof CodexDispatchUncertainError) {
+      return {
+        ok: false,
+        status: "uncertain",
+        duty,
+        route,
+        dispatch: null,
+        pendingDispatch: normalizePendingDispatch({
+          id: `${duty.id}:${now.toISOString()}`,
+          wakeupId: duty.id,
+          threadId: route.threadId,
+          cwd: route.cwd,
+          prompt: route.prompt,
+          attemptedAt: error.pendingDispatch?.attemptedAt || now.toISOString(),
+          codexHomePath: error.pendingDispatch?.codexHomePath || codexHomePath || null
+        }),
+        error: serializeError(error),
+        ranAt: now.toISOString()
+      };
+    }
     return {
       ok: false,
       status: "failed",
@@ -257,6 +298,84 @@ export async function runDuty(agent, duty, {
   }
 }
 
+async function reconcilePendingDispatches(document, { now }) {
+  const remaining = [];
+  const results = [];
+  let nextDocument = document;
+  let changed = false;
+  for (const pending of document.pendingDispatches || []) {
+    const rolloutPath = await findThreadRolloutPath(pending.threadId, {
+      codexHome: pending.codexHomePath || undefined
+    });
+    const accepted = await findTurnForPrompt({
+      rolloutPath,
+      prompt: pending.prompt,
+      // The prompt itself carries the unique wake timestamp. Do not use the
+      // timeout timestamp as a cutoff: an older Wakefield process can finish
+      // writing the pending record after Codex has already accepted the turn.
+      afterTimestamp: null
+    });
+    if (accepted) {
+      nextDocument = updateRunStateById(
+        nextDocument,
+        pending.wakeupId,
+        accepted.acceptedAt || now.toISOString()
+      );
+      results.push({
+        ok: true,
+        status: "delivered",
+        duty: { id: pending.wakeupId },
+        route: {
+          threadId: pending.threadId,
+          cwd: pending.cwd,
+          prompt: pending.prompt
+        },
+        dispatch: {
+          turnId: accepted.turnId,
+          outcome: "accepted-after-timeout",
+          rolloutPath: accepted.rolloutPath || rolloutPath
+        },
+        ranAt: accepted.acceptedAt || now.toISOString()
+      });
+      changed = true;
+      continue;
+    }
+
+    const attemptedAt = validDateOrNull(pending.attemptedAt);
+    const ageMs = attemptedAt ? now.getTime() - attemptedAt.getTime() : Number.POSITIVE_INFINITY;
+    if (ageMs >= PENDING_DISPATCH_GRACE_MINUTES * 60 * 1000) {
+      results.push({
+        ok: false,
+        status: "failed",
+        duty: { id: pending.wakeupId },
+        route: {
+          threadId: pending.threadId,
+          cwd: pending.cwd,
+          prompt: pending.prompt
+        },
+        dispatch: null,
+        error: {
+          name: "CodexDispatchUnconfirmedError",
+          code: "dispatch-unconfirmed",
+          message: `Codex accepted neither a response nor a visible turn for ${pending.wakeupId} within ${PENDING_DISPATCH_GRACE_MINUTES} minutes.`
+        },
+        ranAt: now.toISOString()
+      });
+      changed = true;
+      continue;
+    }
+    remaining.push(pending);
+  }
+
+  if (remaining.length !== (document.pendingDispatches || []).length || changed) {
+    nextDocument = {
+      ...nextDocument,
+      pendingDispatches: remaining
+    };
+  }
+  return { document: nextDocument, results, changed };
+}
+
 export async function routeForDuty(agent, duty, {
   now = new Date()
 } = {}) {
@@ -266,6 +385,7 @@ export async function routeForDuty(agent, duty, {
     reason: ready ? null : "Select a persistent Codex thread before running duties.",
     threadId: agent?.threadId || null,
     cwd: agent?.cwd || null,
+    permissions: agent?.codexPermissions || null,
     prompt: await formatDutyPrompt(duty, { agent, cwd: agent?.cwd || null, now })
   };
 }
@@ -316,7 +436,8 @@ function normalizeDutiesDocument(value) {
     updatedAt: source.updatedAt || source.updated || null,
     source: source.source || null,
     duties: (source.duties || []).map(normalizeDuty),
-    wakeups: (source.wakeups || []).map(normalizeWakeup)
+    wakeups: (source.wakeups || []).map(normalizeWakeup),
+    pendingDispatches: (source.pendingDispatches || []).map(normalizePendingDispatch).filter(Boolean)
   };
 }
 
@@ -357,8 +478,27 @@ function normalizeWakeup(wakeup) {
   };
 }
 
+function normalizePendingDispatch(value) {
+  const source = value && typeof value === "object" ? value : {};
+  const wakeupId = normalizeId(source.wakeupId || source.id);
+  const threadId = String(source.threadId || "").trim();
+  const prompt = String(source.prompt || "");
+  const attemptedAt = validDateOrNull(source.attemptedAt)?.toISOString() || null;
+  if (!threadId || !prompt || !attemptedAt) return null;
+  return {
+    id: String(source.id || `${wakeupId}:${attemptedAt}`).trim(),
+    wakeupId,
+    threadId,
+    cwd: String(source.cwd || "").trim() || null,
+    prompt,
+    attemptedAt,
+    codexHomePath: source.codexHomePath ? String(source.codexHomePath) : null
+  };
+}
+
 function wakeupStatuses(document, { now, includeCompatibilityWakeups = true }) {
   const dutiesById = new Map(document.duties.map((duty) => [duty.id, duty]));
+  const pendingDispatches = document.pendingDispatches || [];
   const explicitWakeups = document.wakeups.map((wakeup) => resolveWakeup(wakeup, dutiesById, {
     stateKind: "wakeup",
     stateId: wakeup.id
@@ -372,7 +512,7 @@ function wakeupStatuses(document, { now, includeCompatibilityWakeups = true }) {
       }))
     : [];
   return [...explicitWakeups, ...compatibilityWakeups]
-    .map((wakeup) => wakeupStatus(wakeup, { now }))
+    .map((wakeup) => wakeupStatus(wakeup, { now, pendingDispatches }))
     .sort(compareWakeupsByWakeTime);
 }
 
@@ -420,8 +560,9 @@ function legacyWakeupFromDuty(duty) {
   };
 }
 
-function wakeupStatus(wakeup, { now }) {
+function wakeupStatus(wakeup, { now, pendingDispatches = [] }) {
   const normalized = normalizeWakeup(wakeup);
+  const pendingDispatch = pendingDispatches.find((item) => item.wakeupId === normalized.id);
   const resolved = {
     ...wakeup,
     ...normalized,
@@ -438,13 +579,15 @@ function wakeupStatus(wakeup, { now }) {
     interval?.due ? "interval" : null,
     schedule.due ? "wake-time" : null
   ]);
-  const due = resolved.enabled && dueReasons.length > 0;
+  const due = resolved.enabled && dueReasons.length > 0 && !pendingDispatch;
   return {
     ...resolved,
     nextRunAt: nextDutyRunAt([interval, schedule]),
     due,
     dueReasons,
     dueWakeTimes: schedule.dueWakeTimes,
+    dispatchState: pendingDispatch ? "awaiting-confirmation" : due ? "due" : "idle",
+    pendingDispatchAt: pendingDispatch?.attemptedAt || null,
     schedule: normalized.wakeTimes.length > 0
       ? {
         timeZone: "local",
@@ -609,6 +752,23 @@ function updateWakeupRunState(document, wakeup, now) {
         ...item,
         lastRunAt: ranAt
       }
+      : item)
+  };
+}
+
+function updateRunStateById(document, id, ranAt) {
+  if (document.wakeups.some((item) => item.id === id)) {
+    return {
+      ...document,
+      wakeups: document.wakeups.map((item) => item.id === id
+        ? { ...item, lastRunAt: ranAt }
+        : item)
+    };
+  }
+  return {
+    ...document,
+    duties: document.duties.map((item) => item.id === id
+      ? { ...item, lastRunAt: ranAt }
       : item)
   };
 }

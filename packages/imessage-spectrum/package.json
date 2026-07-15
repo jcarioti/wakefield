@@ -32,8 +32,8 @@
   "dependencies": {
     "@wakefield/connector-shared": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.20.0",
-    "@photon-ai/advanced-imessage": "0.12.0",
-    "spectrum-ts": "8.2.1",
+    "@photon-ai/advanced-imessage": "1.0.0",
+    "spectrum-ts": "9.3.1",
     "zod": "^3.25.76"
   },
   "engines": {

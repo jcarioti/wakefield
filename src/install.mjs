@@ -3,6 +3,7 @@ import { doctor } from "./doctor.mjs";
 import { installHooks, wakefieldHookCommand } from "./hook-manager.mjs";
 import { appHome, expandHome } from "./paths.mjs";
 import { ensureAgentMemory, initAgent, loadAgent, saveAgent, selectThread } from "./profile.mjs";
+import { normalizeCodexPermissions } from "./codex-permissions.mjs";
 import { installWakefieldSkills } from "./skills.mjs";
 
 export async function installWakefield({
@@ -12,6 +13,7 @@ export async function installWakefield({
   threadId = null,
   cwd = null,
   agentHome = null,
+  codexPermissions = undefined,
   newAgent = false,
   overwriteAgent = false,
   skipHooks = false,
@@ -30,6 +32,7 @@ export async function installWakefield({
       threadId,
       cwd,
       agentHome,
+      codexPermissions,
       home,
       overwrite: overwriteAgent
     });
@@ -44,6 +47,12 @@ export async function installWakefield({
     profile = await saveAgent({
       ...profile,
       cwd: path.resolve(expandHome(cwd))
+    }, home);
+  }
+  if (codexPermissions !== undefined) {
+    profile = await saveAgent({
+      ...profile,
+      codexPermissions: normalizeCodexPermissions(codexPermissions)
     }, home);
   }
   profile = await ensureAgentMemory(profile, home);

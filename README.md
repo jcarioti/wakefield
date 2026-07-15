@@ -318,7 +318,10 @@ Wakefield-powered agent in another checkout or on another machine.
   "agent": {
     "name": "Mira",
     "cwd": ".",
-    "soulFile": "AGENTS.md"
+    "soulFile": "AGENTS.md",
+    "codexPermissions": {
+      "mode": "full-access"
+    }
   },
   "contacts": {
     "file": "contacts.json",
@@ -347,6 +350,12 @@ Wakefield-powered agent in another checkout or on another machine.
   ]
 }
 ```
+
+`agent.codexPermissions` is the pack-level turn policy. Use
+`{"mode":"full-access"}` when scheduled wakes, queued external messages,
+and managed connector injections should start turns with no command approval
+prompt and unrestricted filesystem access. The setting is copied into the
+Wakefield agent profile and managed connector targets during pack install.
 
 Inspect and install a pack:
 

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  findTurnForPrompt,
   findThreadRolloutPath,
   readLatestThreadStatus,
   readTurnStatus,
@@ -21,6 +22,36 @@ test("findThreadRolloutPath discovers the newest matching rollout", async () => 
     await findThreadRolloutPath("019e51a5-5ad3-7991-87d4-4745494f7ae9", { codexHome: root }),
     rollout
   );
+});
+
+test("findTurnForPrompt recognizes a turn accepted after the IPC caller timed out", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "codex-prompt-acceptance-test-"));
+  const rollout = path.join(root, "rollout.jsonl");
+  const prompt = [
+    "Scheduled wakeup: Inventory Dashboard PDF",
+    "Wake time: 2026-07-10T18:29:30.589Z"
+  ].join("\n");
+  await fs.writeFile(rollout, [
+    JSON.stringify({
+      timestamp: "2026-07-10T18:30:15.696Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        content: [{ type: "input_text", text: prompt }],
+        internal_chat_message_metadata_passthrough: { turn_id: "turn-after-timeout" }
+      }
+    })
+  ].join("\n"), "utf8");
+
+  const match = await findTurnForPrompt({
+    rolloutPath: rollout,
+    prompt,
+    afterTimestamp: "2026-07-10T18:29:30.589Z"
+  });
+  assert.deepEqual(match, {
+    acceptedAt: "2026-07-10T18:30:15.696Z",
+    turnId: "turn-after-timeout"
+  });
 });
 
 test("readTurnStatus detects task_complete for a specific turn", async () => {

@@ -19,7 +19,7 @@ import { doctor } from "../src/doctor.mjs";
 import { configureDuty, configureWakeup, deleteDuty, deleteWakeup, dutyStatuses, runDueDuties } from "../src/duties.mjs";
 import { pollEmailImap } from "../src/email-imap.mjs";
 import { ingestEmailRfc822, parseRfc822 } from "../src/email-rfc822.mjs";
-import { acknowledgeExternalMessage, ingestExternalMessage, listExternalMessages } from "../src/external-messages.mjs";
+import { acknowledgeExternalMessage, formatExternalPrompt, ingestExternalMessage, listExternalMessages } from "../src/external-messages.mjs";
 import { hooksStatus, installHooks, wakefieldHookCommand } from "../src/hook-manager.mjs";
 import { handleHookInput } from "../src/hooks.mjs";
 import { startHttpIntakeServer } from "../src/http-intake.mjs";
@@ -471,6 +471,50 @@ test("selectThread attaches the current agent to a persistent Codex thread", asy
   const report = await doctor({ home, codexHomePath, runtimeProbe: compatibleRuntimeProbe });
   assert.equal(report.ok, false);
   assert.equal(report.checks.find((check) => check.label === "Codex thread").ok, true);
+});
+
+test("selectThread retargets local connectors and drops pending dispatches for the old thread", async () => {
+  const home = await tempHome();
+  const agentHome = path.join(home, "thread-sync");
+  await initAgent({
+    name: "Thread Sync",
+    soul: "",
+    agentHome,
+    threadId: "thread-old",
+    cwd: "/tmp/old-workspace",
+    home
+  });
+  const connectorDir = path.join(agentHome, "local", "connectors", "email-codex");
+  await fs.mkdir(connectorDir, { recursive: true });
+  await fs.writeFile(path.join(connectorDir, "config.local.json"), JSON.stringify({
+    targets: [{ id: "email", threadId: "thread-old", cwd: "/tmp/old-workspace" }]
+  }), "utf8");
+  await fs.writeFile(path.join(home, "duties.json"), JSON.stringify({
+    pendingDispatches: [{
+      id: "old-dispatch",
+      wakeupId: "morning-ops",
+      threadId: "thread-old",
+      cwd: "/tmp/old-workspace",
+      prompt: "old",
+      attemptedAt: new Date().toISOString()
+    }]
+  }), "utf8");
+
+  const attached = await selectThread({
+    threadId: "thread-new",
+    cwd: "/tmp/new-workspace",
+    home
+  });
+
+  assert.equal(attached.threadId, "thread-new");
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(connectorDir, "config.local.json"), "utf8")).targets[0], {
+    id: "email",
+    threadId: "thread-new",
+    cwd: "/tmp/new-workspace",
+    displayName: "Thread Sync",
+    codexPermissions: null
+  });
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(home, "duties.json"), "utf8")).pendingDispatches, []);
 });
 
 test("install creates an agent and idempotent Codex hook config", async () => {
@@ -928,7 +972,8 @@ test("agent packs install cwd, contacts, and duties without embedding app-specif
     agent: {
       name: "Pack Agent",
       cwd: ".",
-      soulFile: "AGENTS.md"
+      soulFile: "AGENTS.md",
+      codexPermissions: "full access"
     },
     contacts: {
       file: "state/people.json",
@@ -977,6 +1022,7 @@ test("agent packs install cwd, contacts, and duties without embedding app-specif
   assert.equal(installed.ok, true);
   assert.equal(installed.profile.name, "Pack Agent");
   assert.equal(installed.profile.cwd, packRoot);
+  assert.deepEqual(installed.profile.codexPermissions, { mode: "full-access" });
   assert.equal(await fileExists(path.join(codexHomePath, "skills", "pack-duty-skill", "SKILL.md")), true);
   assert.equal(await fileExists(path.join(codexHomePath, "skills", "old-pack-skill", "SKILL.md")), false);
   assert.deepEqual(
@@ -996,6 +1042,7 @@ test("agent packs install cwd, contacts, and duties without embedding app-specif
     home,
     now: morningRunAt
   });
+  assert.deepEqual(run.results[0].route.permissions, { mode: "full-access" });
   assert.match(run.results[0].route.prompt, /Use \$scheduled-wakeup\./);
   assert.match(run.results[0].route.prompt, /Duty skills: \$pack-duty-skill/);
   assert.match(run.results[0].route.prompt, /Due wake slot: 10:00 local/);
@@ -1032,7 +1079,8 @@ test("agent packs can register mature connector packages without app-specific Wa
     agent: {
       name: "Managed Pack",
       cwd: ".",
-      soulFile: "AGENTS.md"
+      soulFile: "AGENTS.md",
+      codexPermissions: { mode: "full-access" }
     },
     contacts: {
       file: "state/people.json",
@@ -1070,6 +1118,7 @@ test("agent packs can register mature connector packages without app-specific Wa
   });
   assert.equal(installed.ok, true);
   assert.equal(installed.actions.find((action) => action.id === "managed-connectors").detail, "1 connector package(s)");
+  assert.equal(installed.actions.find((action) => action.id === "managed-connector-targets").detail, "1 connector target(s) updated");
 
   const status = await managedConnectorStatus("discord-codex", {
     home,
@@ -1079,6 +1128,7 @@ test("agent packs can register mature connector packages without app-specific Wa
   assert.equal(status.mcp.ok, true);
   assert.equal(status.launchAgent.label, "com.wakefield.managed-pack.discord-codex");
   assert.equal(status.connectorConfig.outbound.channelIds[0], "channel-1");
+  assert.deepEqual(status.connectorConfig.targets[0].codexPermissions, { mode: "full-access" });
 });
 
 test("managed connector wizards expose package, MCP, daemon, and smoke-test facts", async () => {
@@ -2239,6 +2289,109 @@ test("RFC822 email ingest extracts text from multipart messages", () => {
   assert.equal(parsed.text, "Plain body wins.");
 });
 
+test("RFC822 email ingest handles nested multipart messages with attachments", () => {
+  const raw = [
+    "From: Ryan <ryan@example.com>",
+    "Subject: Nested multipart",
+    "Message-ID: <nested@example.com>",
+    "Content-Type: multipart/mixed; boundary=\"outer-boundary\"",
+    "",
+    "--outer-boundary",
+    "Content-Type: multipart/alternative; boundary=\"inner-boundary\"",
+    "",
+    "--inner-boundary",
+    "Content-Type: text/plain; charset=utf-8",
+    "",
+    "The plain email body wins.",
+    "--inner-boundary--",
+    "--outer-boundary",
+    "Content-Type: application/octet-stream",
+    "Content-Transfer-Encoding: base64",
+    "Content-Disposition: attachment; filename=\"invoice.pdf\"",
+    "",
+    "JVBERi0xLjQKThisIsAttachmentData",
+    "--outer-boundary--"
+  ].join("\n");
+
+  const parsed = parseRfc822(raw);
+  assert.equal(parsed.text, "The plain email body wins.");
+  assert.deepEqual(parsed.attachments, [{
+    filename: "invoice.pdf",
+    contentType: "application/octet-stream"
+  }]);
+  assert.doesNotMatch(parsed.text, /JVBERi0xLjQ/);
+});
+
+test("RFC822 email ingest unwraps connector envelopes and omits attachment bytes", () => {
+  const raw = [
+    "External Email message",
+    "Connector: email",
+    "Conversation: conversation@example.com",
+    "From: Ryan <ryan@example.com>",
+    "Subject: Warranty support",
+    "Message ID: external-message@example.com",
+    "",
+    "Message:",
+    "--outer-boundary",
+    "Content-Type: multipart/alternative; boundary=\"inner-boundary\"",
+    "",
+    "--inner-boundary",
+    "Content-Type: text/plain; charset=utf-8",
+    "",
+    "Please open a support ticket.",
+    "--inner-boundary--",
+    "--outer-boundary",
+    "Content-Type: application/pdf",
+    "Content-Transfer-Encoding: base64",
+    "Content-Disposition: attachment; filename=\"=?utf-8?Q?invoice=5F1.pdf?=\"",
+    "",
+    "JVBERi0xLjQKThisIsAttachmentData",
+    "--outer-boundary--"
+  ].join("\n");
+
+  const parsed = parseRfc822(raw);
+  assert.equal(parsed.envelope, true);
+  assert.equal(parsed.from, "Ryan <ryan@example.com>");
+  assert.equal(parsed.subject, "Warranty support");
+  assert.equal(parsed.messageId, "external-message@example.com");
+  assert.equal(parsed.threadId, "conversation@example.com");
+  assert.equal(parsed.text, "Please open a support ticket.");
+  assert.deepEqual(parsed.attachments, [{
+    filename: "invoice_1.pdf",
+    contentType: "application/pdf"
+  }]);
+  assert.doesNotMatch(parsed.text, /JVBERi0xLjQ/);
+  assert.doesNotMatch(parsed.text, /Content-Disposition: attachment/);
+});
+
+test("external email prompts remove raw MIME attachment payloads and cap text", () => {
+  const prompt = formatExternalPrompt({
+    connector: "email",
+    connectorName: "External Email",
+    text: [
+      "Email body",
+      "--outer-boundary",
+      "Content-Type: application/pdf",
+      "Content-Transfer-Encoding: base64",
+      "Content-Disposition: attachment; filename=\"invoice.pdf\"",
+      "",
+      "JVBERi0xLjQKThisIsAttachmentData"
+    ].join("\n"),
+    metadata: {}
+  });
+
+  assert.match(prompt, /Email attachment omitted from prompt/);
+  assert.doesNotMatch(prompt, /JVBERi0xLjQ/);
+
+  const oversized = formatExternalPrompt({
+    connector: "email",
+    text: "x".repeat(128_001),
+    metadata: {}
+  });
+  assert.match(oversized, /External message text truncated by Wakefield/);
+  assert.ok(oversized.length < 129_000);
+});
+
 test("IMAP email poll queues allowed messages and records processed state", async () => {
   const home = await tempHome();
   const envName = "WAKEFIELD_TEST_EMAIL_PASSWORD";
@@ -2712,6 +2865,7 @@ test("external inbox dispatch can dry-run or deliver pending messages through Co
     soul: "",
     threadId: "thread-dispatch",
     cwd: "/tmp/dispatcher",
+    codexPermissions: { mode: "full-access" },
     home
   });
   const ingested = await ingestExternalMessage(profile, {
@@ -2732,6 +2886,7 @@ test("external inbox dispatch can dry-run or deliver pending messages through Co
   assert.equal((await listExternalMessages(profile)).length, 1);
 
   const calls = [];
+  let startParams = null;
   const delivered = await dispatchExternalMessage(profile, {
     id: ingested.message.id,
     mode: "ipc",
@@ -2741,6 +2896,7 @@ test("external inbox dispatch can dry-run or deliver pending messages through Co
         throw Object.assign(new Error("no active turn"), { code: "inactive-turn" });
       },
       async startThreadFollowerTurn(params) {
+        startParams = params;
         calls.push(["start", params.conversationId, params.cwd, params.text]);
         return { turnId: "turn-123" };
       }
@@ -2757,6 +2913,8 @@ test("external inbox dispatch can dry-run or deliver pending messages through Co
   assert.equal(calls[1][1], "thread-dispatch");
   assert.equal(calls[1][2], "/tmp/dispatcher");
   assert.match(calls[1][3], /Are you around/);
+  assert.deepEqual(delivered.route.permissions, { mode: "full-access" });
+  assert.deepEqual(startParams.permissions, { mode: "full-access" });
   assert.deepEqual(await listExternalMessages(profile), []);
   assert.equal((await listExternalMessages(profile, { status: "delivered" }))[0].statusReason, "Codex start");
 });
@@ -3789,6 +3947,96 @@ test("wakeups bundle multiple duties into one scheduled turn", async () => {
 
   const after = await dutyStatuses({ home, now: new Date(2026, 5, 14, 4, 16, 0) });
   assert.equal(after.wakeups[0].due, false);
+});
+
+test("scheduled dispatch reconciles an accepted turn after IPC timeout and does not retry it", async () => {
+  const home = await tempHome();
+  const codexHomePath = await tempHome();
+  const profile = await initAgent({
+    name: "Timeout Reconciler",
+    soul: "",
+    threadId: "thread-timeout-reconcile",
+    cwd: "/tmp/timeout-reconcile",
+    home
+  });
+  await configureDuty("dashboard", {
+    home,
+    label: "Dashboard",
+    prompt: "Generate the dashboard.",
+    dispatchMode: "ipc"
+  });
+  await configureWakeup("dashboard-wakeup", {
+    home,
+    label: "Dashboard Wakeup",
+    wakeTimes: ["05:00"],
+    duties: ["dashboard"],
+    dispatchMode: "ipc"
+  });
+
+  let dispatchCalls = 0;
+  const dispatchClient = {
+    async steerThreadFollowerTurn() {
+      dispatchCalls += 1;
+      const error = new Error("Timed out waiting for Codex IPC method thread-follower-steer-turn.");
+      error.code = "request-timeout";
+      error.method = "thread-follower-steer-turn";
+      throw error;
+    },
+    disconnect() {}
+  };
+  const firstNow = new Date("2026-07-10T12:00:00Z");
+  const first = await runDueDuties(profile, {
+    home,
+    codexHomePath,
+    acceptanceReconcileMs: 1,
+    dispatchClient,
+    now: firstNow
+  });
+  assert.equal(first.results[0].status, "uncertain");
+  assert.equal(dispatchCalls, 1);
+
+  const pendingStatus = await dutyStatuses({ home, now: new Date(firstNow.getTime() + 60_000) });
+  assert.equal(pendingStatus.wakeups.find((item) => item.id === "dashboard-wakeup").due, false);
+  assert.equal(pendingStatus.wakeups.find((item) => item.id === "dashboard-wakeup").dispatchState, "awaiting-confirmation");
+
+  const second = await runDueDuties(profile, {
+    home,
+    codexHomePath,
+    acceptanceReconcileMs: 1,
+    dispatchClient,
+    now: new Date(firstNow.getTime() + 120_000)
+  });
+  assert.equal(second.results.length, 0);
+  assert.equal(dispatchCalls, 1);
+
+  const pending = JSON.parse(await fs.readFile(path.join(home, "duties.json"), "utf8")).pendingDispatches[0];
+  const rolloutDir = path.join(codexHomePath, "sessions", "2026", "07", "10");
+  await fs.mkdir(rolloutDir, { recursive: true });
+  const rolloutPath = path.join(rolloutDir, "rollout-2026-07-10-thread-timeout-reconcile.jsonl");
+  await fs.writeFile(rolloutPath, JSON.stringify({
+    timestamp: "2026-07-10T12:00:15.000Z",
+    type: "response_item",
+    payload: {
+      type: "message",
+      content: [{ type: "input_text", text: pending.prompt }],
+      internal_chat_message_metadata_passthrough: { turn_id: "turn-after-timeout" }
+    }
+  }) + "\n", "utf8");
+
+  const third = await runDueDuties(profile, {
+    home,
+    codexHomePath,
+    dispatchClient,
+    now: new Date(firstNow.getTime() + 180_000)
+  });
+  assert.equal(third.results[0].status, "delivered");
+  assert.equal(third.results[0].dispatch.turnId, "turn-after-timeout");
+  assert.equal(dispatchCalls, 1);
+  const reconciled = await dutyStatuses({ home, now: new Date(firstNow.getTime() + 240_000) });
+  const wakeup = reconciled.wakeups.find((item) => item.id === "dashboard-wakeup");
+  assert.equal(wakeup.due, false);
+  assert.equal(wakeup.dispatchState, "idle");
+  assert.equal(JSON.parse(await fs.readFile(path.join(home, "duties.json"), "utf8")).pendingDispatches.length, 0);
 });
 
 test("wakeup lists can hide compatibility rows and delete wakeups and duties cleanly", async () => {

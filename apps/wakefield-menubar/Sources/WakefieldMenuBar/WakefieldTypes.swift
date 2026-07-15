@@ -101,6 +101,8 @@ struct Wakeup: Decodable, Identifiable, Hashable {
     var wakeTimes: [String]
     var nextRunAt: String?
     var due: Bool?
+    var dispatchState: String?
+    var pendingDispatchAt: String?
     var missingDuties: [String]?
 
     var selectedDutyIds: [String] {

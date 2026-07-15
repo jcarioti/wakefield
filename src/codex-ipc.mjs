@@ -6,11 +6,14 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
+import { normalizeCodexPermissions } from "./codex-permissions.mjs";
+import { waitForTurnForPrompt } from "../packages/connector-shared/src/codex-rollout-watch.mjs";
 
 const SOCKET_DIR = "codex-ipc";
 const DEFAULT_DEEP_LINK_WAKE_WAIT_MS = 30000;
 const DEFAULT_DEEP_LINK_WAKE_POLL_MS = 1000;
 const DEFAULT_DEEP_LINK_WAKE_REOPEN_MS = 6000;
+const DEFAULT_TURN_ACCEPTANCE_RECONCILE_MS = 30000;
 const execFileAsync = promisify(execFile);
 
 export class CodexIpcError extends Error {
@@ -20,6 +23,16 @@ export class CodexIpcError extends Error {
     this.code = code;
     this.method = method;
     this.details = details;
+  }
+}
+
+export class CodexDispatchUncertainError extends Error {
+  constructor(message, { pendingDispatch = null, cause = null } = {}) {
+    super(message);
+    this.name = "CodexDispatchUncertainError";
+    this.code = "dispatch-uncertain";
+    this.pendingDispatch = pendingDispatch;
+    this.cause = cause;
   }
 }
 
@@ -88,6 +101,9 @@ export async function routePromptToCodex({
   permissions = null,
   deepLinkWake = null,
   wakeThread = null,
+  codexHomePath = null,
+  acceptanceReconcileMs = DEFAULT_TURN_ACCEPTANCE_RECONCILE_MS,
+  attemptedAt = new Date().toISOString(),
   logger = console
 }) {
   if (!threadId) throw new Error("Codex dispatch needs a threadId.");
@@ -97,16 +113,54 @@ export async function routePromptToCodex({
   const ownsClient = client == null;
   const codexClient = client || new CodexIpcClient({ socketPath });
   try {
-    const action = await routeWithClientWithWake(codexClient, {
-      threadId,
-      cwd,
-      prompt,
-      mode,
-      permissions,
-      deepLinkWake,
-      wakeThread,
-      logger
-    });
+    let action;
+    try {
+      action = await routeWithClientWithWake(codexClient, {
+        threadId,
+        cwd,
+        prompt,
+        mode,
+        permissions,
+        deepLinkWake,
+        wakeThread,
+        logger
+      });
+    } catch (error) {
+      if (!isTurnRequestTimeout(error)) throw error;
+      const accepted = await waitForTurnForPrompt({
+        threadId,
+        codexHome: codexHomePath || undefined,
+        prompt,
+        afterTimestamp: attemptedAt,
+        timeoutMs: acceptanceReconcileMs,
+        pollMs: 500
+      });
+      if (!accepted) {
+        throw new CodexDispatchUncertainError(
+          `Codex IPC ${error.method} timed out and the turn was not yet visible in the rollout.`,
+          {
+            cause: error,
+            pendingDispatch: {
+              threadId,
+              cwd,
+              prompt,
+              attemptedAt,
+              codexHomePath: codexHomePath || null
+            }
+          }
+        );
+      }
+      const actionName = error.method?.includes("steer") ? "steer" : "start";
+      logger?.warn?.(`Codex IPC ${error.method} timed out, but the turn was found in the rollout; treating it as accepted.`);
+      action = {
+        action: actionName,
+        turnId: accepted.turnId,
+        result: null,
+        outcome: "accepted-after-timeout",
+        acceptedAt: accepted.acceptedAt,
+        rolloutPath: accepted.rolloutPath
+      };
+    }
     return {
       ...action,
       mode,
@@ -443,15 +497,16 @@ function action(actionName, result) {
 }
 
 function normalizePermissions(permissions) {
-  if (!permissions || typeof permissions !== "object") return {};
-  if (permissions.mode === "full-access") {
+  const normalized = normalizeCodexPermissions(permissions);
+  if (!normalized) return {};
+  if (normalized.mode === "full-access") {
     return {
       approvalPolicy: "never",
       approvalsReviewer: "user",
       sandboxPolicy: { type: "dangerFullAccess" }
     };
   }
-  const { approvalPolicy, approvalsReviewer, sandboxPolicy } = permissions;
+  const { approvalPolicy, approvalsReviewer, sandboxPolicy } = normalized;
   return {
     ...(approvalPolicy ? { approvalPolicy } : {}),
     ...(approvalsReviewer ? { approvalsReviewer } : {}),
@@ -488,6 +543,11 @@ export function isMissingCodexIpcError(error) {
     /no-client-found/i,
     /no.*client/i
   ].some((pattern) => pattern.test(errorText(error)));
+}
+
+export function isTurnRequestTimeout(error) {
+  const method = String(error?.method || error?.details?.method || "");
+  return error?.code === "request-timeout" && /^thread-follower-(?:steer|start)-turn$/.test(method);
 }
 
 function errorText(error) {

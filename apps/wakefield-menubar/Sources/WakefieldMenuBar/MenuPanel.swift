@@ -86,7 +86,7 @@ struct MenuPanel: View {
                     ToggleRow(
                         symbol: wakeup.due == true ? "alarm.waves.left.and.right.fill" : "clock",
                         title: wakeup.label,
-                        detail: wakeup.wakeTimes.joined(separator: ", "),
+                        detail: wakeupDetail(wakeup),
                         isOn: Binding(
                             get: { wakeup.enabled },
                             set: { model.setWakeup(wakeup, enabled: $0) }
@@ -97,6 +97,14 @@ struct MenuPanel: View {
                 }
             }
         }
+    }
+
+    private func wakeupDetail(_ wakeup: Wakeup) -> String {
+        let schedule = wakeup.wakeTimes.joined(separator: ", ")
+        if wakeup.dispatchState == "awaiting-confirmation" {
+            return schedule.isEmpty ? "Awaiting confirmation" : schedule + " · awaiting confirmation"
+        }
+        return schedule
     }
 
     private var footer: some View {
