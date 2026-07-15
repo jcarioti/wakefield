@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  DEFAULT_SPECTRUM_RATE_LIMIT_COOLDOWN_MS,
   SpectrumOperationTimeoutError,
+  SpectrumRateLimitCooldown,
+  isSpectrumRateLimitError,
   shouldRotateReceiveLoopAfterHistoryReplay,
+  spectrumRateLimitRetryAfterMs,
   spectrumServiceStatusForReceiveLoop,
   withSpectrumOperationTimeout
 } from "../src/spectrum-receive-loop-health.mjs";
@@ -63,6 +67,30 @@ test("spectrumServiceStatusForReceiveLoop maps internal state to service status"
   assert.equal(spectrumServiceStatusForReceiveLoop("restarting"), "receive-loop-restarting");
   assert.equal(spectrumServiceStatusForReceiveLoop("rate-limited"), "rate-limited");
   assert.equal(spectrumServiceStatusForReceiveLoop("failed"), "receive-loop-failed");
+});
+
+test("Spectrum rate-limit cooldown honors Photon retry-after with a 60-second minimum", () => {
+  assert.equal(isSpectrumRateLimitError(new Error("Rate limited by ip_per_minute")), true);
+  assert.equal(isSpectrumRateLimitError(new Error("ordinary failure")), false);
+  assert.equal(spectrumRateLimitRetryAfterMs(new Error("Retry after 5s")), DEFAULT_SPECTRUM_RATE_LIMIT_COOLDOWN_MS);
+  assert.equal(spectrumRateLimitRetryAfterMs(new Error("Retry after 90s")), 90_000);
+
+  let now = 1_000;
+  const cooldown = new SpectrumRateLimitCooldown({
+    now: () => now,
+    jitterMs: 0
+  });
+  assert.deepEqual(cooldown.activate(new Error("Retry after 60s")), {
+    active: true,
+    until: new Date(61_000).toISOString(),
+    remainingMs: 60_000
+  });
+  now = 61_000;
+  assert.deepEqual(cooldown.snapshot(), {
+    active: false,
+    until: new Date(61_000).toISOString(),
+    remainingMs: 0
+  });
 });
 
 test("shouldRotateReceiveLoopAfterHistoryReplay rotates only after periodic replay recovers messages", () => {

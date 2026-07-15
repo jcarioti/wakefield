@@ -30,6 +30,8 @@ import {
   isSpectrumChannelShutdownError
 } from "./spectrum-app-gate.mjs";
 import {
+  SpectrumRateLimitCooldown,
+  isSpectrumRateLimitError,
   isSpectrumOperationTimeoutError,
   shouldRotateReceiveLoopAfterHistoryReplay,
   spectrumServiceStatusForReceiveLoop,
@@ -104,8 +106,17 @@ let statusHeartbeat = null;
 let deliveryRetryTimer = null;
 let historyReplayPollTimer = null;
 let historyReplayActive = false;
+let rateLimitRecoveryTimer = null;
 const startupReplayTimers = new Set();
 let shuttingDown = false;
+const rateLimitCooldown = new SpectrumRateLimitCooldown();
+const rateLimit = {
+  lastDetectedAt: null,
+  lastError: null,
+  lastSource: null,
+  recoveryScheduledAt: null,
+  recoveryStartedAt: null
+};
 const receiveLoop = {
   state: "starting",
   startedAt: null,
@@ -274,6 +285,10 @@ async function runReceiveLoop() {
 }
 
 async function recreateSpectrumApp() {
+  await waitForRateLimitCooldown("receive-loop restart");
+  if (shuttingDown) {
+    return;
+  }
   receiveLoop.state = "restarting";
   receiveLoop.restartCount += 1;
   receiveLoop.restartStartedAt = new Date().toISOString();
@@ -320,6 +335,11 @@ function requestReceiveLoopRotation({ app: targetApp = app, reason, log }) {
   if (shuttingDown || !targetApp) {
     return false;
   }
+  if (rateLimitCooldown.remainingMs() > 0) {
+    scheduleRateLimitRecovery();
+    console.warn(`Photon/Spectrum receive-loop rotation deferred during rate-limit cooldown (${rateLimitCooldown.remainingMs()}ms remaining).`);
+    return false;
+  }
   if (receiveLoop.state === "rotating" || receiveLoop.state === "restarting" || receiveLoop.restartStartedAt) {
     return false;
   }
@@ -337,12 +357,17 @@ function requestReceiveLoopRotation({ app: targetApp = app, reason, log }) {
 }
 
 async function runBridgeAppOperation(label, operation, { retryOnChannelShutdown = false } = {}) {
+  throwIfRateLimitCooldown(label);
   return appOperationGate.run(async () => {
+    throwIfRateLimitCooldown(label);
     try {
       const result = await operation();
       clearBridgeOperationError();
       return result;
     } catch (error) {
+      if (isSpectrumRateLimitError(error)) {
+        recordSpectrumRateLimit({ source: label, error });
+      }
       if (!retryOnChannelShutdown || shuttingDown || !isSpectrumChannelShutdownError(error)) {
         recordBridgeOperationError(label, error);
         await writeCurrentStatus().catch((statusError) => {
@@ -376,9 +401,82 @@ function clearBridgeOperationError() {
   bridgeOperation.lastError = null;
 }
 
+function recordSpectrumRateLimit({ source, error, affectsReceiveLoop = false }) {
+  const cooldown = rateLimitCooldown.activate(error);
+  rateLimit.lastDetectedAt = new Date().toISOString();
+  rateLimit.lastError = error.stack || error.message;
+  rateLimit.lastSource = source;
+  if (affectsReceiveLoop) {
+    receiveLoop.state = "rate-limited";
+    receiveLoop.lastErrorAt = rateLimit.lastDetectedAt;
+    receiveLoop.lastError = rateLimit.lastError;
+    receiveLoop.lastRestartReason = "rate_limited";
+  }
+  scheduleRateLimitRecovery();
+  writeStatus("rate-limited").catch((statusError) => {
+    console.warn(`Photon/Spectrum status update failed during rate-limit cooldown: ${statusError.message}`);
+  });
+  return cooldown;
+}
+
+function scheduleRateLimitRecovery() {
+  if (shuttingDown) {
+    return;
+  }
+  if (rateLimitRecoveryTimer) {
+    clearTimeout(rateLimitRecoveryTimer);
+    rateLimitRecoveryTimer = null;
+  }
+  const remainingMs = rateLimitCooldown.remainingMs();
+  if (remainingMs <= 0) {
+    return;
+  }
+  rateLimit.recoveryScheduledAt = new Date(Date.now() + remainingMs).toISOString();
+  rateLimitRecoveryTimer = setTimeout(() => {
+    rateLimitRecoveryTimer = null;
+    if (shuttingDown) {
+      return;
+    }
+    if (rateLimitCooldown.remainingMs() > 0) {
+      scheduleRateLimitRecovery();
+      return;
+    }
+    rateLimit.recoveryStartedAt = new Date().toISOString();
+    if (!app || receiveLoop.restartStartedAt || receiveLoop.state === "restarting") {
+      console.log("Photon/Spectrum rate-limit cooldown ended; an existing app-creation recovery will continue.");
+      return;
+    }
+    requestReceiveLoopRotation({
+      reason: "rate_limit_cooldown_recovery",
+      log: "Photon/Spectrum rate-limit cooldown ended; rotating the receive stream once for serialized recovery."
+    });
+  }, remainingMs);
+  rateLimitRecoveryTimer.unref?.();
+}
+
+async function waitForRateLimitCooldown(context) {
+  let remainingMs = rateLimitCooldown.remainingMs();
+  while (!shuttingDown && remainingMs > 0) {
+    console.warn(`Photon/Spectrum ${context} paused for rate-limit cooldown (${remainingMs}ms remaining).`);
+    await sleep(remainingMs);
+    remainingMs = rateLimitCooldown.remainingMs();
+  }
+}
+
+function throwIfRateLimitCooldown(label) {
+  const remainingMs = rateLimitCooldown.remainingMs();
+  if (remainingMs <= 0) {
+    return;
+  }
+  throw new Error(`Photon/Spectrum ${label} is paused for rate-limit cooldown; retry after ${Math.ceil(remainingMs / 1000)}s.`);
+}
+
 async function createSpectrumAppWithBackoff(context) {
-  let backoffMs = 5000;
   while (!shuttingDown) {
+    await waitForRateLimitCooldown(`${context} app creation`);
+    if (shuttingDown) {
+      break;
+    }
     try {
       return await runProviderOperation(
         `${context} createSpectrumApp`,
@@ -388,25 +486,10 @@ async function createSpectrumAppWithBackoff(context) {
       if (!isSpectrumRateLimitError(error)) {
         throw error;
       }
-      receiveLoop.state = "rate-limited";
-      receiveLoop.lastErrorAt = new Date().toISOString();
-      receiveLoop.lastError = error.stack || error.message;
-      receiveLoop.lastRestartReason = "rate_limited";
-      await writeStatus("rate-limited").catch((statusError) => {
-        console.warn(`Photon/Spectrum status update failed during rate-limit backoff: ${statusError.message}`);
-      });
-      console.warn(`Photon/Spectrum app creation rate-limited during ${context}; retrying in ${backoffMs}ms: ${error.message}`);
-      await sleep(backoffMs);
-      backoffMs = Math.min(backoffMs * 2, 60000);
+      console.warn(`Photon/Spectrum app creation rate-limited during ${context}; waiting for the shared cooldown: ${error.message}`);
     }
   }
   throw new Error("Photon/Spectrum app creation stopped because connector is shutting down.");
-}
-
-function isSpectrumRateLimitError(error) {
-  return error?.status === 429
-    || error?.code === "RATE_LIMITED"
-    || /too many requests|rate.?limit/i.test(String(error?.message || ""));
 }
 
 async function handleSpectrumMessage({ space, message }) {
@@ -677,6 +760,10 @@ async function runStartupHistoryReplay({ previousStatus, reason }) {
   if (historyReplayActive) {
     return;
   }
+  if (rateLimitCooldown.remainingMs() > 0) {
+    recordHistoryReplayPausedForRateLimit(reason);
+    return;
+  }
   historyReplayActive = true;
   historyReplay.state = "running";
   historyReplay.lastStartedAt = new Date().toISOString();
@@ -708,6 +795,8 @@ async function enqueueStartupHistoryReplay({ previousStatus: status }) {
     readAttemptCount: 0,
     failedReadCount: 0,
     queuedCount: 0,
+    rateLimited: false,
+    rateLimitError: null,
     errors: []
   };
   if (!config.imessage.spectrum.startupReplayEnabled) {
@@ -721,14 +810,33 @@ async function enqueueStartupHistoryReplay({ previousStatus: status }) {
     return stats;
   }
 
-  const clientSet = await createPhotonImessageClients({
-    spectrum: config.imessage.spectrum
-  });
+  let clientSet = null;
+  try {
+    clientSet = await createPhotonImessageClients({
+      spectrum: config.imessage.spectrum
+    });
+  } catch (error) {
+    if (!isSpectrumRateLimitError(error)) {
+      throw error;
+    }
+    recordSpectrumRateLimit({ source: "history replay client creation", error });
+    stats.rateLimited = true;
+    stats.rateLimitError = error;
+    return stats;
+  }
   try {
     for (const target of config.targets) {
+      if (rateLimitCooldown.remainingMs() > 0) {
+        stats.rateLimited = true;
+        return stats;
+      }
       const delivered = await readDeliveredMessages(target);
       const after = new Date(Date.now() - config.imessage.spectrum.startupReplayLookbackMs).toISOString();
       for (const spaceId of candidateSpaceIds) {
+        if (rateLimitCooldown.remainingMs() > 0) {
+          stats.rateLimited = true;
+          return stats;
+        }
         let page = null;
         try {
           stats.readAttemptCount += 1;
@@ -740,6 +848,12 @@ async function enqueueStartupHistoryReplay({ previousStatus: status }) {
             clientSet
           });
         } catch (error) {
+          if (isSpectrumRateLimitError(error)) {
+            recordSpectrumRateLimit({ source: "history replay message list", error });
+            stats.rateLimited = true;
+            stats.rateLimitError = error;
+            return stats;
+          }
           stats.failedReadCount += 1;
           stats.errors.push({
             targetId: target.id,
@@ -793,7 +907,7 @@ async function enqueueStartupHistoryReplay({ previousStatus: status }) {
       }
     }
   } finally {
-    await clientSet.closeAll();
+    await clientSet?.closeAll();
   }
   return stats;
 }
@@ -884,6 +998,10 @@ function recordHistoryReplayFinished({ reason, stats = {} }) {
   historyReplay.lastReadAttemptCount = stats.readAttemptCount || 0;
   historyReplay.lastFailedReadCount = stats.failedReadCount || 0;
   historyReplay.lastQueuedCount = stats.queuedCount || 0;
+  if (stats.rateLimited) {
+    recordHistoryReplayPausedForRateLimit(reason, stats.rateLimitError);
+    return;
+  }
   if (historyReplay.lastFailedReadCount > 0) {
     const first = stats.errors?.[0];
     historyReplay.state = "degraded";
@@ -897,6 +1015,13 @@ function recordHistoryReplayFinished({ reason, stats = {} }) {
   historyReplay.lastErrorAt = null;
   historyReplay.lastError = null;
   historyReplay.consecutiveFailures = 0;
+}
+
+function recordHistoryReplayPausedForRateLimit(reason, error = null) {
+  historyReplay.state = "paused";
+  historyReplay.lastReason = reason;
+  historyReplay.lastErrorAt = new Date().toISOString();
+  historyReplay.lastError = error?.message || rateLimit.lastError || "Photon/Spectrum rate-limit cooldown is active.";
 }
 
 function recordHistoryReplayFailed(reason, error) {
@@ -916,7 +1041,8 @@ async function handleBridgeRequest(request) {
       lastMatchedInboundAt,
       receiveLoop: receiveLoopStatus(),
       bridgeOperation: bridgeOperationStatus(),
-      historyReplay: historyReplayStatus()
+      historyReplay: historyReplayStatus(),
+      rateLimit: rateLimitStatus()
     };
   }
   if (request.method === "send") {
@@ -1366,7 +1492,8 @@ async function writeStatus(status) {
     pendingDeliveryCount,
     receiveLoop: receiveLoopStatus(),
     bridgeOperation: bridgeOperationStatus(),
-    historyReplay: historyReplayStatus()
+    historyReplay: historyReplayStatus(),
+    rateLimit: rateLimitStatus()
   }, null, 2)}\n`, "utf8");
 }
 
@@ -1375,6 +1502,9 @@ async function writeCurrentStatus() {
 }
 
 function currentBridgeStatus() {
+  if (rateLimitCooldown.remainingMs() > 0) {
+    return "rate-limited";
+  }
   if (receiveLoop.lastError) {
     return "receive-loop-degraded";
   }
@@ -1391,11 +1521,18 @@ function isRecentStatusError(value, { now = Date.now(), maxAgeMs = 10 * 60 * 100
 
 async function runProviderOperation(label, operation) {
   try {
+    await waitForRateLimitCooldown(label);
+    if (shuttingDown) {
+      throw new Error(`Photon/Spectrum ${label} stopped because connector is shutting down.`);
+    }
     return await withSpectrumOperationTimeout(operation, {
       label,
       timeoutMs: config.imessage.spectrum.appOperationTimeoutMs
     });
   } catch (error) {
+    if (isSpectrumRateLimitError(error)) {
+      recordSpectrumRateLimit({ source: label, error, affectsReceiveLoop: true });
+    }
     if (isSpectrumOperationTimeoutError(error)) {
       await failReceiveLoopAndExit(error);
       return new Promise(() => {});
@@ -1468,6 +1605,9 @@ async function shutdown(signal) {
     }
     if (historyReplayPollTimer) {
       clearInterval(historyReplayPollTimer);
+    }
+    if (rateLimitRecoveryTimer) {
+      clearTimeout(rateLimitRecoveryTimer);
     }
     for (const timer of startupReplayTimers) {
       clearTimeout(timer);
@@ -1701,6 +1841,17 @@ function historyReplayStatus() {
     lastFailedReadCount: historyReplay.lastFailedReadCount,
     lastQueuedCount: historyReplay.lastQueuedCount,
     consecutiveFailures: historyReplay.consecutiveFailures
+  };
+}
+
+function rateLimitStatus() {
+  return {
+    ...rateLimitCooldown.snapshot(),
+    lastDetectedAt: rateLimit.lastDetectedAt,
+    lastError: rateLimit.lastError,
+    lastSource: rateLimit.lastSource,
+    recoveryScheduledAt: rateLimit.recoveryScheduledAt,
+    recoveryStartedAt: rateLimit.recoveryStartedAt
   };
 }
 
