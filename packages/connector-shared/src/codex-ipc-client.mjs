@@ -114,11 +114,19 @@ export function createRestoreMessage({ text, cwd, id = randomUUID(), createdAt =
 export async function resolveCodexIpcSocket({
   socketPath = null,
   env = process.env,
-  tmpdir = os.tmpdir()
+  tmpdir = os.tmpdir(),
+  codexHome = env.CODEX_HOME || path.join(os.homedir(), ".codex")
 } = {}) {
   const explicit = socketPath || env.CODEX_IPC_SOCKET;
   if (explicit) {
     return explicit;
+  }
+
+  // Current ChatGPT/Codex Desktop exposes its follower IPC endpoint here. The
+  // legacy temporary directory is retained below for older desktop builds.
+  const currentSocket = path.join(codexHome, "ipc", "ipc.sock");
+  if (await isSocket(currentSocket)) {
+    return currentSocket;
   }
 
   const uid = typeof process.getuid === "function" ? process.getuid() : null;
@@ -134,7 +142,7 @@ export async function resolveCodexIpcSocket({
   } catch (error) {
     if (error?.code === "ENOENT") {
       throw new CodexIpcError(
-        `Codex IPC socket directory does not exist at ${directory}. Open ChatGPT desktop and load the target Codex task.`,
+        `No current Codex IPC socket at ${currentSocket}, and the legacy socket directory does not exist at ${directory}. Open ChatGPT desktop and load the target Codex task.`,
         { code: "socket-directory-missing" }
       );
     }
@@ -163,7 +171,7 @@ export async function resolveCodexIpcSocket({
   }
 
   throw new CodexIpcError(
-    `No Codex IPC socket found under ${directory}. Open ChatGPT desktop and load the target Codex task.`,
+    `No Codex IPC socket found at ${currentSocket} or under ${directory}. Open ChatGPT desktop and load the target Codex task.`,
     { code: "socket-missing" }
   );
 }

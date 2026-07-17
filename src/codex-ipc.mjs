@@ -253,10 +253,16 @@ export function codexThreadDeepLink(threadId) {
 export async function resolveCodexIpcSocket({
   socketPath = null,
   env = process.env,
-  tmpdir = os.tmpdir()
+  tmpdir = os.tmpdir(),
+  codexHome = env.CODEX_HOME || path.join(os.homedir(), ".codex")
 } = {}) {
   const explicit = socketPath || env.CODEX_IPC_SOCKET;
   if (explicit) return explicit;
+
+  // Current ChatGPT/Codex Desktop exposes its follower IPC endpoint here. The
+  // legacy temporary directory is retained below for older desktop builds.
+  const currentSocket = path.join(codexHome, "ipc", "ipc.sock");
+  if (await isSocket(currentSocket)) return currentSocket;
 
   const uid = typeof process.getuid === "function" ? process.getuid() : null;
   const directory = path.join(tmpdir, SOCKET_DIR);
@@ -268,7 +274,7 @@ export async function resolveCodexIpcSocket({
     entries = await fs.readdir(directory);
   } catch (error) {
     if (error?.code === "ENOENT") {
-      throw new CodexIpcError(`Codex IPC socket directory does not exist at ${directory}. Open ChatGPT desktop and load the target Codex task.`, {
+      throw new CodexIpcError(`No current Codex IPC socket at ${currentSocket}, and the legacy socket directory does not exist at ${directory}. Open ChatGPT desktop and load the target Codex task.`, {
         code: "socket-directory-missing"
       });
     }
@@ -289,7 +295,7 @@ export async function resolveCodexIpcSocket({
   candidates.sort((left, right) => right.mtimeMs - left.mtimeMs);
   if (candidates[0]) return candidates[0].candidate;
 
-  throw new CodexIpcError(`No Codex IPC socket found under ${directory}. Open ChatGPT desktop and load the target Codex task.`, {
+  throw new CodexIpcError(`No Codex IPC socket found at ${currentSocket} or under ${directory}. Open ChatGPT desktop and load the target Codex task.`, {
     code: "socket-missing"
   });
 }

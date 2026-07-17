@@ -9,7 +9,8 @@ import { codexDreamerConfig } from "../src/codex-dreamer.mjs";
 import {
   createClientDiscoveryResponse,
   encodeFrame,
-  FrameDecoder
+  FrameDecoder,
+  resolveCodexIpcSocket
 } from "../src/codex-ipc.mjs";
 import {
   codexRuntimeProbeExitCode,
@@ -133,6 +134,32 @@ test("client discovery response matches the ChatGPT/Codex envelope", () => {
     requestId: "request-1",
     response: { canHandle: false }
   });
+});
+
+test("generic IPC routing prefers the current ChatGPT socket over legacy discovery", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "wakefield-current-ipc-"));
+  const codexHome = path.join(root, ".codex");
+  const currentSocket = path.join(codexHome, "ipc", "ipc.sock");
+  const legacySocket = path.join(root, "tmp", "codex-ipc", "ipc-501.sock");
+  await fs.mkdir(path.dirname(currentSocket), { recursive: true });
+  await fs.mkdir(path.dirname(legacySocket), { recursive: true });
+  const currentServer = net.createServer();
+  const legacyServer = net.createServer();
+  await listen(currentServer, currentSocket);
+  await listen(legacyServer, legacySocket);
+  t.after(async () => {
+    await close(currentServer);
+    await close(legacyServer);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  const resolved = await resolveCodexIpcSocket({
+    codexHome,
+    tmpdir: path.join(root, "tmp"),
+    env: {}
+  });
+
+  assert.equal(resolved, currentSocket);
 });
 
 test("Codex executable discovery prefers the ChatGPT app bundle", async () => {
