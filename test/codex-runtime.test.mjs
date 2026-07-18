@@ -8,6 +8,7 @@ import { resolveCodexCli } from "../src/codex-app.mjs";
 import { codexDreamerConfig } from "../src/codex-dreamer.mjs";
 import {
   createClientDiscoveryResponse,
+  CodexIpcClient,
   encodeFrame,
   FrameDecoder,
   resolveCodexIpcSocket
@@ -162,6 +163,71 @@ test("generic IPC routing prefers the current ChatGPT socket over legacy discove
   assert.equal(resolved, currentSocket);
 });
 
+test("IPC client falls back to a responsive legacy socket when the current socket is stale", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "wfif-"));
+  const codexHome = path.join(root, ".codex");
+  const currentSocket = path.join(codexHome, "ipc", "ipc.sock");
+  const legacySocket = path.join(root, "tmp", "codex-ipc", "ipc-501.sock");
+  await fs.mkdir(path.dirname(currentSocket), { recursive: true });
+  await fs.mkdir(path.dirname(legacySocket), { recursive: true });
+  const currentServer = trackConnections(net.createServer((socket) => {
+    socket.once("data", () => socket.destroy());
+  }));
+  const legacyServer = initializeServer();
+  await listen(currentServer, currentSocket);
+  await listen(legacyServer, legacySocket);
+
+  const client = new CodexIpcClient({
+    connectTimeoutMs: 100,
+    requestTimeoutMs: 100,
+    logger: { error() {} },
+    socketDiscovery: { codexHome, tmpdir: path.join(root, "tmp"), env: {} }
+  });
+  try {
+    await client.connect();
+    assert.equal(client.socketPath, legacySocket);
+  } finally {
+    client.disconnect();
+    await close(currentServer);
+    await close(legacyServer);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("IPC client rediscovers a replacement socket after its prior connection closes", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "wfir-"));
+  const codexHome = path.join(root, ".codex");
+  const currentSocket = path.join(codexHome, "ipc", "ipc.sock");
+  const legacySocket = path.join(root, "tmp", "codex-ipc", "ipc-501.sock");
+  await fs.mkdir(path.dirname(currentSocket), { recursive: true });
+  await fs.mkdir(path.dirname(legacySocket), { recursive: true });
+  const currentServer = initializeServer();
+  await listen(currentServer, currentSocket);
+  let legacyServer = null;
+  const client = new CodexIpcClient({
+    connectTimeoutMs: 100,
+    requestTimeoutMs: 100,
+    logger: { error() {} },
+    socketDiscovery: { codexHome, tmpdir: path.join(root, "tmp"), env: {} }
+  });
+  try {
+    await client.connect();
+    assert.equal(client.socketPath, currentSocket);
+    client.disconnect();
+    await close(currentServer);
+    legacyServer = initializeServer();
+    await listen(legacyServer, legacySocket);
+
+    await client.connect();
+    assert.equal(client.socketPath, legacySocket);
+  } finally {
+    client.disconnect();
+    await close(currentServer);
+    if (legacyServer) await close(legacyServer);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("Codex executable discovery prefers the ChatGPT app bundle", async () => {
   const checked = [];
   const resolved = await resolveCodexCli(null, {
@@ -192,6 +258,34 @@ function listen(server, socketPath) {
 
 function close(server) {
   return new Promise((resolve, reject) => {
-    server.close((error) => error ? reject(error) : resolve());
+    for (const socket of server.wakefieldConnections || []) socket.destroy();
+    server.closeAllConnections?.();
+    server.close((error) => error && error.code !== "ERR_SERVER_NOT_RUNNING" ? reject(error) : resolve());
   });
+}
+
+function initializeServer() {
+  return trackConnections(net.createServer((socket) => {
+    const decoder = new FrameDecoder();
+    socket.on("data", (chunk) => {
+      for (const request of decoder.push(chunk)) {
+        socket.write(encodeFrame({
+          type: "response",
+          requestId: request.requestId,
+          resultType: "success",
+          result: { clientId: "test-client" }
+        }));
+      }
+    });
+  }));
+}
+
+function trackConnections(server) {
+  const connections = new Set();
+  server.on("connection", (socket) => {
+    connections.add(socket);
+    socket.once("close", () => connections.delete(socket));
+  });
+  server.wakefieldConnections = connections;
+  return server;
 }

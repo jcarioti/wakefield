@@ -165,6 +165,7 @@ export async function runServiceOnce({
     home,
     now,
     dutyResults: duties,
+    externalDispatch,
     serviceRun: true
   });
 

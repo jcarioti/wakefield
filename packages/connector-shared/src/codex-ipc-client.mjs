@@ -117,23 +117,34 @@ export async function resolveCodexIpcSocket({
   tmpdir = os.tmpdir(),
   codexHome = env.CODEX_HOME || path.join(os.homedir(), ".codex")
 } = {}) {
+  return (await listCodexIpcSocketCandidates({ socketPath, env, tmpdir, codexHome }))[0];
+}
+
+export async function listCodexIpcSocketCandidates({
+  socketPath = null,
+  env = process.env,
+  tmpdir = os.tmpdir(),
+  codexHome = env.CODEX_HOME || path.join(os.homedir(), ".codex")
+} = {}) {
   const explicit = socketPath || env.CODEX_IPC_SOCKET;
   if (explicit) {
-    return explicit;
+    return [explicit];
   }
 
-  // Current ChatGPT/Codex Desktop exposes its follower IPC endpoint here. The
-  // legacy temporary directory is retained below for older desktop builds.
+  // Keep the known current and legacy locations in priority order. Connecting
+  // below performs the real liveness check; a socket filesystem entry alone
+  // can survive a desktop restart.
   const currentSocket = path.join(codexHome, "ipc", "ipc.sock");
+  const candidates = [];
   if (await isSocket(currentSocket)) {
-    return currentSocket;
+    candidates.push(currentSocket);
   }
 
   const uid = typeof process.getuid === "function" ? process.getuid() : null;
   const directory = path.join(tmpdir, SOCKET_DIR);
   const preferred = path.join(directory, uid == null ? "ipc.sock" : `ipc-${uid}.sock`);
   if (await isSocket(preferred)) {
-    return preferred;
+    candidates.push(preferred);
   }
 
   let entries = [];
@@ -141,6 +152,9 @@ export async function resolveCodexIpcSocket({
     entries = await fs.readdir(directory);
   } catch (error) {
     if (error?.code === "ENOENT") {
+      if (candidates.length > 0) {
+        return candidates;
+      }
       throw new CodexIpcError(
         `No current Codex IPC socket at ${currentSocket}, and the legacy socket directory does not exist at ${directory}. Open ChatGPT desktop and load the target Codex task.`,
         { code: "socket-directory-missing" }
@@ -149,7 +163,7 @@ export async function resolveCodexIpcSocket({
     throw error;
   }
 
-  const socketCandidates = [];
+  const legacyCandidates = [];
   for (const entry of entries) {
     if (!entry.startsWith("ipc-") || !entry.endsWith(".sock")) {
       continue;
@@ -157,17 +171,18 @@ export async function resolveCodexIpcSocket({
     const candidate = path.join(directory, entry);
     try {
       const stat = await fs.stat(candidate);
-      if (stat.isSocket()) {
-        socketCandidates.push({ candidate, mtimeMs: stat.mtimeMs });
+      if (stat.isSocket() && !candidates.includes(candidate)) {
+        legacyCandidates.push({ candidate, mtimeMs: stat.mtimeMs });
       }
     } catch {
       // Ignore stale directory entries.
     }
   }
 
-  socketCandidates.sort((left, right) => right.mtimeMs - left.mtimeMs);
-  if (socketCandidates[0]) {
-    return socketCandidates[0].candidate;
+  legacyCandidates.sort((left, right) => right.mtimeMs - left.mtimeMs);
+  candidates.push(...legacyCandidates.map(({ candidate }) => candidate));
+  if (candidates.length > 0) {
+    return candidates;
   }
 
   throw new CodexIpcError(
@@ -182,13 +197,16 @@ export class CodexIpcClient {
     clientType = DEFAULT_CLIENT_TYPE,
     connectTimeoutMs = 10000,
     requestTimeoutMs = 30000,
-    logger = console
+    logger = console,
+    socketDiscovery = null
   } = {}) {
+    this.explicitSocketPath = socketPath;
     this.socketPath = socketPath;
     this.clientType = clientType;
     this.connectTimeoutMs = connectTimeoutMs;
     this.requestTimeoutMs = requestTimeoutMs;
     this.logger = logger;
+    this.socketDiscovery = socketDiscovery && typeof socketDiscovery === "object" ? socketDiscovery : {};
     this.clientId = randomUUID();
     this.socket = null;
     this.decoder = new FrameDecoder();
@@ -200,7 +218,37 @@ export class CodexIpcClient {
       return;
     }
 
-    const resolvedSocketPath = await resolveCodexIpcSocket({ socketPath: this.socketPath });
+    const candidates = await listCodexIpcSocketCandidates({ ...this.socketDiscovery, socketPath: this.explicitSocketPath });
+    const failures = [];
+    let lastError = null;
+    for (const candidate of candidates) {
+      try {
+        await this.#connectSocket(candidate);
+        const result = await this.request("initialize", { clientType: this.clientType }, { version: 0 });
+        if (result?.clientId) {
+          this.clientId = result.clientId;
+        }
+        return;
+      } catch (error) {
+        lastError = error;
+        failures.push({ socketPath: candidate, code: error?.code || null, message: error?.message || String(error) });
+        this.disconnect();
+      }
+    }
+
+    if (failures.length === 1 && lastError) throw lastError;
+    const lastFailure = failures.at(-1);
+    throw new CodexIpcError(
+      `No responsive Codex IPC socket found. Tried: ${failures.map(({ socketPath }) => socketPath).join(", ")}.`,
+      {
+        code: "connect-failed",
+        details: { code: lastError?.details?.code || lastError?.code || null, attempts: failures, lastFailure }
+      }
+    );
+  }
+
+  async #connectSocket(resolvedSocketPath) {
+    this.decoder = new FrameDecoder();
     await new Promise((resolve, reject) => {
       const socket = net.createConnection(resolvedSocketPath);
       const timeout = setTimeout(() => {
@@ -221,17 +269,13 @@ export class CodexIpcClient {
       });
       socket.once("error", (error) => {
         clearTimeout(timeout);
+        socket.destroy();
         reject(new CodexIpcError(`Failed to connect to Codex IPC socket ${resolvedSocketPath}: ${error.message}`, {
           code: "connect-failed",
           details: error
         }));
       });
     });
-
-    const result = await this.request("initialize", { clientType: this.clientType }, { version: 0 });
-    if (result?.clientId) {
-      this.clientId = result.clientId;
-    }
   }
 
   disconnect() {

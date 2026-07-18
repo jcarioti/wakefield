@@ -10,6 +10,7 @@ import {
   createTurnStartParams,
   createRestoreMessage,
   createTextInput,
+  CodexIpcClient,
   encodeFrame,
   normalizeCodexPermissions,
   methodVersion,
@@ -92,7 +93,7 @@ test("thread follower interrupt uses app IPC protocol version 2", () => {
 });
 
 test("current ChatGPT IPC socket takes precedence over a stale legacy socket", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "wakefield-current-ipc-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "wfis-"));
   const codexHome = path.join(root, ".codex");
   const currentSocket = path.join(codexHome, "ipc", "ipc.sock");
   const legacySocket = path.join(root, "tmp", "codex-ipc", "ipc-501.sock");
@@ -117,6 +118,34 @@ test("current ChatGPT IPC socket takes precedence over a stale legacy socket", a
   assert.equal(resolved, currentSocket);
 });
 
+test("connector IPC client falls back when the current socket accepts but cannot initialize", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "wakefield-current-ipc-"));
+  const codexHome = path.join(root, ".codex");
+  const currentSocket = path.join(codexHome, "ipc", "ipc.sock");
+  const legacySocket = path.join(root, "tmp", "codex-ipc", "ipc-501.sock");
+  await fs.mkdir(path.dirname(currentSocket), { recursive: true });
+  await fs.mkdir(path.dirname(legacySocket), { recursive: true });
+  const currentServer = trackConnections(net.createServer((socket) => socket.once("data", () => socket.destroy())));
+  const legacyServer = initializeServer();
+  await listen(currentServer, currentSocket);
+  await listen(legacyServer, legacySocket);
+  const client = new CodexIpcClient({
+    connectTimeoutMs: 100,
+    requestTimeoutMs: 100,
+    logger: { error() {} },
+    socketDiscovery: { codexHome, tmpdir: path.join(root, "tmp"), env: {} }
+  });
+  try {
+    await client.connect();
+    assert.equal(client.socketPath, legacySocket);
+  } finally {
+    client.disconnect();
+    await close(currentServer);
+    await close(legacyServer);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 function listen(server, socketPath) {
   return new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -126,6 +155,34 @@ function listen(server, socketPath) {
 
 function close(server) {
   return new Promise((resolve, reject) => {
-    server.close((error) => error ? reject(error) : resolve());
+    for (const socket of server.wakefieldConnections || []) socket.destroy();
+    server.closeAllConnections?.();
+    server.close((error) => error && error.code !== "ERR_SERVER_NOT_RUNNING" ? reject(error) : resolve());
   });
+}
+
+function initializeServer() {
+  return trackConnections(net.createServer((socket) => {
+    const decoder = new FrameDecoder();
+    socket.on("data", (chunk) => {
+      for (const request of decoder.push(chunk)) {
+        socket.write(encodeFrame({
+          type: "response",
+          requestId: request.requestId,
+          resultType: "success",
+          result: { clientId: "test-client" }
+        }));
+      }
+    });
+  }));
+}
+
+function trackConnections(server) {
+  const connections = new Set();
+  server.on("connection", (socket) => {
+    connections.add(socket);
+    socket.once("close", () => connections.delete(socket));
+  });
+  server.wakefieldConnections = connections;
+  return server;
 }

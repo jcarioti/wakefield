@@ -69,3 +69,33 @@ test("health records a failed scheduled Codex dispatch", async () => {
   assert.equal(result.findings[0].code, "codex-dispatch-failed");
   assert.equal(result.state.incident.code, "codex-dispatch-failed");
 });
+
+test("health alerts when an external message stays queued after Codex dispatch fails", async () => {
+  const home = await makeHome();
+  const now = new Date("2026-07-09T16:00:00-07:00");
+  await writeService(home, now);
+  const alerts = [];
+  const result = await runHealthCheck({
+    home,
+    now,
+    serviceRun: true,
+    externalDispatch: {
+      failed: 1,
+      pending: 1,
+      results: [{
+        ok: false,
+        message: { connector: "imessage" },
+        error: { message: "No responsive Codex IPC socket found." }
+      }]
+    },
+    notify: async ({ payload }) => {
+      alerts.push(payload);
+      return { status: "sent" };
+    }
+  });
+
+  assert.equal(result.status, "degraded");
+  assert.equal(result.findings[0].code, "external-dispatch-failed");
+  assert.equal(result.state.incident.code, "external-dispatch-failed");
+  assert.equal(alerts[0].pendingExternalMessages, 1);
+});

@@ -19,6 +19,7 @@ export async function runHealthCheck({
   home,
   now = new Date(),
   dutyResults = null,
+  externalDispatch = null,
   serviceRun = false,
   notify = runConfiguredHealthAlert
 } = {}) {
@@ -52,6 +53,14 @@ export async function runHealthCheck({
         });
       }
     }
+  }
+
+  if (externalDispatch?.failed > 0 && externalDispatch.pending > 0) {
+    const failed = (externalDispatch.results || []).find((result) => !result.ok);
+    findings.push({
+      code: "external-dispatch-failed",
+      detail: `An external ${failed?.message?.connector || "connector"} message remains queued after Codex routing failed: ${failed?.error?.message || "unknown dispatch failure"}`
+    });
   }
 
   const unresolvedTurns = [];
@@ -108,6 +117,7 @@ export async function runHealthCheck({
       detail: finding.detail,
       firstDetectedAt: nextState.incident.firstDetectedAt,
       pendingTurns: unresolvedTurns.length,
+      pendingExternalMessages: externalDispatch?.pending || 0,
       dailyAlertLimit: 1
     };
     notification = await notify({ config, payload });
