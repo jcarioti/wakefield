@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import { promisify } from "node:util";
 import { expandHome } from "./paths.mjs";
+import { CodexDesktopController } from "../packages/connector-shared/src/codex-desktop-controller.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -28,32 +29,30 @@ export async function openCodexWorkspace({
 export async function openCodexNewThread({
   cwd,
   prompt = "",
-  openCommand = null,
-  execFileImpl = execFileAsync
+  permissions = null,
+  controller = null
 } = {}) {
-  if (!cwd) throw new Error("Opening a new Codex thread needs a workspace folder.");
+  if (!cwd) throw new Error("Creating a new Codex Desktop task needs a workspace folder.");
   const workspace = expandHome(cwd);
-  const url = codexNewThreadUrl({ cwd: workspace, prompt });
-  const command = openCommand || defaultOpenCommand();
-  if (!command) throw new Error("Codex deep links are only supported on macOS right now.");
-  const result = await execFileImpl(command, [url], {
-    timeout: 30000,
-    maxBuffer: 1024 * 1024
-  });
-  return {
-    ok: true,
-    url,
-    command: [command, url],
-    stdout: result.stdout || "",
-    stderr: result.stderr || ""
-  };
-}
-
-export function codexNewThreadUrl({ cwd, prompt = "" }) {
-  const params = new URLSearchParams();
-  params.set("path", cwd);
-  if (prompt) params.set("prompt", prompt);
-  return `codex://threads/new?${params.toString()}`;
+  const ownsController = controller == null;
+  const desktop = controller || new CodexDesktopController();
+  try {
+    const task = await desktop.createTask({ cwd: workspace, permissions });
+    const threadId = task.thread.id;
+    const turn = prompt
+      ? await desktop.startTurn({ threadId, cwd: workspace, text: prompt, permissions })
+      : null;
+    return {
+      ok: true,
+      action: "create-desktop-task",
+      threadId,
+      cwd: task.thread.cwd,
+      task,
+      turn
+    };
+  } finally {
+    if (ownsController) desktop.disconnect();
+  }
 }
 
 export async function resolveCodexCli(explicit = null, {
@@ -79,8 +78,4 @@ export async function resolveCodexCli(explicit = null, {
     }
   }
   return "codex";
-}
-
-function defaultOpenCommand() {
-  return process.platform === "darwin" ? "/usr/bin/open" : null;
 }

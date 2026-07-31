@@ -8,6 +8,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import { normalizeCodexPermissions } from "./codex-permissions.mjs";
 import { waitForTurnForPrompt } from "../packages/connector-shared/src/codex-rollout-watch.mjs";
+import { CodexDesktopController } from "../packages/connector-shared/src/codex-desktop-controller.mjs";
 
 const SOCKET_DIR = "codex-ipc";
 const DEFAULT_DEEP_LINK_WAKE_WAIT_MS = 30000;
@@ -102,6 +103,7 @@ export async function routePromptToCodex({
   deepLinkWake = null,
   wakeThread = null,
   codexHomePath = null,
+  desktopController = null,
   acceptanceReconcileMs = DEFAULT_TURN_ACCEPTANCE_RECONCILE_MS,
   attemptedAt = new Date().toISOString(),
   logger = console
@@ -109,6 +111,21 @@ export async function routePromptToCodex({
   if (!threadId) throw new Error("Codex dispatch needs a threadId.");
   if (!cwd) throw new Error("Codex dispatch needs a cwd.");
   if (!prompt || typeof prompt !== "string") throw new Error("Codex dispatch needs prompt text.");
+
+  if (mode === "desktop-controller") {
+    return routePromptThroughDesktopController({
+      threadId,
+      cwd,
+      prompt,
+      permissions,
+      socketPath,
+      codexHomePath,
+      acceptanceReconcileMs,
+      attemptedAt,
+      desktopController,
+      logger
+    });
+  }
 
   const ownsClient = client == null;
   const codexClient = client || new CodexIpcClient({ socketPath });
@@ -169,6 +186,75 @@ export async function routePromptToCodex({
     };
   } finally {
     if (ownsClient) codexClient.disconnect();
+  }
+}
+
+async function routePromptThroughDesktopController({
+  threadId,
+  cwd,
+  prompt,
+  permissions,
+  socketPath,
+  codexHomePath,
+  acceptanceReconcileMs,
+  attemptedAt,
+  desktopController,
+  logger
+}) {
+  const ownsController = desktopController == null;
+  const controller = desktopController || new CodexDesktopController({ socketPath, logger });
+  try {
+    let action;
+    try {
+      action = await controller.routeTextToThread({
+        threadId,
+        cwd,
+        text: prompt,
+        permissions
+      });
+    } catch (error) {
+      if (!isTurnRequestTimeout(error)) throw error;
+      const accepted = await waitForTurnForPrompt({
+        threadId,
+        codexHome: codexHomePath || undefined,
+        prompt,
+        afterTimestamp: attemptedAt,
+        timeoutMs: acceptanceReconcileMs,
+        pollMs: 500
+      });
+      if (!accepted) {
+        throw new CodexDispatchUncertainError(
+          `Codex Desktop ${error.method || "turn/start"} timed out and the turn was not yet visible in the rollout.`,
+          {
+            cause: error,
+            pendingDispatch: {
+              threadId,
+              cwd,
+              prompt,
+              attemptedAt,
+              codexHomePath: codexHomePath || null
+            }
+          }
+        );
+      }
+      logger?.warn?.(`Codex Desktop ${error.method || "turn/start"} timed out, but the turn was found in the rollout; treating it as accepted.`);
+      action = {
+        action: "start-desktop",
+        turnId: accepted.turnId,
+        result: null,
+        outcome: "accepted-after-timeout",
+        acceptedAt: accepted.acceptedAt,
+        rolloutPath: accepted.rolloutPath
+      };
+    }
+    return {
+      ...action,
+      mode: "desktop-controller",
+      threadId,
+      cwd
+    };
+  } finally {
+    if (ownsController) controller.disconnect?.();
   }
 }
 
@@ -596,7 +682,7 @@ export function isMissingCodexIpcError(error) {
 
 export function isTurnRequestTimeout(error) {
   const method = String(error?.method || error?.details?.method || "");
-  return error?.code === "request-timeout" && /^thread-follower-(?:steer|start)-turn$/.test(method);
+  return error?.code === "request-timeout" && /^(?:thread-follower-(?:steer|start)-turn|turn\/start)$/.test(method);
 }
 
 function errorText(error) {

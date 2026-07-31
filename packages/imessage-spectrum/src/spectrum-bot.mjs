@@ -632,7 +632,7 @@ async function routeDeliveryRecordNow(record, { space = null, message = null, so
     const routeResult = await sendTextToCodexTarget({
       target,
       text: deliveryRecord.codexText,
-      mode: "auto",
+      mode: target.routeMode,
       codex: config.codex
     });
     await appendEventLog(target, deliveredEventLogRecord(deliveryRecord, routeResult));

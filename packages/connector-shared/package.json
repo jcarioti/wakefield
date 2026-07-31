@@ -10,9 +10,8 @@
     "directory": "packages/connector-shared"
   },
   "exports": {
-    "./codex-app-server-client.mjs": "./src/codex-app-server-client.mjs",
+    "./codex-desktop-controller.mjs": "./src/codex-desktop-controller.mjs",
     "./codex-ipc-client.mjs": "./src/codex-ipc-client.mjs",
-    "./codex-remote-control-app-server-client.mjs": "./src/codex-remote-control-app-server-client.mjs",
     "./codex-rollout-watch.mjs": "./src/codex-rollout-watch.mjs",
     "./codex-router.mjs": "./src/codex-router.mjs",
     "./lock.mjs": "./src/lock.mjs",

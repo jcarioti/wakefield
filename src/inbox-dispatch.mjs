@@ -21,7 +21,7 @@ export async function dispatchExternalMessage(agent, {
     };
   }
 
-  const normalizedMode = String(mode || "dry-run");
+  const normalizedMode = normalizeDispatchMode(mode);
   if (normalizedMode === "dry-run" || normalizedMode === "manual") {
     return {
       ok: true,
@@ -38,8 +38,8 @@ export async function dispatchExternalMessage(agent, {
       cwd: route.cwd,
       prompt: route.prompt,
       permissions: route.permissions,
-      mode: normalizedMode === "ipc" ? "auto" : normalizedMode,
-      client,
+      mode: normalizedMode,
+      desktopController: client,
       socketPath
     });
     const delivered = await acknowledgeExternalMessage(agent, message.id, {
@@ -64,6 +64,13 @@ export async function dispatchExternalMessage(agent, {
       error: serializeError(error)
     };
   }
+}
+
+function normalizeDispatchMode(value) {
+  const mode = String(value || "dry-run").trim();
+  if (["ipc", "auto", "steer", "start"].includes(mode)) return "desktop-controller";
+  if (["desktop-controller", "dry-run", "manual"].includes(mode)) return mode;
+  throw new Error("External dispatch mode must be desktop-controller, dry-run, or manual.");
 }
 
 export function formatDispatchResult(result) {

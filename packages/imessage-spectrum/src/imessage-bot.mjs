@@ -98,7 +98,7 @@ async function handleImessage(message) {
       const routeResult = await sendTextToCodexTarget({
         target,
         text,
-        mode: "auto",
+        mode: target.routeMode,
         codex: config.codex
       });
       await maybeMarkRead({ message, replyTarget });

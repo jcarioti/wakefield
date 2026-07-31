@@ -64,13 +64,13 @@ pnpm exec wakefield codex runtime
 The selected Codex chat is the personality. Wakefield does not replace Codex
 inside the ChatGPT desktop app; it routes work into that same conversation.
 
-For a new assistant, open Codex in the agent workspace shown by
-`wakefield setup status`, start the chat there, then select it with
-`wakefield select-thread --latest`. That workspace contains the generated
-`AGENTS.md` soul.
+For a new assistant, run `wakefield agent open-new-thread`. Wakefield creates a
+persistent task in the daemon-backed ChatGPT Desktop runtime, starts the
+bootstrap turn, selects the returned task id, and retargets connector configs.
+The workspace contains the generated `AGENTS.md` soul.
 
 After Wakefield installs Codex tools, it asks the live ChatGPT-hosted Codex runtime to
-refresh MCP servers through Codex's remote-control stream, then verifies the
+refresh MCP servers through ChatGPT Desktop's owned Codex daemon, then verifies the
 loaded MCP server status before continuing.
 
 `wakefield codex runtime` is non-mutating: it discovers the app-owned IPC socket,

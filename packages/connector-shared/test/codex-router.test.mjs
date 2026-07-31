@@ -137,34 +137,32 @@ test("follower-auto route retries steering if start loses a race to another acti
   assert.deepEqual(calls, ["steer", "start", "steer"]);
 });
 
-test("app-server and remote-control modes use Codex remote control app-server", async () => {
-  for (const mode of ["app-server", "remote-control"]) {
+test("desktop-controller mode uses the daemon-backed Desktop controller", async () => {
     const calls = [];
-    const appServerClient = {
+    const desktopController = {
       async routeTextToThread(params) {
-        calls.push([mode, params]);
-        return { action: "start-app-server", turnId: `turn-${mode}` };
+        calls.push(params);
+        return { action: "start-desktop", turnId: "turn-desktop" };
       }
     };
 
     const result = await sendTextToCodexTarget({
-      appServerClient,
+      desktopController,
       target: { ...target, codexPermissions: { mode: "full-access" } },
       text: "hello",
-      mode,
+      mode: "desktop-controller",
       useLock: false
     });
-    assert.equal(result.action, "start-app-server");
-    assert.equal(result.turnId, `turn-${mode}`);
+    assert.equal(result.action, "start-desktop");
+    assert.equal(result.turnId, "turn-desktop");
     assert.deepEqual(calls, [
-      [mode, {
+      {
         threadId: "thread-1",
         cwd: "/tmp/project",
         permissions: { mode: "full-access" },
         text: "hello"
-      }]
+      }
     ]);
-  }
 });
 
 test("auto route wakes the Codex thread once after no-client-found and retries follower IPC", async () => {

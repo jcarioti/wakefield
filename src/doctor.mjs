@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { appConfigPath, appHome } from "./paths.mjs";
 import { probeCodexRuntime } from "./codex-runtime-probe.mjs";
@@ -5,11 +6,13 @@ import { hooksStatus, wakefieldHookCommand } from "./hook-manager.mjs";
 import { listAgents, loadAgent } from "./profile.mjs";
 import { pathExists } from "./json-store.mjs";
 import { wakefieldSkillsStatus } from "./skills.mjs";
+import { probeCodexDesktopController } from "../packages/connector-shared/src/codex-desktop-controller.mjs";
 
 export async function doctor({
   home = appHome(),
   codexHomePath = null,
-  runtimeProbe = probeCodexRuntime
+  runtimeProbe = probeCodexRuntime,
+  desktopControllerProbe = probeCodexDesktopController
 } = {}) {
   const agents = await listAgents(home);
   const current = await loadAgent(null, home);
@@ -21,6 +24,7 @@ export async function doctor({
   const codexRuntime = await runtimeProbe({
     ...(codexHomePath ? { sessionsPath: path.join(codexHomePath, "sessions") } : {})
   });
+  const desktopController = await desktopControllerProbe();
   const checks = [];
 
   checks.push(check("Wakefield home", true, home));
@@ -43,6 +47,37 @@ export async function doctor({
     codexRuntime.sessionsPath,
     { optional: true }
   ));
+  const desktopOptional = !desktopController.socket.ok;
+  checks.push(check(
+    "Codex daemon socket",
+    desktopController.socket.ok,
+    desktopController.socket.path,
+    { optional: desktopOptional }
+  ));
+  checks.push(check(
+    "Codex daemon ownership",
+    desktopController.daemon.ok,
+    desktopController.daemon.detail,
+    { optional: desktopOptional }
+  ));
+  checks.push(check(
+    "ChatGPT Desktop protocol",
+    desktopController.protocol.ok,
+    desktopController.protocol.detail,
+    { optional: desktopOptional }
+  ));
+  checks.push(check(
+    "ChatGPT Desktop attachment",
+    desktopController.remote.ok,
+    desktopController.remote.detail,
+    { optional: desktopOptional }
+  ));
+  checks.push(check(
+    "ChatGPT Desktop MCP runtime",
+    desktopController.mcp.ok,
+    desktopController.mcp.detail,
+    { optional: desktopOptional }
+  ));
 
   if (current) {
     checks.push(check("Current agent", true, `${current.name} (${current.id})`));
@@ -54,6 +89,10 @@ export async function doctor({
       checks.push(check("External inbox", await pathExists(current.memory.externalMessagesPath), current.memory.externalMessagesPath));
     }
     checks.push(check("State memory", await pathExists(current.memory.statePath), current.memory.statePath));
+    const memoryPermissions = await inspectMemoryPermissions(current.memory);
+    checks.push(check("Memory permissions", memoryPermissions.ok, memoryPermissions.detail, {
+      optional: memoryPermissions.optional
+    }));
     checks.push(check("Codex thread", Boolean(current.threadId), current.threadId || "not selected yet"));
     checks.push(check("Codex cwd", Boolean(current.cwd), current.cwd || "not set"));
   }
@@ -64,6 +103,7 @@ export async function doctor({
     hooks,
     skills,
     codexRuntime,
+    desktopController,
     checks
   };
 }
@@ -89,4 +129,35 @@ function formatRuntimeDetail(runtime) {
     return `${runtime.reason}; ChatGPT desktop may be closed`;
   }
   return `${runtime.reason}; IPC initialize or access check failed`;
+}
+
+async function inspectMemoryPermissions(memory) {
+  if (process.platform === "win32") {
+    return {
+      ok: true,
+      optional: true,
+      detail: "Unix permission bits are not enforced on Windows"
+    };
+  }
+  const files = Object.entries(memory || {})
+    .filter(([key, value]) => key.endsWith("Path") && typeof value === "string")
+    .map(([, value]) => value);
+  const issues = [];
+  for (const dir of new Set(files.map((file) => path.dirname(file)))) {
+    const stat = await fs.stat(dir).catch(() => null);
+    if (stat && (stat.mode & 0o077) !== 0) issues.push(`${dir} is ${octalMode(stat.mode)}`);
+  }
+  for (const file of files) {
+    const stat = await fs.stat(file).catch(() => null);
+    if (stat && (stat.mode & 0o077) !== 0) issues.push(`${file} is ${octalMode(stat.mode)}`);
+  }
+  return {
+    ok: issues.length === 0,
+    optional: false,
+    detail: issues.length === 0 ? "directories 0700; files 0600" : issues.join("; ")
+  };
+}
+
+function octalMode(mode) {
+  return (mode & 0o777).toString(8).padStart(4, "0");
 }

@@ -18,17 +18,12 @@ const DEFAULT_CONFIG = {
     requestTimeoutMs: 30000,
     lockTimeoutMs: 45000,
     lockStaleMs: 90000,
-    deepLinkWake: {
-      enabled: true,
-      waitMs: 30000,
-      pollMs: 1000,
-      reopenMs: 6000
-    },
-    appServer: {
+    desktopController: {
       controlSocketPath: null,
       codexPath: null,
       ensureDaemon: true,
       requireRemoteControlConnected: true,
+      requireDesktopOwnership: true,
       connectTimeoutMs: 10000,
       requestTimeoutMs: 30000,
       startupTimeoutMs: 15000
@@ -72,10 +67,6 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
       args.targetId = argv[++i];
     } else if (value?.startsWith("--target=")) {
       args.targetId = value.slice("--target=".length);
-    } else if (value === "--mode") {
-      args.mode = argv[++i];
-    } else if (value?.startsWith("--mode=")) {
-      args.mode = value.slice("--mode=".length);
     } else if (value === "--text") {
       args.text = argv[++i];
     } else if (value?.startsWith("--text=")) {
@@ -186,6 +177,7 @@ function normalizeConfig(config, { configPath, cwd }) {
   const configDir = configPath == null ? cwd : path.dirname(configPath);
   const targets = (config.targets || []).map((target) => ({
     ...target,
+    routeMode: normalizeRouteMode(target.routeMode),
     displayName: target.displayName || target.id,
     cwd: expandPath(target.cwd, { cwd: configDir }),
     eventLogPath: expandPath(target.eventLogPath, { cwd: configDir }),
@@ -220,7 +212,8 @@ function normalizeConfig(config, { configPath, cwd }) {
     },
     codex: {
       ...DEFAULT_CONFIG.codex,
-      ...(config.codex || {})
+      ...(config.codex || {}),
+      desktopController: normalizeDesktopController(config.codex?.desktopController, { cwd: configDir })
     },
     discord: {
       ...DEFAULT_CONFIG.discord,
@@ -228,6 +221,25 @@ function normalizeConfig(config, { configPath, cwd }) {
     },
     targets
   };
+}
+
+function normalizeDesktopController(value, { cwd }) {
+  const merged = { ...DEFAULT_CONFIG.codex.desktopController, ...(value || {}) };
+  return {
+    ...merged,
+    controlSocketPath: expandPath(merged.controlSocketPath, { cwd }),
+    codexPath: expandPath(merged.codexPath, { cwd }),
+    requireRemoteControlConnected: true,
+    requireDesktopOwnership: true
+  };
+}
+
+function normalizeRouteMode(value) {
+  const mode = value || "desktop-controller";
+  if (mode !== "desktop-controller") {
+    throw new Error(`Unsupported Codex routeMode ${mode}; this build requires desktop-controller.`);
+  }
+  return mode;
 }
 
 function deepMerge(base, override) {

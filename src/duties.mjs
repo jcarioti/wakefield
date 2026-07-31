@@ -250,8 +250,8 @@ export async function runDuty(agent, duty, {
       cwd: route.cwd,
       prompt: route.prompt,
       permissions: route.permissions,
-      mode: mode === "ipc" ? "auto" : mode,
-      client: dispatchClient,
+      mode,
+      desktopController: dispatchClient,
       socketPath: dispatchSocketPath,
       codexHomePath,
       attemptedAt: now.toISOString(),
@@ -818,8 +818,12 @@ function timeOfDayMinutes(value) {
 
 function normalizeDispatchMode(value) {
   const mode = String(value || DEFAULT_DISPATCH_MODE).trim();
-  if (["ipc", "auto", "steer", "start", "dry-run", "manual"].includes(mode)) return mode;
-  throw new Error("Duty dispatch mode must be ipc, auto, steer, start, dry-run, or manual.");
+  // These names were persisted by the retired thread-follower transport.
+  // Loading them performs a one-way migration; no duty path may use that
+  // transport again.
+  if (["ipc", "auto", "steer", "start"].includes(mode)) return "desktop-controller";
+  if (["desktop-controller", "dry-run", "manual"].includes(mode)) return mode;
+  throw new Error("Duty dispatch mode must be desktop-controller, dry-run, or manual.");
 }
 
 function formatDutyCadence(duty) {

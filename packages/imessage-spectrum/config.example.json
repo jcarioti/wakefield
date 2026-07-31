@@ -7,17 +7,12 @@
     "connectTimeoutMs": 10000,
     "lockTimeoutMs": 45000,
     "lockStaleMs": 90000,
-    "deepLinkWake": {
-      "enabled": true,
-      "waitMs": 30000,
-      "pollMs": 1000,
-      "reopenMs": 6000
-    },
-    "appServer": {
+    "desktopController": {
       "controlSocketPath": "~/.codex/app-server-control/app-server-control.sock",
       "codexPath": "~/.codex/packages/standalone/current/codex",
       "ensureDaemon": true,
-      "requireRemoteControlConnected": true
+      "requireRemoteControlConnected": true,
+      "requireDesktopOwnership": true
     }
   },
   "imessage": {
@@ -79,6 +74,7 @@
       "id": "agent",
       "displayName": "Wakefield Agent",
       "threadId": "019e51a5-5ad3-7991-87d4-4745494f7ae9",
+      "routeMode": "desktop-controller",
       "cwd": "~/WakefieldAgents/agent",
       "allowedAddresses": [
         "+15551234567"

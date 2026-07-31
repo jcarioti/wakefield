@@ -187,9 +187,17 @@ async function main(argv = process.argv.slice(2)) {
       : "");
     const result = await openCodexNewThread({
       cwd: options.cwd || profile.cwd,
-      prompt: bootstrapText
+      prompt: bootstrapText,
+      permissions: profile.codexPermissions || null
     });
-    console.log(options.json ? JSON.stringify(result, null, 2) : "Opened Codex with the agent bootstrap prompt.");
+    result.selected = await selectThread({
+      threadId: result.threadId,
+      cwd: result.cwd || options.cwd || profile.cwd
+    });
+    result.retarget = await retargetManagedConnectorConfigs({ agent: result.selected });
+    console.log(options.json
+      ? JSON.stringify(result, null, 2)
+      : `Created and selected ChatGPT Desktop task: ${result.threadId}`);
     return;
   }
 
@@ -366,7 +374,7 @@ async function main(argv = process.argv.slice(2)) {
       overwrite: Boolean(options.overwrite),
       load: !options.noLoad,
       reload: Boolean(options.reload),
-      refreshCodexMcp: !options.noMcpReload && !options.noReloadMcp,
+      refreshCodexMcp: true,
       dryRun: Boolean(options.dryRun)
     });
     console.log(options.json ? JSON.stringify(result, null, 2) : formatManagedConnectorSetup(result));
@@ -486,7 +494,7 @@ async function main(argv = process.argv.slice(2)) {
       overwrite: Boolean(options.overwrite),
       load: !options.noLoad,
       reload: Boolean(options.reload),
-      refreshCodexMcp: !options.noMcpReload && !options.noReloadMcp,
+      refreshCodexMcp: true,
       dryRun: Boolean(options.dryRun)
     });
     console.log(options.json ? JSON.stringify(result, null, 2) : formatManagedConnectorSetup(result));
@@ -598,16 +606,20 @@ async function main(argv = process.argv.slice(2)) {
         codexConfigPath: options.codexConfig || options.codexConfigPath || liveCodexConfigPath(),
         dryRun: Boolean(options.dryRun)
       });
-      if (!options.dryRun && !options.noReload && result.changed) {
-        result.codexMcpReload = await reloadCodexMcpServers();
+      if (!options.dryRun && result.changed) {
+        result.codexMcpReload = await reloadCodexMcpServers({
+          threadId: agent?.threadId || null,
+          expectedServers: [result.serverName]
+        });
       }
+      result.liveOk = result.codexMcpReload?.ok ?? true;
       console.log(options.json
         ? JSON.stringify(result, null, 2)
         : [
           formatManagedConnectorMcpInstall(result),
           result.codexMcpReload ? formatCodexMcpReload(result.codexMcpReload) : null
         ].filter(Boolean).join("\n"));
-      process.exitCode = result.ok ? 0 : 1;
+      process.exitCode = result.ok && result.liveOk ? 0 : 1;
       return;
     }
     throw new Error(`Unknown managed connector MCP action: ${action}`);
@@ -615,11 +627,11 @@ async function main(argv = process.argv.slice(2)) {
 
   if (command === "mcp" && (rest[0] === "reload" || rest[0] === "refresh")) {
     const options = parseOptions(rest.slice(1));
+    const agent = await loadAgent();
     const result = await reloadCodexMcpServers({
+      threadId: agent?.threadId || null,
       timeoutMs: Number(options.timeoutMs || options.timeout || 30000),
-      pollMs: Number(options.pollMs || options.poll || 1000),
-      waitForStatus: !options.noWait,
-      requireRemoteControlConnected: !options.allowDisconnected
+      pollMs: Number(options.pollMs || options.poll || 1000)
     });
     console.log(options.json ? JSON.stringify(result, null, 2) : formatCodexMcpReload(result));
     process.exitCode = result.ok ? 0 : 1;
@@ -652,15 +664,20 @@ async function main(argv = process.argv.slice(2)) {
         codexConfigPath: options.codexConfig || options.codexConfigPath || liveCodexConfigPath(),
         dryRun: Boolean(options.dryRun)
       });
-      if (!options.dryRun && !options.noReload && result.changed) {
-        result.codexMcpReload = await reloadCodexMcpServers();
+      if (!options.dryRun && result.changed) {
+        result.codexMcpReload = await reloadCodexMcpServers({
+          threadId: agent?.threadId || null,
+          expectedServers: [result.serverName]
+        });
       }
+      result.liveOk = result.codexMcpReload?.ok ?? true;
       console.log(options.json
         ? JSON.stringify(result, null, 2)
         : [
           formatMemoryMcpInstall(result),
           result.codexMcpReload ? formatCodexMcpReload(result.codexMcpReload) : null
         ].filter(Boolean).join("\n"));
+      process.exitCode = result.ok && result.liveOk ? 0 : 1;
       return;
     }
     throw new Error(`Unknown memory MCP action: ${action}`);
@@ -1364,11 +1381,11 @@ function usage() {
     "  wakefield managed-connectors init-config ID [--set key=value] [--overwrite] [--json]",
     "  wakefield managed-connectors mcp status ID [--codex-config PATH] [--json]",
     "  wakefield managed-connectors mcp print ID",
-    "  wakefield managed-connectors mcp install ID [--codex-config PATH] [--no-reload] [--dry-run] [--json]",
-    "  wakefield mcp reload [--timeout-ms N] [--poll-ms N] [--no-wait] [--allow-disconnected] [--json]",
+    "  wakefield managed-connectors mcp install ID [--codex-config PATH] [--dry-run] [--json]",
+    "  wakefield mcp reload [--timeout-ms N] [--poll-ms N] [--json]",
     "  wakefield mcp memory status [--codex-config PATH] [--json]",
     "  wakefield mcp memory print",
-    "  wakefield mcp memory install [--codex-config PATH] [--no-reload] [--dry-run] [--json]",
+    "  wakefield mcp memory install [--codex-config PATH] [--dry-run] [--json]",
     "  wakefield managed-connectors test ID [--kind status|follower-probe|spectrum-bridge|reply-plan|tapback-plan] [--json]",
     "  wakefield managed-connectors launch-agent status ID [--json]",
     "  wakefield managed-connectors launch-agent print ID",

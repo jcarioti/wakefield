@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import { CodexIpcClient } from "./codex-ipc-client.mjs";
-import { CodexAppServerClient } from "./codex-app-server-client.mjs";
+import { CodexDesktopController } from "./codex-desktop-controller.mjs";
 import { withFileLock } from "./lock.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -12,7 +12,7 @@ const DEFAULT_DEEP_LINK_WAKE_REOPEN_MS = 6000;
 
 export async function sendTextToCodexTarget({
   client = null,
-  appServerClient = null,
+  desktopController = null,
   wakeThread = null,
   target,
   text,
@@ -27,15 +27,13 @@ export async function sendTextToCodexTarget({
   }
 
   const run = async () => {
-    if (isAppServerMode(mode)) {
-      const ownsAppServerClient = appServerClient == null;
-      const codexAppServerClient = appServerClient || createAppServerClient(codex);
+    if (mode === "desktop-controller") {
+      const ownsController = desktopController == null;
+      const controller = desktopController || createDesktopController(codex);
       try {
-        return withTarget(await routeViaAppServer(codexAppServerClient, target, text), target);
+        return withTarget(await routeViaDesktopController(controller, target, text), target);
       } finally {
-        if (ownsAppServerClient) {
-          codexAppServerClient.disconnect();
-        }
+        if (ownsController) controller.disconnect();
       }
     }
 
@@ -194,7 +192,7 @@ async function start(client, target, text) {
   return { action: "start", result, turnId: extractTurnId(result) };
 }
 
-async function routeViaAppServer(client, target, text) {
+async function routeViaDesktopController(client, target, text) {
   return client.routeTextToThread({
     threadId: target.threadId,
     cwd: target.cwd,
@@ -291,10 +289,6 @@ function errorText(error) {
   ].filter(Boolean).join(" ");
 }
 
-function isAppServerMode(mode) {
-  return mode === "app-server" || mode === "remote-control";
-}
-
 function isFollowerMode(mode) {
   return mode === "auto" || mode === "follower-auto" || mode === "follower-steer" || mode === "follower-start" ||
     mode === "steer" || mode === "start";
@@ -339,38 +333,20 @@ async function openCodexDeepLink(url, { command, args }) {
   await execFileAsync(command, commandArgs, { timeout: 10000 });
 }
 
-function createAppServerClient(codex) {
-  const legacyFallback = codex?.appServerFallback && codex.appServerFallback !== true
-    ? codex.appServerFallback
+function createDesktopController(codex) {
+  const settings = codex?.desktopController && codex.desktopController !== true
+    ? codex.desktopController
     : {};
-  const appServer = mergeDefined(
-    legacyFallback,
-    codex?.appServer && codex.appServer !== true ? codex.appServer : {}
-  );
-  return new CodexAppServerClient({
-    socketPath: appServer.controlSocketPath || appServer.socketPath,
-    codexPath: appServer.codexPath,
-    ensureDaemon: appServer.ensureDaemon,
-    requireRemoteControlConnected: appServer.requireRemoteControlConnected,
-    connectTimeoutMs: appServer.connectTimeoutMs ?? codex?.connectTimeoutMs,
-    requestTimeoutMs: appServer.requestTimeoutMs ?? codex?.requestTimeoutMs,
-    startupTimeoutMs: appServer.startupTimeoutMs
+  return new CodexDesktopController({
+    socketPath: settings.controlSocketPath,
+    codexPath: settings.codexPath,
+    ensureDaemon: settings.ensureDaemon,
+    requireRemoteControlConnected: settings.requireRemoteControlConnected,
+    requireDesktopOwnership: settings.requireDesktopOwnership,
+    connectTimeoutMs: settings.connectTimeoutMs ?? codex?.connectTimeoutMs,
+    requestTimeoutMs: settings.requestTimeoutMs ?? codex?.requestTimeoutMs,
+    startupTimeoutMs: settings.startupTimeoutMs
   });
-}
-
-function mergeDefined(...sources) {
-  const result = {};
-  for (const source of sources) {
-    if (source == null || typeof source !== "object") {
-      continue;
-    }
-    for (const [key, value] of Object.entries(source)) {
-      if (value !== undefined && value !== null) {
-        result[key] = value;
-      }
-    }
-  }
-  return result;
 }
 
 function assertTarget(target) {

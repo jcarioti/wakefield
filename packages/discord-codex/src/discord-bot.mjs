@@ -87,7 +87,7 @@ client.on("messageCreate", async (message) => {
         const routeResult = await sendTextToCodexTarget({
           target,
           text,
-          mode: "auto",
+          mode: target.routeMode,
           codex: config.codex
         });
         const completionStatus = await keepTypingUntilTurnCompletes({ target, routeResult, message });

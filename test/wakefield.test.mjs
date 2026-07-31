@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { inspectAgentPack, installAgentPack } from "../src/agent-packs.mjs";
 import { codexDreamerConfig } from "../src/codex-dreamer.mjs";
 import { reloadCodexMcpServers } from "../src/codex-mcp-reload.mjs";
+import { openCodexNewThread } from "../src/codex-app.mjs";
 import { routePromptToCodex } from "../src/codex-ipc.mjs";
 import { findRecentThreadByPrompt, listRecentThreads, threadIdFromFilename, waitForThreadByPrompt } from "../src/codex-sessions.mjs";
 import { configureConnector, connectorWizard, connectorWizards, CONNECTOR_SETUP_SLOTS, connectorStatuses } from "../src/connectors.mjs";
@@ -54,6 +55,14 @@ const compatibleRuntimeProbe = async ({ sessionsPath = "/tmp/codex-sessions" } =
   sessionsReadable: true,
   error: null
 });
+const healthyDesktopControllerProbe = async () => ({
+  ok: true,
+  socket: { ok: true, path: "/tmp/app-server-control.sock" },
+  daemon: { ok: true, detail: "0.146.0-alpha.9.2; pid" },
+  protocol: { ok: true, detail: "Codex Desktop/0.146.0-alpha.9.2" },
+  remote: { ok: true, status: "connected", detail: "test.local; env-1" },
+  mcp: { ok: true, count: 3, detail: "3 live servers" }
+});
 
 test("init creates a normal app-support profile and memory files", async () => {
   const home = await tempHome();
@@ -73,12 +82,21 @@ test("init creates a normal app-support profile and memory files", async () => {
   assert.equal(profile.memory.mattersPath, path.join(profile.cwd, "memory", "matters.json"));
   assert.equal((await loadAgent(null, home)).id, profile.id);
 
-  const report = await doctor({ home, runtimeProbe: compatibleRuntimeProbe });
+  const report = await doctor({
+    home,
+    runtimeProbe: compatibleRuntimeProbe,
+    desktopControllerProbe: healthyDesktopControllerProbe
+  });
   assert.equal(report.ok, false);
   assert.equal(report.checks.find((check) => check.label === "Soul file").ok, true);
   assert.equal(report.checks.find((check) => check.label === "External inbox").ok, true);
   assert.equal(report.checks.find((check) => check.label === "Codex thread").ok, false);
   assert.equal(report.checks.find((check) => check.label === "ChatGPT/Codex IPC").ok, true);
+  assert.equal(report.checks.find((check) => check.label === "Codex daemon socket").ok, true);
+  assert.equal(report.checks.find((check) => check.label === "Codex daemon ownership").ok, true);
+  assert.equal(report.checks.find((check) => check.label === "ChatGPT Desktop protocol").ok, true);
+  assert.equal(report.checks.find((check) => check.label === "ChatGPT Desktop attachment").ok, true);
+  assert.equal(report.checks.find((check) => check.label === "ChatGPT Desktop MCP runtime").ok, true);
   assert.match(await fs.readFile(profile.memory.externalMessagesPath, "utf8"), /^$/);
   assert.match(await fs.readFile(profile.memory.capturePath, "utf8"), /^$/);
   assert.deepEqual(JSON.parse(await fs.readFile(profile.memory.notesPath, "utf8")).notes, []);
@@ -368,7 +386,7 @@ test("Wakefield MCP tools can manage duties and wakeups", async () => {
   assert.equal(wakeupResult.ok, true);
   assert.equal(wakeupResult.wakeups[0].id, "morning-ops");
   assert.deepEqual(wakeupResult.wakeups[0].dutyIds, ["morning-check"]);
-  assert.equal(wakeupResult.wakeups[0].dispatchMode, "ipc");
+  assert.equal(wakeupResult.wakeups[0].dispatchMode, "desktop-controller");
 
   const status = await callMcpTool(server, "wakefield_scheduler_status", {
     now: "2026-06-20T15:00:00.000Z"
@@ -421,7 +439,7 @@ test("Codex MCP reload wrapper reports success and soft failures", async () => {
     authStatus: null,
     error: null
   }]);
-  assert.deepEqual(successCalls, [{ timeoutMs: 1234, pollMs: 12, waitForStatus: true }]);
+  assert.deepEqual(successCalls, [{ threadId: null, timeoutMs: 1234, pollMs: 12 }]);
 
   const noTools = await reloadCodexMcpServers({
     client: {
@@ -442,8 +460,8 @@ test("Codex MCP reload wrapper reports success and soft failures", async () => {
     client: {
       remoteControlStatus: null,
       reloadMcpServers: async () => {
-        const error = new Error("no app-server socket");
-        error.code = "connect-failed";
+        const error = new Error("no daemon socket");
+        error.code = "daemon-socket-missing";
         throw error;
       },
       disconnect() {}
@@ -451,7 +469,61 @@ test("Codex MCP reload wrapper reports success and soft failures", async () => {
   });
   assert.equal(failure.ok, false);
   assert.equal(failure.refreshed, false);
-  assert.equal(failure.error.code, "connect-failed");
+  assert.equal(failure.error.code, "daemon-socket-missing");
+  assert.equal(failure.diagnosis.code, "daemon-socket-missing");
+
+  const detached = await reloadCodexMcpServers({
+    client: {
+      remoteControlStatus: null,
+      reloadMcpServers: async () => {
+        const error = new Error("ChatGPT Desktop is detached");
+        error.code = "desktop-not-attached";
+        error.method = "remoteControl/status/read";
+        throw error;
+      },
+      disconnect() {}
+    }
+  });
+  assert.equal(detached.ok, false);
+  assert.equal(detached.diagnosis.code, "desktop-not-attached");
+});
+
+test("new agent task creation uses the persistent Desktop controller path", async () => {
+  const calls = [];
+  const controller = {
+    async createTask(options) {
+      calls.push(["create", options]);
+      return {
+        thread: { id: "thread-desktop", cwd: "/tmp/desktop-agent", ephemeral: false }
+      };
+    },
+    async startTurn(options) {
+      calls.push(["start", options]);
+      return { turn: { id: "turn-bootstrap" } };
+    },
+    disconnect() {
+      throw new Error("caller-owned controller must not be disconnected");
+    }
+  };
+
+  const result = await openCodexNewThread({
+    cwd: "/tmp/desktop-agent",
+    prompt: "bootstrap",
+    permissions: { mode: "full-access" },
+    controller
+  });
+
+  assert.equal(result.action, "create-desktop-task");
+  assert.equal(result.threadId, "thread-desktop");
+  assert.deepEqual(calls, [
+    ["create", { cwd: "/tmp/desktop-agent", permissions: { mode: "full-access" } }],
+    ["start", {
+      threadId: "thread-desktop",
+      cwd: "/tmp/desktop-agent",
+      text: "bootstrap",
+      permissions: { mode: "full-access" }
+    }]
+  ]);
 });
 
 test("selectThread attaches the current agent to a persistent Codex thread", async () => {
@@ -468,7 +540,12 @@ test("selectThread attaches the current agent to a persistent Codex thread", asy
   assert.equal(attached.threadId, "thread-123");
   assert.equal(attached.cwd, "/tmp/threadwell");
 
-  const report = await doctor({ home, codexHomePath, runtimeProbe: compatibleRuntimeProbe });
+  const report = await doctor({
+    home,
+    codexHomePath,
+    runtimeProbe: compatibleRuntimeProbe,
+    desktopControllerProbe: healthyDesktopControllerProbe
+  });
   assert.equal(report.ok, false);
   assert.equal(report.checks.find((check) => check.label === "Codex thread").ok, true);
 });
@@ -903,7 +980,7 @@ test("runSetup gives clone installs a one-command idempotent setup path", async 
   assert.match(first.actions.find((action) => action.id === "install-base-skills").detail, /Wakefield skill\(s\)/);
   assert.equal(first.actions.find((action) => action.id === "install-memory-mcp").status, "applied");
   assert.equal(first.actions.find((action) => action.id === "enable-service").detail, "9 minute interval");
-  assert.equal(first.actions.find((action) => action.id === "enable-external-dispatch").detail, "ipc, limit 2");
+  assert.equal(first.actions.find((action) => action.id === "enable-external-dispatch").detail, "desktop-controller, limit 2");
 
   const agent = await loadAgent(null, home);
   assert.equal(agent.name, "First Run");
@@ -1555,7 +1632,21 @@ test("managed connectors initialize local configs and install MCP entries for Di
         redirectUrl: "https://spectrum.photon.codes/users/user-owner/redirect"
       }]
     };
+    delete imessageConfig.targets[0].routeMode;
+    imessageConfig.codex.appServer = { legacy: true };
     await fs.writeFile(imessage.configPath, `${JSON.stringify(imessageConfig, null, 2)}\n`, "utf8");
+
+    const imessageMigration = await initializeManagedConnectorConfig("imessage-spectrum", {
+      home,
+      agent
+    });
+    assert.equal(imessageMigration.action, "migrate-desktop-controller");
+    assert.equal(imessageMigration.changed, true);
+    const migratedImessageConfig = JSON.parse(await fs.readFile(imessage.configPath, "utf8"));
+    assert.equal(migratedImessageConfig.targets[0].routeMode, "desktop-controller");
+    assert.equal(migratedImessageConfig.codex.desktopController.requireDesktopOwnership, true);
+    assert.equal(migratedImessageConfig.codex.appServer, undefined);
+    assert.equal(migratedImessageConfig.imessage.spectrum.projectUsersCache.total, 1);
 
     const imessageMcp = await installManagedConnectorMcp("imessage-spectrum", { home, agent });
     assert.equal(imessageMcp.changed, true);
@@ -2858,7 +2949,7 @@ test("HTTP intake requires a token outside loopback", async () => {
   );
 });
 
-test("external inbox dispatch can dry-run or deliver pending messages through Codex IPC", async () => {
+test("external inbox dispatch can dry-run or deliver pending messages through the Desktop controller", async () => {
   const home = await tempHome();
   const profile = await initAgent({
     name: "Dispatcher",
@@ -2889,16 +2980,12 @@ test("external inbox dispatch can dry-run or deliver pending messages through Co
   let startParams = null;
   const delivered = await dispatchExternalMessage(profile, {
     id: ingested.message.id,
-    mode: "ipc",
+    mode: "desktop-controller",
     client: {
-      async steerThreadFollowerTurn(params) {
-        calls.push(["steer", params.conversationId, params.cwd, params.text]);
-        throw Object.assign(new Error("no active turn"), { code: "inactive-turn" });
-      },
-      async startThreadFollowerTurn(params) {
+      async routeTextToThread(params) {
         startParams = params;
-        calls.push(["start", params.conversationId, params.cwd, params.text]);
-        return { turnId: "turn-123" };
+        calls.push(["start-desktop", params.threadId, params.cwd, params.text]);
+        return { action: "start-desktop", turnId: "turn-123" };
       }
     },
     now: new Date("2026-06-14T16:30:00Z")
@@ -2906,17 +2993,16 @@ test("external inbox dispatch can dry-run or deliver pending messages through Co
 
   assert.equal(delivered.ok, true);
   assert.equal(delivered.status, "delivered");
-  assert.equal(delivered.dispatch.action, "start");
+  assert.equal(delivered.dispatch.action, "start-desktop");
   assert.equal(delivered.dispatch.turnId, "turn-123");
-  assert.equal(calls[0][0], "steer");
-  assert.equal(calls[1][0], "start");
-  assert.equal(calls[1][1], "thread-dispatch");
-  assert.equal(calls[1][2], "/tmp/dispatcher");
-  assert.match(calls[1][3], /Are you around/);
+  assert.equal(calls[0][0], "start-desktop");
+  assert.equal(calls[0][1], "thread-dispatch");
+  assert.equal(calls[0][2], "/tmp/dispatcher");
+  assert.match(calls[0][3], /Are you around/);
   assert.deepEqual(delivered.route.permissions, { mode: "full-access" });
   assert.deepEqual(startParams.permissions, { mode: "full-access" });
   assert.deepEqual(await listExternalMessages(profile), []);
-  assert.equal((await listExternalMessages(profile, { status: "delivered" }))[0].statusReason, "Codex start");
+  assert.equal((await listExternalMessages(profile, { status: "delivered" }))[0].statusReason, "Codex start-desktop");
 });
 
 test("Codex IPC routing deep-link wakes missing follower clients", async () => {
@@ -2992,7 +3078,7 @@ test("manifest describes package, core features, setup commands, and connector s
   assert.equal(manifest.runtime.binary, "wakefield");
   assert.deepEqual(
     manifest.core.filter((feature) => feature.status === "available").map((feature) => feature.id),
-    ["agent-profile", "soul", "thread-selection", "agent-packs", "codex-hooks", "contacts", "local-memory", "scoped-memory-notes", "active-context-matters", "scoped-memory-recall", "memory-mcp-tools", "local-dreamer", "external-message-ingest", "discord-gateway", "email-rfc822-ingest", "email-imap-poll", "imessage-chatdb-poll", "http-intake", "http-setup-api", "external-message-dispatch", "service-tick", "scheduled-duties", "service-env-file", "service-external-dispatch", "macos-launch-agent", "setup-actions", "menu-snapshot", "clone-self-test", "clone-verify", "one-command-setup", "connector-config", "connector-wizards", "managed-connector-packages", "managed-connector-wizards", "managed-connector-config-init", "managed-connector-mcp-install", "codex-mcp-reload", "managed-connector-launch-agents"]
+    ["agent-profile", "soul", "thread-selection", "agent-packs", "codex-hooks", "contacts", "local-memory", "scoped-memory-notes", "active-context-matters", "scoped-memory-recall", "memory-mcp-tools", "local-dreamer", "external-message-ingest", "discord-gateway", "email-rfc822-ingest", "email-imap-poll", "imessage-chatdb-poll", "http-intake", "http-setup-api", "external-message-dispatch", "service-tick", "scheduled-duties", "service-env-file", "service-external-dispatch", "macos-launch-agent", "setup-actions", "menu-snapshot", "clone-self-test", "clone-verify", "one-command-setup", "connector-config", "connector-wizards", "managed-connector-packages", "managed-connector-wizards", "managed-connector-config-init", "managed-connector-mcp-install", "codex-desktop-controller", "codex-mcp-reload", "managed-connector-launch-agents"]
   );
   assert.deepEqual(
     manifest.connectors.map((connector) => connector.setupActionId),
@@ -3949,7 +4035,7 @@ test("wakeups bundle multiple duties into one scheduled turn", async () => {
   assert.equal(after.wakeups[0].due, false);
 });
 
-test("scheduled dispatch reconciles an accepted turn after IPC timeout and does not retry it", async () => {
+test("scheduled dispatch reconciles an accepted Desktop turn after timeout and does not retry it", async () => {
   const home = await tempHome();
   const codexHomePath = await tempHome();
   const profile = await initAgent({
@@ -3963,23 +4049,23 @@ test("scheduled dispatch reconciles an accepted turn after IPC timeout and does 
     home,
     label: "Dashboard",
     prompt: "Generate the dashboard.",
-    dispatchMode: "ipc"
+    dispatchMode: "desktop-controller"
   });
   await configureWakeup("dashboard-wakeup", {
     home,
     label: "Dashboard Wakeup",
     wakeTimes: ["05:00"],
     duties: ["dashboard"],
-    dispatchMode: "ipc"
+    dispatchMode: "desktop-controller"
   });
 
   let dispatchCalls = 0;
   const dispatchClient = {
-    async steerThreadFollowerTurn() {
+    async routeTextToThread() {
       dispatchCalls += 1;
-      const error = new Error("Timed out waiting for Codex IPC method thread-follower-steer-turn.");
+      const error = new Error("Timed out waiting for Codex Desktop method turn/start.");
       error.code = "request-timeout";
-      error.method = "thread-follower-steer-turn";
+      error.method = "turn/start";
       throw error;
     },
     disconnect() {}
@@ -4138,7 +4224,7 @@ test("duties configure CLI preserves required tools when changing dispatch mode"
 
   const result = JSON.parse(stdout);
   assert.deepEqual(result.duties[0].requiredTools, ["calendar", "email"]);
-  assert.equal(result.duties[0].dispatchMode, "ipc");
+  assert.equal(result.duties[0].dispatchMode, "desktop-controller");
 });
 
 test("duties configure CLI can attach skill-backed duty prompts", async () => {
@@ -4253,13 +4339,9 @@ test("service tick can dispatch pending external messages when explicitly enable
       capture: false,
       now: new Date("2026-06-14T17:00:00Z"),
       dispatchClient: {
-        async steerThreadFollowerTurn(params) {
-          calls.push(["steer", params.conversationId, params.cwd, params.text]);
-          throw Object.assign(new Error("no active turn"), { code: "inactive-turn" });
-        },
-        async startThreadFollowerTurn(params) {
-          calls.push(["start", params.conversationId, params.cwd, params.text]);
-          return { turnId: "turn-service-dispatch" };
+        async routeTextToThread(params) {
+          calls.push(["start-desktop", params.threadId, params.cwd, params.text]);
+          return { action: "start-desktop", turnId: "turn-service-dispatch" };
         }
       }
     });
@@ -4270,9 +4352,8 @@ test("service tick can dispatch pending external messages when explicitly enable
     assert.equal(result.externalDispatch.delivered, 1);
     assert.equal(result.externalDispatch.pending, 0);
     assert.equal(result.externalDispatch.results[0].dispatch.turnId, "turn-service-dispatch");
-    assert.equal(calls[0][0], "steer");
-    assert.equal(calls[1][0], "start");
-    assert.match(calls[1][3], /Please route me from the service/);
+    assert.equal(calls[0][0], "start-desktop");
+    assert.match(calls[0][3], /Please route me from the service/);
     assert.deepEqual(await listExternalMessages(profile), []);
     assert.equal((await serviceStatus({ home })).externalDispatch.pending, 0);
   } finally {

@@ -1,39 +1,36 @@
-import { CodexAppServerError } from "../packages/connector-shared/src/codex-app-server-client.mjs";
-import { CodexRemoteControlAppServerClient } from "../packages/connector-shared/src/codex-remote-control-app-server-client.mjs";
+import { CodexDesktopController, CodexDesktopControllerError, defaultControlSocketPath } from "../packages/connector-shared/src/codex-desktop-controller.mjs";
 
 export async function reloadCodexMcpServers({
   client = null,
+  threadId = null,
+  expectedServers = [],
   timeoutMs = 30000,
   pollMs = 1000,
-  waitForStatus = true,
-  requireRemoteControlConnected = true,
   throwOnError = false
 } = {}) {
   const ownsClient = client == null;
-  const appServerClient = client || new CodexRemoteControlAppServerClient({
-    requireRemoteControlConnected,
-    requestTimeoutMs: timeoutMs,
-    logger: quietLogger()
+  const controller = client || createCodexMcpReloadController({
+    timeoutMs
   });
   try {
-    const result = await appServerClient.reloadMcpServers({
+    const result = await controller.reloadMcpServers({
+      threadId,
       timeoutMs,
-      pollMs,
-      waitForStatus
+      pollMs
     });
     const before = summarizeMcpServerStatus(result.before);
     const reload = summarizeMcpReloadResult(result.reload);
     const after = summarizeMcpServerStatus(result.after);
     const events = summarizeMcpStartupEvents(result.events);
-    const wakefieldMcp = wakefieldMcpHealth(after);
+    const wakefieldMcp = wakefieldMcpHealth(after, { expectedServers });
     const ok = wakefieldMcp.issues.length === 0;
     return {
       ok,
       action: "mcp-reload",
       refreshed: true,
-      transport: "remote-control",
-      environment: result.environment || null,
-      remoteControlStatus: appServerClient.remoteControlStatus,
+      transport: "desktop-daemon",
+      daemon: result.daemon || controller.daemonInfo || null,
+      desktop: result.desktop || controller.remoteControlStatus || null,
       before,
       reload,
       after,
@@ -41,7 +38,7 @@ export async function reloadCodexMcpServers({
       wakefieldMcp,
       diagnosis: ok ? null : {
         code: "wakefield-mcp-tools-unavailable",
-        message: "Codex refreshed MCP servers, but at least one Wakefield MCP is present without tools."
+        message: "Codex refreshed MCP servers, but an expected Wakefield MCP is missing or has no tools."
       }
     };
   } catch (error) {
@@ -50,14 +47,15 @@ export async function reloadCodexMcpServers({
       ok: false,
       action: "mcp-reload",
       refreshed: false,
-      transport: "remote-control",
-      remoteControlStatus: appServerClient.remoteControlStatus,
-      error: appServerErrorSummary(error),
+      transport: "desktop-daemon",
+      daemon: controller.daemonInfo || null,
+      desktop: controller.remoteControlStatus || null,
+      error: controllerErrorSummary(error),
       diagnosis: diagnoseMcpReloadFailure(error)
     };
   } finally {
     if (ownsClient) {
-      appServerClient.disconnect();
+      controller.disconnect();
     }
   }
 }
@@ -68,8 +66,8 @@ export function formatCodexMcpReload(result) {
     const suffix = count == null ? "" : ` (${count} server${count === 1 ? "" : "s"})`;
     const wakefieldTools = formatWakefieldToolCounts(result.wakefieldMcp);
     const wakefieldSuffix = wakefieldTools ? ` ${wakefieldTools}` : "";
-    const transport = result.transport === "remote-control"
-      ? " through the live Codex desktop runtime"
+    const transport = result.transport === "desktop-daemon"
+      ? " through the daemon-backed ChatGPT Desktop runtime"
       : "";
     return `Codex refreshed MCP tools${transport}${suffix}.${wakefieldSuffix}`;
   }
@@ -79,18 +77,37 @@ export function formatCodexMcpReload(result) {
       ...result.wakefieldMcp.issues.map((issue) => `${issue.name}: ${issue.message}`)
     ].join("\n");
   }
-  const message = result.error?.message || "Codex app-server reload was unavailable.";
-  if (result.diagnosis?.code === "remote-control-environment-unavailable") {
+  const message = result.error?.message || "Codex Desktop MCP reload was unavailable.";
+  if (result.diagnosis?.code === "daemon-socket-missing") {
     return [
-      "Could not refresh the live Codex desktop MCP runtime from Wakefield.",
-      result.diagnosis.message,
-      "Open Codex and make sure remote control is enabled, then try again."
+      "Could not refresh the live ChatGPT Desktop MCP runtime.",
+      result.diagnosis.message
+    ].join("\n");
+  }
+  if (result.diagnosis?.code === "desktop-not-attached") {
+    return [
+      "Could not refresh the live ChatGPT Desktop MCP runtime because the app is not attached to its Codex daemon.",
+      "Open ChatGPT Desktop and load Codex, then retry."
     ].join("\n");
   }
   return [
-    `Could not refresh the live Codex desktop MCP runtime: ${message}`,
-    "Open Codex and make sure remote control is enabled, then try again."
+    `Could not refresh the live ChatGPT Desktop MCP runtime: ${message}`,
+    "Run `wakefield doctor` for the daemon socket, protocol, attachment, and live MCP checks."
   ].join("\n");
+}
+
+export function createCodexMcpReloadController({
+  controlSocketPath = defaultControlSocketPath(),
+  timeoutMs = 30000
+} = {}) {
+  return new CodexDesktopController({
+    socketPath: controlSocketPath,
+    ensureDaemon: true,
+    requireRemoteControlConnected: true,
+    requireDesktopOwnership: true,
+    requestTimeoutMs: timeoutMs,
+    logger: quietLogger()
+  });
 }
 
 export function summarizeMcpServerStatus(status) {
@@ -199,9 +216,9 @@ function countServerCollection(value) {
   return null;
 }
 
-function wakefieldMcpHealth(status) {
+function wakefieldMcpHealth(status, { expectedServers = [] } = {}) {
   const servers = Array.isArray(status?.servers) ? status.servers : [];
-  const names = new Set(["wakefield-memory", "discord-codex", "imessage-codex"]);
+  const names = new Set(["wakefield-memory", "discord-codex", "imessage-codex", ...expectedServers]);
   const present = servers
     .filter((server) => names.has(server.name))
     .map((server) => ({
@@ -211,13 +228,20 @@ function wakefieldMcpHealth(status) {
       authStatus: server.authStatus || null,
       error: server.error || null
     }));
-  const issues = present
+  const issues = expectedServers
+    .filter((name) => !present.some((server) => server.name === name))
+    .map((name) => ({
+      name,
+      code: "missing",
+      message: "server is configured, but is absent from the live ChatGPT Desktop MCP runtime"
+    }));
+  issues.push(...present
     .filter((server) => server.tools === 0)
     .map((server) => ({
       name: server.name,
       code: "no-tools",
       message: "server is present, but Codex reports 0 tools"
-    }));
+    })));
   return {
     servers: present,
     issues
@@ -233,32 +257,29 @@ function formatWakefieldToolCounts(health) {
   return parts.length === 0 ? "" : `Wakefield tools: ${parts.join(", ")}.`;
 }
 
-function appServerErrorSummary(error) {
+function controllerErrorSummary(error) {
   return {
     message: error?.message || String(error),
-    code: error?.code || (error instanceof CodexAppServerError ? error.code : null),
+    code: error?.code || (error instanceof CodexDesktopControllerError ? error.code : null),
     method: error?.method || null
   };
 }
 
 function diagnoseMcpReloadFailure(error) {
-  if (error?.code === "remote-control-environment-unavailable") {
+  if (error?.code === "daemon-socket-missing" || error?.code === "daemon-socket-timeout") {
     return {
-      code: "remote-control-environment-unavailable",
-      message: "Codex remote control is reachable, but no online Codex Desktop environment for this Mac was found."
+      code: "daemon-socket-missing",
+      message: "The supported Codex daemon control socket is unavailable."
     };
   }
-  if (error?.code === "auth-unavailable" || error?.code === "auth-token-unavailable" || error?.code === "auth-rejected") {
+  if (error?.code === "desktop-not-attached") {
     return {
-      code: "remote-control-auth-unavailable",
-      message: "Wakefield could not use the current Codex ChatGPT login to reach the live desktop runtime."
+      code: "desktop-not-attached",
+      message: "ChatGPT Desktop is not connected to the local Codex daemon."
     };
   }
-  if (error?.code === "connect-timeout") {
-    return {
-      code: "remote-control-connect-timeout",
-      message: "Codex remote control did not open a live stream to the desktop runtime in time."
-    };
+  if (error?.code === "daemon-ownership-mismatch" || error?.code === "desktop-protocol-mismatch" || error?.code === "desktop-ownership-incomplete") {
+    return { code: error.code, message: "The live endpoint failed Wakefield's daemon/Desktop ownership checks." };
   }
   return null;
 }

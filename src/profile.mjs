@@ -19,7 +19,7 @@ import {
   isPathInside
 } from "./paths.mjs";
 import { normalizeCodexPermissions } from "./codex-permissions.mjs";
-import { ensureDir, pathExists, readJson, touch, writeJson } from "./json-store.mjs";
+import { ensureDir, pathExists, readJson, securePrivateDirectory, securePrivateFile, touch, writeJson } from "./json-store.mjs";
 
 export function slugifyName(name) {
   const slug = String(name || "")
@@ -138,7 +138,7 @@ export async function initAgent({
   await ensureDir(root);
   if (resolvedAgentHome) await ensureDir(resolvedAgentHome);
   await ensureDir(path.dirname(profile.soulPath));
-  await ensureDir(path.dirname(profile.memory.statePath));
+  await securePrivateDirectory(path.dirname(profile.memory.statePath));
   await writeJson(profilePath(agentId, home), profile);
   if (resolvedAgentHome) await writeJson(agentLocalProfilePath(resolvedAgentHome), profile);
   await fs.writeFile(profile.soulPath, soulDocument({ name: profile.name, soul }));
@@ -167,6 +167,7 @@ export async function initAgent({
   await touch(profile.memory.dreamsPath);
   await touch(profile.memory.capturePath);
   await touch(profile.memory.externalMessagesPath);
+  await secureAgentMemory(profile.memory);
   await writeJson(appConfigPath(home), {
     currentAgentId: agentId,
     updatedAt: now
@@ -209,9 +210,20 @@ export async function ensureAgentMemory(profile, home = appHome()) {
     });
   }
   if (!await pathExists(memory.capturePath)) await touch(memory.capturePath);
+  await secureAgentMemory(memory);
 
   if (changed) return saveAgent(next, home);
   return next;
+}
+
+async function secureAgentMemory(memory) {
+  const files = Object.entries(memory || {})
+    .filter(([key, value]) => key.endsWith("Path") && typeof value === "string")
+    .map(([, value]) => value);
+  for (const dir of new Set(files.map((file) => path.dirname(file)))) {
+    await securePrivateDirectory(dir);
+  }
+  for (const file of files) await securePrivateFile(file);
 }
 
 export async function loadAppConfig(home = appHome()) {

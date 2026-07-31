@@ -19,7 +19,7 @@ import { normalizeHealth, runHealthCheck } from "./health.mjs";
 
 const DEFAULT_INTERVAL_MINUTES = 15;
 const DEFAULT_DISPATCH_LIMIT = 3;
-const DEFAULT_DISPATCH_MODE = "ipc";
+const DEFAULT_DISPATCH_MODE = "desktop-controller";
 export const LAUNCH_AGENT_LABEL = "com.wakefield.service";
 export const HEALTH_LAUNCH_AGENT_LABEL = "com.wakefield.health";
 const execFileAsync = promisify(execFile);
@@ -559,8 +559,9 @@ function normalizeExternalDispatch(value = {}) {
 
 function normalizeDispatchMode(value) {
   const mode = String(value || DEFAULT_DISPATCH_MODE).trim();
-  if (["ipc", "auto", "steer", "start", "dry-run", "manual"].includes(mode)) return mode;
-  throw new Error("External dispatch mode must be ipc, auto, steer, start, dry-run, or manual.");
+  if (["ipc", "auto", "steer", "start"].includes(mode)) return "desktop-controller";
+  if (["desktop-controller", "dry-run", "manual"].includes(mode)) return mode;
+  throw new Error("External dispatch mode must be desktop-controller, dry-run, or manual.");
 }
 
 function normalizeDispatchLimit(value) {

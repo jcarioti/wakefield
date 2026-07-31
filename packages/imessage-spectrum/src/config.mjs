@@ -14,17 +14,12 @@ const DEFAULT_CONFIG = {
     requestTimeoutMs: 30000,
     lockTimeoutMs: 45000,
     lockStaleMs: 90000,
-    deepLinkWake: {
-      enabled: true,
-      waitMs: 30000,
-      pollMs: 1000,
-      reopenMs: 6000
-    },
-    appServer: {
+    desktopController: {
       controlSocketPath: null,
       codexPath: null,
       ensureDaemon: true,
       requireRemoteControlConnected: true,
+      requireDesktopOwnership: true,
       connectTimeoutMs: 10000,
       requestTimeoutMs: 30000,
       startupTimeoutMs: 15000
@@ -222,6 +217,7 @@ function normalizeConfig(config, { configPath, cwd }) {
 
   const targets = (config.targets || []).map((target) => ({
     ...target,
+    routeMode: normalizeRouteMode(target.routeMode),
     displayName: target.displayName || target.id,
     cwd: expandPath(target.cwd, { cwd: configDir }),
     eventLogPath: expandPath(target.eventLogPath, { cwd: configDir }),
@@ -255,7 +251,8 @@ function normalizeConfig(config, { configPath, cwd }) {
     },
     codex: {
       ...DEFAULT_CONFIG.codex,
-      ...(config.codex || {})
+      ...(config.codex || {}),
+      desktopController: normalizeDesktopController(config.codex?.desktopController, { cwd: configDir })
     },
     imessage,
     identity: {
@@ -358,6 +355,25 @@ function normalizeFocus(focus = {}) {
     compactionStartGraceMs: positiveInteger(focus.compactionStartGraceMs, DEFAULT_CONFIG.imessage.focus.compactionStartGraceMs),
     compactionHoldMs: positiveInteger(focus.compactionHoldMs, DEFAULT_CONFIG.imessage.focus.compactionHoldMs)
   };
+}
+
+function normalizeDesktopController(value, { cwd }) {
+  const merged = { ...DEFAULT_CONFIG.codex.desktopController, ...(value || {}) };
+  return {
+    ...merged,
+    controlSocketPath: expandPath(merged.controlSocketPath, { cwd }),
+    codexPath: expandPath(merged.codexPath, { cwd }),
+    requireRemoteControlConnected: true,
+    requireDesktopOwnership: true
+  };
+}
+
+function normalizeRouteMode(value) {
+  const mode = value || "desktop-controller";
+  if (mode !== "desktop-controller") {
+    throw new Error(`Unsupported Codex routeMode ${mode}; this build requires desktop-controller.`);
+  }
+  return mode;
 }
 
 function normalizeService(value) {

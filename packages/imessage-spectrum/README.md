@@ -74,9 +74,7 @@ Edit `config.local.json`:
 - `imessage.typing.showWhileThinking`: defaults to `true`, matching Discord. The connector shows typing while the routed Codex turn is active, then stops when the turn completes.
 - `targets[].threadId`: Codex conversation id for the persistent agent personality.
 - `targets[].cwd`: workspace used when starting the Codex turn. Point this at the agent workspace whose `AGENTS.md` should be active.
-- `codex.socketPath`: optional explicit Codex IPC socket path. Leave unset to discover the active ChatGPT-owned socket.
-- `codex.deepLinkWake`: optional recovery for a missing app-owned follower. Defaults to opening `codex://threads/<threadId>` with `/usr/bin/open`, polling follower IPC for up to 30 seconds, and re-opening the deep link every 6 seconds while the app is still starting.
-- `codex.appServer`: diagnostic-only remote-control daemon settings. Do not use this path for production iMessage routing unless Codex adds a UI-synced remote-control ingest method.
+- `codex.desktopController`: daemon socket, Codex binary, and strict Desktop ownership settings for required `desktop-controller` routing.
 - `allowAllAddresses`: route every inbound Spectrum iMessage into the selected agent. Keep this true only for a dedicated Photon project owned by that agent.
 - `allowedAddresses`, `allowedChatIds`, `allowedChatGuids`, and `allowedSpaceIds`: inbound authorization when not using `allowAllAddresses`.
 - `imessage.allowedOutboundAddresses`, `allowedOutboundChatIds`, `allowedOutboundChatGuids`, and `allowedOutboundSpaceIds`: outbound MCP safety allowlists.
@@ -159,7 +157,7 @@ This still avoids Wakefield and Codex as the assertion layer; local `imsg` is on
 
 ## Runtime Rules
 
-- The connector uses the same app-owned thread follower IPC route as the Discord connector so the visible Codex conversation stays in sync. If the app socket is missing or reports `no-client-found`, `auto` routing opens `codex://threads/<threadId>` to launch/load the app-owned follower, then polls the same follower IPC path for up to 30 seconds. While the app is still starting, it re-opens the deep link periodically because a cold Codex launch can accept app activation before it is ready to navigate to the target thread. If the follower still does not register, routing fails loudly and the message must not be silently sent through app-server.
+- The connector routes delivery only through `desktop-controller`; missing route mode is normalized to that value and any legacy mode is rejected during config loading.
 - Spectrum inbound messages are handled concurrently. Each prompt carries the source sender, space id, message id, and reply target so the selected agent can answer different people and scheduled wakeups in the same persistent thread without mixing recipients.
 - Spectrum prompts put the new message or reaction event first, then any replied-to or reacted-to message history that Spectrum supplied, then compact internal routing fields. Use `imessage_read_recent_batch` only when that inline context is still ambiguous.
 - Spectrum read receipts are sent after Codex accepts the message into the agent conversation. They are not sent for messages that fail authorization or fail to route, and they do not wait for the model turn to finish.

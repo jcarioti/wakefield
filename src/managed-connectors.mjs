@@ -365,7 +365,10 @@ export async function setupManagedConnector(id, {
       dryRun
     });
   const codexMcpReload = !dryRun && refreshCodexMcp && mcp.changed
-    ? await reloadCodexMcpServers()
+    ? await reloadCodexMcpServers({
+      threadId: agent?.threadId || null,
+      expectedServers: [mcp.serverName]
+    })
     : null;
   const launchAgent = dryRun
     ? {
@@ -395,7 +398,7 @@ export async function setupManagedConnector(id, {
       launchAgentsPath
     });
   return {
-    ok: true,
+    ok: Boolean(mcp.ok && (codexMcpReload?.ok ?? true)),
     ready: Boolean(status?.ready),
     running: Boolean(status?.running),
     action: "setup",
@@ -595,11 +598,16 @@ export async function initializeManagedConnectorConfig(id, {
 
   const exists = await pathExists(config.configPath);
   if (exists && !overwrite) {
+    const raw = await readJson(config.configPath, {});
+    const migrated = migrateConnectorConfigToDesktopController(raw, {
+      connectorId: adapter.connectorId
+    });
+    if (migrated.changed) await writeJson(config.configPath, migrated.config);
     return {
       ok: true,
-      action: "init-config",
-      changed: false,
-      skipped: "exists",
+      action: "migrate-desktop-controller",
+      changed: migrated.changed,
+      skipped: migrated.changed ? null : "exists",
       path: config.configPath,
       status: await managedConnectorStatus(id, { home, agent })
     };
@@ -618,6 +626,9 @@ export async function initializeManagedConnectorConfig(id, {
 }
 
 export function formatManagedConnectorConfigInit(result) {
+  if (result.action === "migrate-desktop-controller" && result.changed) {
+    return `Migrated managed connector to desktop-controller: ${result.path}`;
+  }
   if (result.skipped === "exists") return `Managed connector config already exists: ${result.path}`;
   return `Wrote managed connector config: ${result.path}`;
 }
@@ -658,12 +669,14 @@ export async function retargetManagedConnectorConfigs({
         displayName: agent.name || target.displayName || targetId,
         threadId: agent.threadId,
         cwd: agent.cwd,
+        routeMode: "desktop-controller",
         ...(Object.prototype.hasOwnProperty.call(agent, "codexPermissions")
           ? { codexPermissions: agent.codexPermissions }
           : {})
       };
       changed = changed
         || target.threadId !== next.threadId
+        || target.routeMode !== next.routeMode
         || !sameResolvedPath(target.cwd, next.cwd)
         || target.displayName !== next.displayName
         || (Object.prototype.hasOwnProperty.call(agent, "codexPermissions")
@@ -1363,6 +1376,7 @@ function managedConnectorConfigTemplate(adapter, config, agent, settings, { home
     displayName: setting(settings, "displayName", agent.name || targetId),
     threadId: setting(settings, "threadId", agent.threadId),
     cwd: setting(settings, "cwd", agent.cwd),
+    routeMode: "desktop-controller",
     codexPermissions: agent.codexPermissions || null
   };
   const eventLogPath = setting(settings, "eventLogPath", "");
@@ -1459,18 +1473,34 @@ function defaultCodexConnectorSettings(settings, connectorId = null) {
     connectTimeoutMs: numberSetting(settings, "connectTimeoutMs", 10000),
     lockTimeoutMs: numberSetting(settings, "lockTimeoutMs", 45000),
     lockStaleMs: numberSetting(settings, "lockStaleMs", 90000),
-    deepLinkWake: {
-      enabled: booleanSetting(settings, "deepLinkWake", true),
-      waitMs: numberSetting(settings, "deepLinkWakeWaitMs", 30000),
-      pollMs: numberSetting(settings, "deepLinkWakePollMs", 1000),
-      reopenMs: numberSetting(settings, "deepLinkWakeReopenMs", 6000)
-    },
-    appServer: {
+    desktopController: {
       controlSocketPath: setting(settings, "codexControlSocketPath", "~/.codex/app-server-control/app-server-control.sock"),
       codexPath: setting(settings, "codexPath", "~/.codex/packages/standalone/current/codex"),
       ensureDaemon: booleanSetting(settings, "ensureCodexDaemon", true),
-      requireRemoteControlConnected: booleanSetting(settings, "requireRemoteControlConnected", true)
+      requireRemoteControlConnected: booleanSetting(settings, "requireRemoteControlConnected", true),
+      requireDesktopOwnership: true
     }
+  };
+}
+
+function migrateConnectorConfigToDesktopController(raw, { connectorId = null } = {}) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  const targets = Array.isArray(source.targets)
+    ? source.targets.map((target) => ({ ...target, routeMode: "desktop-controller" }))
+    : [];
+  const codex = { ...(source.codex || {}) };
+  delete codex.appServer;
+  delete codex.deepLinkWake;
+  codex.desktopController = {
+    ...defaultCodexConnectorSettings({}, connectorId).desktopController,
+    ...(codex.desktopController || {}),
+    requireDesktopOwnership: true,
+    requireRemoteControlConnected: true
+  };
+  const config = { ...source, codex, targets };
+  return {
+    changed: JSON.stringify(config) !== JSON.stringify(source),
+    config
   };
 }
 

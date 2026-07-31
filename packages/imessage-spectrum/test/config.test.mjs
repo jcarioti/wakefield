@@ -51,9 +51,8 @@ test("loadConnectorConfig normalizes iMessage paths and allowlists", async () =>
   assert.equal(config.imessage.advancedBridgeRequired, true);
   assert.equal(config.imessage.sendReadReceipts, true);
   assert.equal(config.imessage.typing.showWhileThinking, true);
-  assert.equal(config.codex.deepLinkWake.waitMs, 30000);
-  assert.equal(config.codex.deepLinkWake.pollMs, 1000);
-  assert.equal(config.codex.deepLinkWake.reopenMs, 6000);
+  assert.equal(config.targets[0].routeMode, "desktop-controller");
+  assert.equal(config.codex.desktopController.requireDesktopOwnership, true);
   assert.equal(config.codex.lockTimeoutMs, 45000);
   assert.equal(config.codex.lockStaleMs, 90000);
   assert.equal(config.imessage.spectrum.projectId, "project-from-file");

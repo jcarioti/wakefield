@@ -325,16 +325,21 @@ export async function handleHttpRequest(request, response, {
 
   if (request.method === "POST" && segments[0] === "managed-connectors" && segments[2] === "mcp" && segments[3] === "install") {
     const body = await readOptionalJsonBody(request);
+    const agent = await loadAgent(null, home);
     const result = await installManagedConnectorMcp(segments[1], {
       home,
-      agent: await loadAgent(null, home),
+      agent,
       codexConfigPath: body.codexConfigPath || body.codexConfig || liveCodexConfigPath(),
       dryRun: Boolean(body.dryRun)
     });
     if (!body.dryRun && result.changed) {
-      result.codexMcpReload = await reloadCodexMcpServers();
+      result.codexMcpReload = await reloadCodexMcpServers({
+        threadId: agent?.threadId || null,
+        expectedServers: [result.serverName]
+      });
     }
-    writeJson(response, result.ok ? 200 : 409, result);
+    result.liveOk = result.codexMcpReload?.ok ?? true;
+    writeJson(response, result.ok && result.liveOk ? 200 : 409, result);
     return;
   }
 

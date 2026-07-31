@@ -4,7 +4,7 @@ import { sendTextToCodexTarget } from "@wakefield/connector-shared/codex-router.
 
 const args = parseCliArgs();
 if (args.help || !args.text) {
-  console.log("Usage: discord-codex-send --config packages/discord-codex/config.local.json --target rick --mode auto --text \"hello\"");
+  console.log("Usage: discord-codex-send --config packages/discord-codex/config.local.json --target rick --text \"hello\"");
   process.exit(args.help ? 0 : 1);
 }
 
@@ -13,7 +13,7 @@ const target = getTarget(config, args.targetId);
 const result = await sendTextToCodexTarget({
   target,
   text: args.text,
-  mode: args.mode || "auto",
+  mode: target.routeMode,
   codex: config.codex
 });
 console.log(JSON.stringify(result, null, 2));
