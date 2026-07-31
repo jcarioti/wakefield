@@ -8,6 +8,37 @@ export class SpectrumOperationTimeoutError extends Error {
 }
 
 export const DEFAULT_SPECTRUM_RATE_LIMIT_COOLDOWN_MS = 60_000;
+export const DEFAULT_LIVE_RECEIVED_MESSAGE_ID_LIMIT = 10_000;
+
+const INTENTIONAL_RECEIVE_LOOP_ROTATION_REASONS = new Set([
+  "max_age",
+  "history_replay_recovered_missed_message",
+  "rate_limit_cooldown_recovery"
+]);
+
+export class BoundedMessageIdSet {
+  #ids = new Set();
+  #limit;
+
+  constructor({ limit = DEFAULT_LIVE_RECEIVED_MESSAGE_ID_LIMIT } = {}) {
+    this.#limit = Math.max(1, Math.floor(Number(limit) || DEFAULT_LIVE_RECEIVED_MESSAGE_ID_LIMIT));
+  }
+
+  add(id) {
+    if (id == null) {
+      return;
+    }
+    this.#ids.delete(id);
+    this.#ids.add(id);
+    while (this.#ids.size > this.#limit) {
+      this.#ids.delete(this.#ids.values().next().value);
+    }
+  }
+
+  has(id) {
+    return this.#ids.has(id);
+  }
+}
 
 export function isSpectrumRateLimitError(error) {
   return error?.status === 429
@@ -151,9 +182,13 @@ export function spectrumServiceStatusForReceiveLoop(state) {
 }
 
 export function shouldRotateReceiveLoopAfterHistoryReplay({ reason, stats } = {}) {
-  const recovered = Number(stats?.queuedCount || 0);
+  const recovered = Number(stats?.historyOnlyNewMessageCount || 0);
   if (!Number.isFinite(recovered) || recovered <= 0) {
     return false;
   }
   return /periodic history poll/i.test(String(reason || ""));
+}
+
+export function isIntentionalReceiveLoopRotation(reason) {
+  return INTENTIONAL_RECEIVE_LOOP_ROTATION_REASONS.has(reason);
 }

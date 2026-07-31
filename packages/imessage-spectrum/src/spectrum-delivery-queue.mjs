@@ -30,8 +30,13 @@ export class SpectrumDeliveryQueue {
   }
 
   async upsert(record) {
+    const result = await this.upsertWithStatus(record);
+    return result.record;
+  }
+
+  async upsertWithStatus(record) {
     if (!this.#queuePath) {
-      return record;
+      return { record, created: true };
     }
     return this.#withWrite(async () => {
       const state = await this.#read();
@@ -54,7 +59,7 @@ export class SpectrumDeliveryQueue {
         state.records.push(next);
       }
       await this.#write(state);
-      return next;
+      return { record: next, created: index < 0 };
     });
   }
 

@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   DEFAULT_SPECTRUM_RATE_LIMIT_COOLDOWN_MS,
+  BoundedMessageIdSet,
   SpectrumOperationTimeoutError,
   SpectrumRateLimitCooldown,
+  isIntentionalReceiveLoopRotation,
   isSpectrumRateLimitError,
   shouldRotateReceiveLoopAfterHistoryReplay,
   spectrumRateLimitRetryAfterMs,
@@ -93,17 +95,39 @@ test("Spectrum rate-limit cooldown honors Photon retry-after with a 60-second mi
   });
 });
 
-test("shouldRotateReceiveLoopAfterHistoryReplay rotates only after periodic replay recovers messages", () => {
+test("shouldRotateReceiveLoopAfterHistoryReplay rotates only for newly discovered history-only messages", () => {
   assert.equal(shouldRotateReceiveLoopAfterHistoryReplay({
     reason: "periodic history poll",
-    stats: { queuedCount: 1 }
+    stats: { queuedCount: 1, historyOnlyNewMessageCount: 1 }
   }), true);
   assert.equal(shouldRotateReceiveLoopAfterHistoryReplay({
     reason: "startup",
-    stats: { queuedCount: 1 }
+    stats: { queuedCount: 1, historyOnlyNewMessageCount: 1 }
   }), false);
   assert.equal(shouldRotateReceiveLoopAfterHistoryReplay({
     reason: "periodic history poll",
-    stats: { queuedCount: 0 }
+    stats: { queuedCount: 1, historyOnlyNewMessageCount: 0 }
   }), false);
+});
+
+test("isIntentionalReceiveLoopRotation preserves the requested rotation reason", () => {
+  assert.equal(isIntentionalReceiveLoopRotation("history_replay_recovered_missed_message"), true);
+  assert.equal(isIntentionalReceiveLoopRotation("max_age"), true);
+  assert.equal(isIntentionalReceiveLoopRotation("rate_limit_cooldown_recovery"), true);
+  assert.equal(isIntentionalReceiveLoopRotation("rotation_requested"), false);
+  assert.equal(isIntentionalReceiveLoopRotation("ended"), false);
+  assert.equal(isIntentionalReceiveLoopRotation("error"), false);
+  assert.equal(isIntentionalReceiveLoopRotation(null), false);
+});
+
+test("BoundedMessageIdSet retains recent live message IDs without growing indefinitely", () => {
+  const ids = new BoundedMessageIdSet({ limit: 2 });
+  ids.add("first");
+  ids.add("second");
+  ids.add("first");
+  ids.add("third");
+
+  assert.equal(ids.has("first"), true);
+  assert.equal(ids.has("second"), false);
+  assert.equal(ids.has("third"), true);
 });

@@ -128,6 +128,21 @@ test("upsert does not resurrect delivered records", async () => {
   assert.equal(await beginPendingDeliveryAttempt(queue, upserted), null);
 });
 
+test("upsertWithStatus distinguishes a new history record from an existing pending delivery", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "spectrum-delivery-queue-test-"));
+  const queue = new SpectrumDeliveryQueue({ queuePath: path.join(root, "queue.json") });
+  const record = createPendingDeliveryRecord({
+    target: { id: "rick", threadId: "thread-1", cwd: "/tmp/rick" },
+    space: { id: "any;-;+15551234567", type: "dm" },
+    message: { id: "spc-msg-1", timestamp: new Date(), sender: { id: "+15551234567" } },
+    codexText: "hello",
+    eventLogRecord: { target_id: "rick", message_id: "spc-msg-1" }
+  });
+
+  assert.equal((await queue.upsertWithStatus(record)).created, true);
+  assert.equal((await queue.upsertWithStatus({ ...record, source: "startup-history" })).created, false);
+});
+
 test("findEarlierPendingDeliveryInLane blocks newer same-chat records until older messages deliver", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "spectrum-delivery-queue-test-"));
   const queuePath = path.join(root, "queue.json");

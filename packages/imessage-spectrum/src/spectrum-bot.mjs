@@ -30,7 +30,9 @@ import {
   isSpectrumChannelShutdownError
 } from "./spectrum-app-gate.mjs";
 import {
+  BoundedMessageIdSet,
   SpectrumRateLimitCooldown,
+  isIntentionalReceiveLoopRotation,
   isSpectrumRateLimitError,
   isSpectrumOperationTimeoutError,
   shouldRotateReceiveLoopAfterHistoryReplay,
@@ -91,6 +93,7 @@ const previousStatus = await readJsonFile(config.imessage.spectrum.statusPath);
 const knownSpaces = new Map();
 const activeTypingStops = new Map();
 const activeDeliveryIds = new Set();
+const liveReceivedMessageIds = new BoundedMessageIdSet();
 const appOperationGate = new SpectrumAppOperationGate({
   minIntervalMs: config.imessage.spectrum.outboundRequestMinIntervalMs
 });
@@ -199,8 +202,8 @@ async function superviseReceiveLoop() {
         return;
       }
       receiveLoop.state = "ended";
-      if (receiveLoop.lastRestartReason === "max_age") {
-        console.log("Photon/Spectrum app.messages rotated at configured max age; recreating Spectrum app.");
+      if (isIntentionalReceiveLoopRotation(receiveLoop.lastRestartReason)) {
+        console.log(`Photon/Spectrum app.messages rotated after ${receiveLoop.lastRestartReason}; recreating Spectrum app.`);
       } else {
         receiveLoop.lastErrorAt = new Date().toISOString();
         receiveLoop.lastError = "app.messages ended without throwing";
@@ -267,6 +270,7 @@ async function runReceiveLoop() {
       receiveLoop.lastError = null;
       receiveLoop.lastErrorAt = null;
       knownSpaces.set(space.id, space);
+      liveReceivedMessageIds.add(message.id);
       lastInboundAt = receiveLoop.lastActivityAt;
       lastInboundMessage = statusMessageSummary({ space, message, seenAt: lastInboundAt });
       console.log(`Received Photon/Spectrum iMessage ${message.id} in ${space.id}.`);
@@ -776,7 +780,7 @@ async function runStartupHistoryReplay({ previousStatus, reason }) {
     if (shouldRotateReceiveLoopAfterHistoryReplay({ reason, stats })) {
       requestReceiveLoopRotation({
         reason: "history_replay_recovered_missed_message",
-        log: `Photon/Spectrum history replay recovered ${stats.queuedCount} missed inbound message${stats.queuedCount === 1 ? "" : "s"}; rotating live receive stream.`
+        log: `Photon/Spectrum history replay recovered ${stats.historyOnlyNewMessageCount} missed inbound message${stats.historyOnlyNewMessageCount === 1 ? "" : "s"}; rotating live receive stream.`
       });
     }
   } catch (error) {
@@ -795,6 +799,7 @@ async function enqueueStartupHistoryReplay({ previousStatus: status }) {
     readAttemptCount: 0,
     failedReadCount: 0,
     queuedCount: 0,
+    historyOnlyNewMessageCount: 0,
     rateLimited: false,
     rateLimitError: null,
     errors: []
@@ -883,7 +888,7 @@ async function enqueueStartupHistoryReplay({ previousStatus: status }) {
             contacts,
             connectorGuidance: config.codex.connectorSkillPrompt
           });
-          const queued = await deliveryQueue.upsert(createPendingDeliveryRecord({
+          const upserted = await deliveryQueue.upsertWithStatus(createPendingDeliveryRecord({
             target,
             space: replay.space,
             message: replay.message,
@@ -898,11 +903,17 @@ async function enqueueStartupHistoryReplay({ previousStatus: status }) {
             }),
             source: "startup-history"
           }));
+          const queued = upserted.record;
           if (queued.deliveredAt) {
             continue;
           }
           stats.queuedCount += 1;
-          console.log(`Queued undelivered Photon/Spectrum iMessage ${queued.messageId} for ${target.id} from startup history.`);
+          if (upserted.created && !liveReceivedMessageIds.has(queued.messageId)) {
+            stats.historyOnlyNewMessageCount += 1;
+          }
+          if (upserted.created) {
+            console.log(`Queued undelivered Photon/Spectrum iMessage ${queued.messageId} for ${target.id} from startup history.`);
+          }
         }
       }
     }
