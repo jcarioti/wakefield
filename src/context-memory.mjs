@@ -1,7 +1,6 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { readJson, writeJson } from "./json-store.mjs";
+import { readJson, readJsonl, withFileMutationLock, writeJson } from "./json-store.mjs";
 
 const INJECTION_LEDGER_SCHEMA_VERSION = 1;
 const INJECTION_LEDGER_MAX_ENTRIES = 500;
@@ -25,70 +24,72 @@ const EXPLICIT_RECALL_PATTERNS = [
 export async function loadNotes(agent) {
   if (!agent) throw new Error("loadNotes needs an agent profile.");
   const file = notesPathForAgent(agent);
-  return normalizeNotesDocument(file ? await readJson(file, null) : null);
+  return loadNotesFile(file);
 }
 
 export async function loadMatters(agent) {
   if (!agent) throw new Error("loadMatters needs an agent profile.");
   const file = mattersPathForAgent(agent);
-  return normalizeMattersDocument(file ? await readJson(file, null) : null);
+  return loadMattersFile(file);
 }
 
 export async function saveNotes(agent, document) {
   const file = notesPathForAgent(agent);
   if (!file) throw new Error("saveNotes needs an agent memory store.");
-  const next = normalizeNotesDocument(document);
-  next.updatedAt = new Date().toISOString();
-  await writeJson(file, next);
-  return next;
+  return withFileMutationLock(file, () => saveNotesFile(file, document));
 }
 
 export async function saveMatters(agent, document) {
   const file = mattersPathForAgent(agent);
   if (!file) throw new Error("saveMatters needs an agent memory store.");
-  const next = normalizeMattersDocument(document);
-  next.updatedAt = new Date().toISOString();
-  await writeJson(file, next);
-  return next;
+  return withFileMutationLock(file, () => saveMattersFile(file, document));
 }
 
 export async function upsertNote(agent, note, { now = new Date() } = {}) {
-  const current = await loadNotes(agent);
-  const normalized = normalizeNote(note, { now });
-  const existing = current.notes.find((item) => item.id === normalized.id);
-  const nextNote = existing
-    ? normalizeNote({
-      ...existing,
-      ...normalized,
-      createdAt: existing.createdAt || normalized.createdAt,
-      scope: mergeScopes(existing.scope, normalized.scope),
-      tags: uniqueStrings([...existing.tags, ...normalized.tags]),
-      sources: uniqueStrings([...existing.sources, ...normalized.sources])
-    }, { now })
-    : normalized;
-  return saveNotes(agent, {
-    ...current,
-    notes: replaceById(current.notes, nextNote)
+  const file = notesPathForAgent(agent);
+  if (!file) throw new Error("upsertNote needs an agent memory store.");
+  return withFileMutationLock(file, async () => {
+    const current = await loadNotesFile(file);
+    const normalized = normalizeNote(note, { now });
+    const existing = current.notes.find((item) => item.id === normalized.id);
+    const nextNote = existing
+      ? normalizeNote({
+        ...existing,
+        ...normalized,
+        createdAt: existing.createdAt || normalized.createdAt,
+        scope: mergeScopes(existing.scope, normalized.scope),
+        tags: uniqueStrings([...existing.tags, ...normalized.tags]),
+        sources: uniqueStrings([...existing.sources, ...normalized.sources])
+      }, { now })
+      : normalized;
+    return saveNotesFile(file, {
+      ...current,
+      notes: replaceById(current.notes, nextNote)
+    });
   });
 }
 
 export async function upsertMatter(agent, matter, { now = new Date() } = {}) {
-  const current = await loadMatters(agent);
-  const normalized = normalizeMatter(matter, { now });
-  const existing = current.matters.find((item) => item.id === normalized.id);
-  const nextMatter = existing
-    ? normalizeMatter({
-      ...existing,
-      ...normalized,
-      createdAt: existing.createdAt || normalized.createdAt,
-      scope: mergeScopes(existing.scope, normalized.scope),
-      tags: uniqueStrings([...existing.tags, ...normalized.tags]),
-      sources: uniqueStrings([...existing.sources, ...normalized.sources])
-    }, { now })
-    : normalized;
-  return saveMatters(agent, {
-    ...current,
-    matters: replaceById(current.matters, nextMatter)
+  const file = mattersPathForAgent(agent);
+  if (!file) throw new Error("upsertMatter needs an agent memory store.");
+  return withFileMutationLock(file, async () => {
+    const current = await loadMattersFile(file);
+    const normalized = normalizeMatter(matter, { now });
+    const existing = current.matters.find((item) => item.id === normalized.id);
+    const nextMatter = existing
+      ? normalizeMatter({
+        ...existing,
+        ...normalized,
+        createdAt: existing.createdAt || normalized.createdAt,
+        scope: mergeScopes(existing.scope, normalized.scope),
+        tags: uniqueStrings([...existing.tags, ...normalized.tags]),
+        sources: uniqueStrings([...existing.sources, ...normalized.sources])
+      }, { now })
+      : normalized;
+    return saveMattersFile(file, {
+      ...current,
+      matters: replaceById(current.matters, nextMatter)
+    });
   });
 }
 
@@ -96,34 +97,46 @@ export async function archiveMatter(agent, id, {
   reason = null,
   now = new Date()
 } = {}) {
-  const current = await loadMatters(agent);
-  const matter = current.matters.find((item) => item.id === id);
-  if (!matter) throw new Error(`Matter not found: ${id}`);
-  const archived = normalizeMatter({
-    ...matter,
-    status: "archived",
-    statusReason: reason || matter.statusReason || null,
-    archivedAt: now.toISOString(),
-    updatedAt: now.toISOString()
-  }, { now });
-  return saveMatters(agent, {
-    ...current,
-    matters: replaceById(current.matters, archived)
+  const file = mattersPathForAgent(agent);
+  if (!file) throw new Error("archiveMatter needs an agent memory store.");
+  return withFileMutationLock(file, async () => {
+    const current = await loadMattersFile(file);
+    const matter = current.matters.find((item) => item.id === id);
+    if (!matter) throw new Error(`Matter not found: ${id}`);
+    const archived = normalizeMatter({
+      ...matter,
+      status: "archived",
+      statusReason: reason || matter.statusReason || null,
+      archivedAt: now.toISOString(),
+      updatedAt: now.toISOString()
+    }, { now });
+    return saveMattersFile(file, {
+      ...current,
+      matters: replaceById(current.matters, archived)
+    });
   });
 }
 
 export async function forgetMemoryItem(agent, type, id) {
   const normalizedType = normalizeMemoryType(type);
   if (normalizedType === "note") {
-    const current = await loadNotes(agent);
-    const notes = current.notes.filter((item) => item.id !== id);
-    if (notes.length === current.notes.length) throw new Error(`Note not found: ${id}`);
-    return saveNotes(agent, { ...current, notes });
+    const file = notesPathForAgent(agent);
+    if (!file) throw new Error("forgetMemoryItem needs an agent memory store.");
+    return withFileMutationLock(file, async () => {
+      const current = await loadNotesFile(file);
+      const notes = current.notes.filter((item) => item.id !== id);
+      if (notes.length === current.notes.length) throw new Error(`Note not found: ${id}`);
+      return saveNotesFile(file, { ...current, notes });
+    });
   }
-  const current = await loadMatters(agent);
-  const matters = current.matters.filter((item) => item.id !== id);
-  if (matters.length === current.matters.length) throw new Error(`Matter not found: ${id}`);
-  return saveMatters(agent, { ...current, matters });
+  const file = mattersPathForAgent(agent);
+  if (!file) throw new Error("forgetMemoryItem needs an agent memory store.");
+  return withFileMutationLock(file, async () => {
+    const current = await loadMattersFile(file);
+    const matters = current.matters.filter((item) => item.id !== id);
+    if (matters.length === current.matters.length) throw new Error(`Matter not found: ${id}`);
+    return saveMattersFile(file, { ...current, matters });
+  });
 }
 
 export async function recallContext(agent, {
@@ -319,6 +332,27 @@ async function filterInjectableMemory(agent, recalled, {
   const ledgerPath = injectionLedgerPathForAgent(agent);
   if (!ledgerPath) return recalled;
 
+  return withFileMutationLock(ledgerPath, () => filterInjectableMemoryLocked(agent, recalled, {
+    query,
+    threadId,
+    lane,
+    force,
+    record,
+    now,
+    ledgerPath
+  }));
+}
+
+async function filterInjectableMemoryLocked(agent, recalled, {
+  query,
+  threadId,
+  lane,
+  force,
+  record,
+  now,
+  ledgerPath
+}) {
+
   const compactEpoch = await compactEpochForAgent(agent);
   const forced = Boolean(force);
   const explicit = forced || isExplicitRecallRequest(query);
@@ -501,17 +535,26 @@ async function writeInjectionLedger(file, ledger, { now = new Date() } = {}) {
   });
 }
 
-async function readJsonl(file) {
-  if (!file) return [];
-  try {
-    const text = await fs.readFile(file, "utf8");
-    return text.split(/\r?\n/g)
-      .filter(Boolean)
-      .map((line) => JSON.parse(line));
-  } catch (error) {
-    if (error?.code === "ENOENT") return [];
-    throw error;
-  }
+async function loadNotesFile(file) {
+  return normalizeNotesDocument(file ? await readJson(file, null) : null);
+}
+
+async function loadMattersFile(file) {
+  return normalizeMattersDocument(file ? await readJson(file, null) : null);
+}
+
+async function saveNotesFile(file, document) {
+  const next = normalizeNotesDocument(document);
+  next.updatedAt = new Date().toISOString();
+  await writeJson(file, next);
+  return next;
+}
+
+async function saveMattersFile(file, document) {
+  const next = normalizeMattersDocument(document);
+  next.updatedAt = new Date().toISOString();
+  await writeJson(file, next);
+  return next;
 }
 
 function normalizeNotesDocument(value) {

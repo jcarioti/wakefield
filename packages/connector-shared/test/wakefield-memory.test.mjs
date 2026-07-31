@@ -59,6 +59,35 @@ test("connector turns are mirrored into Wakefield memory for dreams", async () =
   assert.equal(dreams[0].kind, "dream-queued");
   assert.equal(dreams[0].data.turnId, "turn-photon");
   assert.equal(dreams[0].data.reason, "connector-turn");
+  for (const name of ["inbox.jsonl", "journal.jsonl", "dreams.jsonl"]) {
+    assert.equal((await fs.stat(path.join(memoryDir, name))).mode & 0o777, 0o600);
+  }
+  assert.equal((await fs.stat(path.join(memoryDir, ".locks"))).mode & 0o777, 0o700);
+});
+
+test("connector memory append repairs a torn final JSONL record", async () => {
+  const { home, cwd, memoryDir } = await createMemoryHome();
+  const dreamsPath = path.join(memoryDir, "dreams.jsonl");
+  await fs.writeFile(dreamsPath, '{"id":"complete","kind":"existing"}\n{"id":"torn"', { mode: 0o644 });
+
+  await recordWakefieldConnectorTurn({
+    home,
+    target: {
+      id: "rick",
+      threadId: "thread-rick",
+      cwd
+    },
+    connector: "discord",
+    routeResult: {
+      action: "start",
+      turnId: "turn-repair"
+    }
+  });
+
+  const dreams = await readJsonl(dreamsPath);
+  assert.deepEqual(dreams.map((entry) => entry.kind), ["existing", "dream-queued"]);
+  assert.doesNotMatch(await fs.readFile(dreamsPath, "utf8"), /torn/);
+  assert.equal((await fs.stat(dreamsPath)).mode & 0o777, 0o600);
 });
 
 async function createMemoryHome() {

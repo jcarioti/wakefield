@@ -1,12 +1,21 @@
 import path from "node:path";
 import { archiveMatter, loadMatters, loadNotes, upsertMatter, upsertNote } from "./context-memory.mjs";
 import { codexDreamerConfig, createCodexStructuredMemoryResponse } from "./codex-dreamer.mjs";
-import { appendJsonl, readJson, readJsonl, writeJson } from "./json-store.mjs";
+import { appendJsonl, readJson, readJsonl, withFileMutationLock, writeJson } from "./json-store.mjs";
 
 const CAPTURE_PROCESSED_MAX = 1000;
 const CAPTURE_CONFIDENCE = new Set(["medium", "high"]);
 
-export async function processMemoryCaptures(agent, {
+export async function processMemoryCaptures(agent, options = {}) {
+  if (!agent) throw new Error("processMemoryCaptures needs an agent profile.");
+  return withFileMutationLock(agent.memory.statePath, () => processMemoryCapturesLocked(agent, options), {
+    lockName: "memory-capture",
+    timeoutMs: 1000,
+    staleMs: 5 * 60 * 1000
+  });
+}
+
+async function processMemoryCapturesLocked(agent, {
   summaries = null,
   limit = 5,
   dryRun = false,
@@ -15,7 +24,6 @@ export async function processMemoryCaptures(agent, {
   env = process.env,
   execFileImpl = null
 } = {}) {
-  if (!agent) throw new Error("processMemoryCaptures needs an agent profile.");
   const config = codexDreamerConfig(env);
   const provider = captureProvider || (config.enabled
     ? (payload) => codexCaptureProvider(payload, { config, execFileImpl })
@@ -526,21 +534,29 @@ function summaryCaptureKey(summary) {
 
 async function loadCaptureState(agent) {
   const state = await readJson(agent.memory.statePath, {});
+  const durableProcessedIds = (await readJsonl(captureAuditPathForAgent(agent)))
+    .filter((entry) => !entry.error && (entry.key || entry.summaryKey))
+    .map((entry) => entry.key || entry.summaryKey);
   return {
-    processedIds: Array.isArray(state.memoryCapture?.processedIds) ? state.memoryCapture.processedIds : [],
+    processedIds: uniqueStrings([
+      ...(Array.isArray(state.memoryCapture?.processedIds) ? state.memoryCapture.processedIds : []),
+      ...durableProcessedIds
+    ]),
     lastRunAt: state.memoryCapture?.lastRunAt || null
   };
 }
 
 async function saveCaptureState(agent, patch) {
-  const state = await readJson(agent.memory.statePath, {});
-  await writeJson(agent.memory.statePath, {
-    ...state,
-    memoryCapture: {
-      ...(state.memoryCapture || {}),
-      ...patch
-    },
-    updatedAt: new Date().toISOString()
+  await withFileMutationLock(agent.memory.statePath, async () => {
+    const state = await readJson(agent.memory.statePath, {});
+    await writeJson(agent.memory.statePath, {
+      ...state,
+      memoryCapture: {
+        ...(state.memoryCapture || {}),
+        ...patch
+      },
+      updatedAt: new Date().toISOString()
+    });
   });
 }
 

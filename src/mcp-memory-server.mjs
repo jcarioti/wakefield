@@ -475,7 +475,7 @@ function stringListSchema() {
 }
 
 function dispatchModeSchema() {
-  return z.enum(["dry-run", "manual", "ipc", "auto", "steer", "start"]);
+  return z.enum(["dry-run", "manual", "desktop-controller", "ipc", "auto", "steer", "start"]);
 }
 
 function scopeFromInput(input = {}) {

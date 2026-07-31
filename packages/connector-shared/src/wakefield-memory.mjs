@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { withFileLock } from "./lock.mjs";
 
 export async function recordWakefieldConnectorTurn({
   target,
@@ -179,8 +180,71 @@ async function appendMemoryEntry(agent, channel, entry) {
     text: entry.text || "",
     data: entry.data || {}
   };
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.appendFile(file, `${JSON.stringify(payload)}\n`, "utf8");
+  await appendPrivateJsonl(file, payload);
+}
+
+async function appendPrivateJsonl(file, payload) {
+  const dir = path.dirname(file);
+  const lockRoot = path.join(dir, ".locks");
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  await fs.mkdir(lockRoot, { recursive: true, mode: 0o700 });
+  await fs.chmod(lockRoot, 0o700);
+  await withFileLock("memory-store", {
+    lockRoot,
+    timeoutMs: 8000,
+    staleMs: 30000,
+    pollMs: 50
+  }, async () => {
+    const handle = await fs.open(file, "a+", 0o600);
+    try {
+      await handle.chmod(0o600);
+      await repairJsonlTail(handle);
+      await handle.writeFile(`${JSON.stringify(payload)}\n`, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  });
+}
+
+async function repairJsonlTail(handle) {
+  const stat = await handle.stat();
+  if (stat.size === 0) return;
+  const lastByte = Buffer.alloc(1);
+  await handle.read(lastByte, 0, 1, stat.size - 1);
+  if (lastByte[0] === 0x0a) return;
+
+  const { text, start } = await readFinalLine(handle, stat.size);
+  try {
+    JSON.parse(text.replace(/\r$/, ""));
+    await handle.writeFile("\n", "utf8");
+  } catch {
+    await handle.truncate(start);
+  }
+}
+
+async function readFinalLine(handle, size) {
+  const chunks = [];
+  let position = size;
+  while (position > 0) {
+    const length = Math.min(64 * 1024, position);
+    position -= length;
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, position);
+    const newline = buffer.lastIndexOf(0x0a);
+    if (newline >= 0) {
+      chunks.unshift(buffer.subarray(newline + 1));
+      return {
+        text: Buffer.concat(chunks).toString("utf8"),
+        start: position + newline + 1
+      };
+    }
+    chunks.unshift(buffer);
+  }
+  return {
+    text: Buffer.concat(chunks).toString("utf8"),
+    start: 0
+  };
 }
 
 function memoryFile(agent, channel) {

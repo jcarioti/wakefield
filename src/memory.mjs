@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendJsonl, readJson, readJsonl, writeJson } from "./json-store.mjs";
+import { appendJsonl, readJson, readJsonl, withFileMutationLock, writeJson } from "./json-store.mjs";
 import { processMemoryCaptures } from "./memory-capture.mjs";
 
 export async function recordMemory(agent, {
@@ -26,25 +26,28 @@ export async function recordMemory(agent, {
 }
 
 export async function updateState(agent, patch) {
-  const current = await readJson(agent.memory.statePath, {
-    facts: [],
-    preferences: [],
-    openThreads: [],
-    recentTurns: [],
-    dreamer: {
-      processedIds: []
-    }
+  return withFileMutationLock(agent.memory.statePath, async () => {
+    const current = await readJson(agent.memory.statePath, defaultState());
+    const next = {
+      ...current,
+      ...patch,
+      updatedAt: new Date().toISOString()
+    };
+    await writeJson(agent.memory.statePath, next);
+    return next;
   });
-  const next = {
-    ...current,
-    ...patch,
-    updatedAt: new Date().toISOString()
-  };
-  await writeJson(agent.memory.statePath, next);
-  return next;
 }
 
-export async function processDreams(agent, {
+export async function processDreams(agent, options = {}) {
+  if (!agent) throw new Error("processDreams needs an agent profile.");
+  return withFileMutationLock(agent.memory.statePath, () => processDreamsLocked(agent, options), {
+    lockName: "dreamer",
+    timeoutMs: 1000,
+    staleMs: 5 * 60 * 1000
+  });
+}
+
+async function processDreamsLocked(agent, {
   limit = 10,
   dryRun = false,
   now = new Date(),
@@ -53,18 +56,10 @@ export async function processDreams(agent, {
   env = process.env,
   execFileImpl = null
 } = {}) {
-  if (!agent) throw new Error("processDreams needs an agent profile.");
-  const state = await readJson(agent.memory.statePath, {
-    facts: [],
-    preferences: [],
-    openThreads: [],
-    recentTurns: [],
-    dreamer: {
-      processedIds: []
-    }
-  });
-  const processedIds = new Set(Array.isArray(state.dreamer?.processedIds) ? state.dreamer.processedIds : []);
+  const state = await readJson(agent.memory.statePath, defaultState());
   const dreams = await readJsonl(agent.memory.dreamsPath);
+  const processedIds = new Set(Array.isArray(state.dreamer?.processedIds) ? state.dreamer.processedIds : []);
+  for (const id of summarizedSourceDreamIds(dreams)) processedIds.add(id);
   const pending = dreams
     .filter((entry) => isPendingDream(entry, processedIds))
     .slice(0, Number(limit || 10));
@@ -96,7 +91,7 @@ export async function processDreams(agent, {
       recentTurns: mergeRecentTurns(state.recentTurns, summaries),
       dreamer: {
         ...(state.dreamer || {}),
-        processedIds: nextProcessedIds,
+        processedIds: nextProcessedIds.slice(-500),
         lastRunAt: now.toISOString()
       }
     });
@@ -391,7 +386,31 @@ function mergeProcessedIds(processedIds, summaries) {
       if (id) ids.add(id);
     }
   }
-  return [...ids].slice(-500);
+  return [...ids];
+}
+
+function summarizedSourceDreamIds(dreams) {
+  const ids = new Set();
+  for (const entry of dreams) {
+    if (entry?.kind !== "dream-summary") continue;
+    const sourceIds = entry.data?.sourceDreamIds || [entry.data?.sourceDreamId];
+    for (const id of sourceIds) {
+      if (id) ids.add(id);
+    }
+  }
+  return ids;
+}
+
+function defaultState() {
+  return {
+    facts: [],
+    preferences: [],
+    openThreads: [],
+    recentTurns: [],
+    dreamer: {
+      processedIds: []
+    }
+  };
 }
 
 function importantTerms(value) {
