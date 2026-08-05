@@ -10,6 +10,9 @@ CONTENTS="$APP_DIR/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
 EXECUTABLE="$MACOS/WakefieldMenuBar"
+LAUNCHER="$MACOS/WakefieldLaunch"
+LAUNCH_AGENT_LABEL="dev.wakefield.menubar"
+LAUNCH_AGENT_PATH="$HOME/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist"
 CLI_PATH="$ROOT/src/cli.mjs"
 NODE_PATH="${WAKEFIELD_NODE:-${WAKEFIELD_NODE_PATH:-${npm_node_execpath:-}}}"
 if [[ -z "$NODE_PATH" ]]; then
@@ -24,6 +27,8 @@ rm -rf "$APP_DIR"
 rm -rf "$LEGACY_APP_DIR"
 mkdir -p "$MACOS" "$RESOURCES"
 cp "$PACKAGE/.build/release/WakefieldMenuBar" "$EXECUTABLE"
+cp "$PACKAGE/launch.sh" "$LAUNCHER"
+chmod +x "$LAUNCHER"
 if [[ -d "$PACKAGE/Resources" ]]; then
   cp -R "$PACKAGE/Resources/." "$RESOURCES/"
 fi
@@ -61,5 +66,31 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 </plist>
 PLIST
 
-open "$APP_DIR"
-echo "Installed ${APP_DIR}"
+mkdir -p "$HOME/Library/LaunchAgents"
+# This is Codex's durable, login-time app-server manager. Keep it enabled so
+# Wakefield's controller has its daemon before the Desktop app is opened.
+"$HOME/.codex/packages/standalone/current/codex" app-server daemon bootstrap --remote-control
+launchctl bootout "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" >/dev/null 2>&1 || true
+cat > "$LAUNCH_AGENT_PATH" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${LAUNCH_AGENT_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${LAUNCHER}</string>
+    <string>${EXECUTABLE}</string>
+    <string>${HOME}/.codex/packages/standalone/current/codex</string>
+    <string>/Applications/ChatGPT.app</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+</dict>
+</plist>
+PLIST
+launchctl bootstrap "gui/$(id -u)" "$LAUNCH_AGENT_PATH"
+launchctl kickstart -k "gui/$(id -u)/${LAUNCH_AGENT_LABEL}"
+
+echo "Installed ${APP_DIR} and loaded ${LAUNCH_AGENT_LABEL}"

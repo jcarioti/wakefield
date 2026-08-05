@@ -189,7 +189,7 @@ export async function runDueDuties(agent, {
       now
     });
     results.push(result);
-    if (result.ok) {
+    if (recordsWakeupRun(result)) {
       nextDocument = updateWakeupRunState(nextDocument, duty, now);
     } else if (result.status === "uncertain" && result.pendingDispatch) {
       nextDocument.pendingDispatches = [
@@ -266,6 +266,20 @@ export async function runDuty(agent, duty, {
       ranAt: now.toISOString()
     };
   } catch (error) {
+    if (error?.code === "active-turn-pending") {
+      // The selected Desktop task is already doing Wakefield work. Leave this
+      // wakeup due for the next service tick; it was never sent, so this is
+      // neither a dispatch failure nor an uncertain delivery.
+      return {
+        ok: true,
+        status: "deferred",
+        duty,
+        route,
+        dispatch: null,
+        error: serializeError(error),
+        ranAt: now.toISOString()
+      };
+    }
     if (error instanceof CodexDispatchUncertainError) {
       return {
         ok: false,
@@ -296,6 +310,10 @@ export async function runDuty(agent, duty, {
       ranAt: now.toISOString()
     };
   }
+}
+
+function recordsWakeupRun(result) {
+  return result?.status === "delivered" || result?.status === "dry-run" || result?.status === "manual";
 }
 
 async function reconcilePendingDispatches(document, { now }) {

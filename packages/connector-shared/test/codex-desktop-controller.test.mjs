@@ -38,6 +38,65 @@ test("desktop controller uses the daemon ws+unix protocol and experimental API",
   });
 });
 
+test("desktop controller accepts a matching managed daemon after a compatible runtime update", async () => {
+  await withControlSocket(async (socketPath) => {
+    const version = "0.147.0-alpha.1.2";
+    const controller = fakeController(socketPath, {
+      daemonInfo: daemonInfo(socketPath, {
+        managedCodexVersion: version,
+        cliVersion: version,
+        appServerVersion: version
+      }),
+      onRequest(message, socket) {
+        respondToHandshake(message, socket, { version });
+      }
+    });
+
+    await controller.connect();
+    assert.equal(controller.daemonInfo.appServerVersion, version);
+    controller.disconnect();
+  });
+});
+
+test("desktop controller recovers a stale control socket by starting the managed daemon", async () => {
+  await withControlSocket(async (socketPath) => {
+    const version = "0.147.0-alpha.1.2";
+    let started = false;
+    const calls = [];
+    const controller = new CodexDesktopController({
+      socketPath,
+      codexPath: "/tmp/codex",
+      startupTimeoutMs: 500,
+      execFileImpl: async (_command, args) => {
+        calls.push(args);
+        if (args[2] === "start") {
+          started = true;
+          return { stdout: "", stderr: "" };
+        }
+        if (!started) throw new Error("Connection refused");
+        return {
+          stdout: JSON.stringify(daemonInfo(socketPath, {
+            managedCodexVersion: version,
+            cliVersion: version,
+            appServerVersion: version
+          })),
+          stderr: ""
+        };
+      },
+      webSocketFactory: () => new FakeWebSocket((message, socket) => respondToHandshake(message, socket, { version })),
+      logger: quietLogger()
+    });
+
+    await controller.connect();
+    assert.deepEqual(calls, [
+      ["app-server", "daemon", "version"],
+      ["app-server", "daemon", "start"],
+      ["app-server", "daemon", "version"]
+    ]);
+    controller.disconnect();
+  });
+});
+
 test("desktop controller creates a persistent task and starts its first turn", async () => {
   await withControlSocket(async (socketPath) => {
     const calls = [];
@@ -128,6 +187,50 @@ test("desktop controller defers inbound text while a Desktop turn is active so t
   });
 });
 
+test("desktop controller can explicitly steer an active human connector turn", async () => {
+  await withControlSocket(async (socketPath) => {
+    const cwd = path.dirname(socketPath);
+    const calls = [];
+    const controller = fakeController(socketPath, {
+      onRequest(message, socket) {
+        calls.push(message);
+        if (respondToHandshake(message, socket)) return;
+        if (message.method === "thread/resume") {
+          respond(socket, message, {
+            thread: { id: "thread-1", cwd, ephemeral: false, status: { type: "active" } }
+          });
+        } else if (message.method === "thread/turns/list") {
+          respond(socket, message, { data: [{ id: "turn-active", status: "inProgress" }] });
+        } else if (message.method === "thread/settings/update") {
+          respond(socket, message, {});
+        } else if (message.method === "turn/steer") {
+          respond(socket, message, { turnId: "turn-active" });
+        }
+      }
+    });
+
+    const result = await controller.routeTextToThread({
+      threadId: "thread-1",
+      cwd,
+      text: "Are you there?",
+      serviceTier: "priority",
+      activeTurnPolicy: "steer"
+    });
+    assert.equal(result.action, "steer-desktop");
+    assert.equal(result.turnId, "turn-active");
+    assert.deepEqual(calls.find((call) => call.method === "thread/settings/update")?.params, {
+      threadId: "thread-1",
+      serviceTier: "priority"
+    });
+    assert.deepEqual(calls.find((call) => call.method === "turn/steer")?.params, {
+      threadId: "thread-1",
+      expectedTurnId: "turn-active",
+      input: [{ type: "text", text: "Are you there?", text_elements: [] }]
+    });
+    controller.disconnect();
+  });
+});
+
 test("desktop controller starts a normal Desktop turn for inbound text when the task is idle", async () => {
   await withControlSocket(async (socketPath) => {
     const cwd = path.dirname(socketPath);
@@ -158,6 +261,44 @@ test("desktop controller starts a normal Desktop turn for inbound text when the 
       threadId: "thread-1",
       cwd,
       input: [{ type: "text", text: "follow up", text_elements: [] }]
+    });
+    controller.disconnect();
+  });
+});
+
+test("desktop controller starts Fast turns and can restore the Standard tier", async () => {
+  await withControlSocket(async (socketPath) => {
+    const cwd = path.dirname(socketPath);
+    const calls = [];
+    const controller = fakeController(socketPath, {
+      onRequest(message, socket) {
+        calls.push(message);
+        if (respondToHandshake(message, socket)) return;
+        if (message.method === "thread/resume") {
+          respond(socket, message, {
+            thread: { id: "thread-1", cwd, ephemeral: false, status: { type: "idle" } }
+          });
+        } else if (message.method === "turn/start") {
+          respond(socket, message, { turn: { id: "turn-fast" } });
+        } else if (message.method === "thread/settings/update") {
+          respond(socket, message, { thread: { id: "thread-1", serviceTier: null } });
+        }
+      }
+    });
+
+    const result = await controller.routeTextToThread({
+      threadId: "thread-1",
+      cwd,
+      text: "reply quickly",
+      serviceTier: "priority"
+    });
+    await controller.setThreadServiceTier({ threadId: "thread-1", serviceTier: null });
+
+    assert.equal(result.serviceTier, "priority");
+    assert.equal(calls.find((call) => call.method === "turn/start").params.serviceTier, "priority");
+    assert.deepEqual(calls.find((call) => call.method === "thread/settings/update").params, {
+      threadId: "thread-1",
+      serviceTier: null
     });
     controller.disconnect();
   });
@@ -245,7 +386,11 @@ test("desktop controller reloads and verifies the complete live MCP inventory", 
 test("desktop controller fails closed when daemon ownership does not match", async () => {
   await withControlSocket(async (socketPath) => {
     const controller = fakeController(socketPath, {
-      daemonInfo: daemonInfo(socketPath, { appServerVersion: "0.145.0" }),
+      daemonInfo: daemonInfo(socketPath, {
+        managedCodexVersion: "0.147.0-alpha.1.2",
+        cliVersion: "0.147.0-alpha.1.2",
+        appServerVersion: "0.145.0"
+      }),
       onRequest() { throw new Error("WebSocket should not open"); }
     });
     await assert.rejects(controller.connect(), (error) => {
@@ -300,10 +445,10 @@ function fakeController(socketPath, {
   });
 }
 
-function respondToHandshake(message, socket) {
+function respondToHandshake(message, socket, { version = "0.146.0-alpha.9.2" } = {}) {
   if (message.method === "initialize") {
     respond(socket, message, {
-      userAgent: "Codex Desktop/0.146.0-alpha.9.2 (Mac OS 26.5; arm64)",
+      userAgent: `Codex Desktop/${version} (Mac OS 26.5; arm64)`,
       codexHome: "/tmp/codex",
       platformFamily: "unix",
       platformOs: "macos"

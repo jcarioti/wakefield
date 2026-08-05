@@ -127,6 +127,7 @@ export async function wakefieldManifest({
       feature("managed-connector-config-init", "available", "Generate local mature connector config files from the selected persistent Codex thread without storing raw secrets."),
       feature("managed-connector-mcp-install", "available", "Install or update the named mature connector MCP server in the live Codex Desktop config."),
       feature("codex-desktop-controller", "available", "Create persistent ChatGPT Desktop tasks and start or steer turns through the owned Codex daemon control socket."),
+      feature("fast-responses", "available", "Route human iMessage and Discord requests through Codex Fast mode, then restore Standard for duties and automation."),
       feature("codex-mcp-reload", "available", "Reload MCP servers in the exact daemon-backed ChatGPT Desktop runtime, then verify live MCP server status."),
       feature("managed-connector-launch-agents", "available", "Generate, install, load, reload, and remove user LaunchAgents for managed connector daemons.")
     ],

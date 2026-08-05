@@ -17,6 +17,9 @@
       "requireDesktopOwnership": true
     }
   },
+  "fastResponses": {
+    "enabled": true
+  },
   "discord": {
     "allowedOutboundChannelIds": [
       "1417315009716944997"

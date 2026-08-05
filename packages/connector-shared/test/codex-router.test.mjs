@@ -6,6 +6,7 @@ import {
   isActiveTurnError,
   isInactiveTurnError,
   isMissingFollowerClientError,
+  restoreStandardServiceTierAfterFastResponse,
   sendTextToCodexTarget
 } from "../src/codex-router.mjs";
 
@@ -163,6 +164,41 @@ test("desktop-controller mode uses the daemon-backed Desktop controller", async 
         text: "hello"
       }
     ]);
+});
+
+test("desktop-controller mode forwards Fast and restores Standard after the response", async () => {
+  const calls = [];
+  const desktopController = {
+    async routeTextToThread(params) {
+      calls.push(["route", params]);
+      return { action: "start-desktop", turnId: "turn-fast", serviceTier: params.serviceTier };
+    },
+    async setThreadServiceTier(params) {
+      calls.push(["restore", params]);
+    }
+  };
+
+  const routeResult = await sendTextToCodexTarget({
+    desktopController,
+    target,
+    text: "please hurry",
+    mode: "desktop-controller",
+    serviceTier: "priority",
+    useLock: false
+  });
+  const restored = await restoreStandardServiceTierAfterFastResponse({ routeResult, desktopController });
+
+  assert.equal(restored, true);
+  assert.deepEqual(calls, [
+    ["route", {
+      threadId: "thread-1",
+      cwd: "/tmp/project",
+      permissions: null,
+      text: "please hurry",
+      serviceTier: "priority"
+    }],
+    ["restore", { threadId: "thread-1", serviceTier: null }]
+  ]);
 });
 
 test("auto route wakes the Codex thread once after no-client-found and retries follower IPC", async () => {

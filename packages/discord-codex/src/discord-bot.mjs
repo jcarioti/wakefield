@@ -7,7 +7,7 @@ import {
   loadConnectorConfig,
   parseCliArgs
 } from "./config.mjs";
-import { sendTextToCodexTarget } from "@wakefield/connector-shared/codex-router.mjs";
+import { restoreStandardServiceTierAfterFastResponse, sendTextToCodexTarget } from "@wakefield/connector-shared/codex-router.mjs";
 import { findThreadRolloutPath, waitForTurnCompletion } from "@wakefield/connector-shared/codex-rollout-watch.mjs";
 import { recordWakefieldConnectorTurn } from "@wakefield/connector-shared/wakefield-memory.mjs";
 import {
@@ -87,10 +87,13 @@ client.on("messageCreate", async (message) => {
         const routeResult = await sendTextToCodexTarget({
           target,
           text,
-          mode: target.routeMode,
-          codex: config.codex
+        mode: target.routeMode,
+        codex: config.codex,
+        serviceTier: config.fastResponses.enabled ? "priority" : undefined,
+        activeTurnPolicy: "steer"
         });
         const completionStatus = await keepTypingUntilTurnCompletes({ target, routeResult, message });
+        await restoreFastResponseTier({ routeResult, completionStatus, message });
         await appendEventLog(target, eventLogRecordFromDiscordMessage({ message, target, routeResult }));
         await recordConnectorTurn({ target, routeResult, completionStatus, message, text });
         console.log(`Routed Discord message ${message.id} to ${target.id} via Codex ${routeResult.action}.`);
@@ -113,6 +116,17 @@ async function shutdown(signal) {
     await releaseProcessLock();
   } finally {
     process.exit(0);
+  }
+}
+
+async function restoreFastResponseTier({ routeResult, completionStatus, message }) {
+  if (!completionStatus?.completed) return;
+  try {
+    if (await restoreStandardServiceTierAfterFastResponse({ routeResult, codex: config.codex })) {
+      console.log(`Restored Standard responses after Discord message ${message.id}.`);
+    }
+  } catch (error) {
+    console.warn(`Could not restore Standard responses after Discord message ${message.id}: ${error.message}`);
   }
 }
 

@@ -193,6 +193,43 @@ test("findEarlierPendingDeliveryInLane blocks newer same-chat records until olde
   assert.equal(await findEarlierPendingDeliveryInLane(queue, newer), null);
 });
 
+test("failed deliveries wait for their persisted retry deadline while retaining same-lane FIFO", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "spectrum-delivery-queue-test-"));
+  const queuePath = path.join(root, "queue.json");
+  let now = new Date("2026-08-05T20:00:00.000Z");
+  const queue = new SpectrumDeliveryQueue({ queuePath, now: () => now });
+  const older = createPendingDeliveryRecord({
+    target: { id: "rick", threadId: "thread-1", cwd: "/tmp/rick" },
+    space: { id: "any;-;+15551234567", type: "dm" },
+    message: { id: "spc-msg-older", timestamp: now, sender: { id: "+15551234567" } },
+    codexText: "older",
+    eventLogRecord: { target_id: "rick", message_id: "spc-msg-older" },
+    now
+  });
+  const newer = createPendingDeliveryRecord({
+    target: { id: "rick", threadId: "thread-1", cwd: "/tmp/rick" },
+    space: { id: "any;-;+15551234567", type: "dm" },
+    message: { id: "spc-msg-newer", timestamp: new Date("2026-08-05T20:00:01.000Z"), sender: { id: "+15551234567" } },
+    codexText: "newer",
+    eventLogRecord: { target_id: "rick", message_id: "spc-msg-newer" },
+    now
+  });
+
+  await queue.upsert(older);
+  await queue.upsert(newer);
+  await queue.markAttemptStarted(older.id);
+  const failed = await queue.markAttemptFailed(older.id, new Error("temporary route failure"), {
+    retryAfterMs: 120000
+  });
+
+  assert.equal(failed.nextAttemptAt, "2026-08-05T20:02:00.000Z");
+  assert.deepEqual((await queue.pending({ readyOnly: true })).map((record) => record.id), [newer.id]);
+  assert.equal((await findEarlierPendingDeliveryInLane(queue, newer))?.id, older.id);
+
+  now = new Date("2026-08-05T20:02:00.000Z");
+  assert.deepEqual((await queue.pending({ readyOnly: true })).map((record) => record.id), [older.id, newer.id]);
+});
+
 test("deliveredEventLogRecord stamps the successful Codex route", () => {
   assert.deepEqual(deliveredEventLogRecord({
     eventLogRecord: {

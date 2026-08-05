@@ -18,10 +18,11 @@ export class SpectrumDeliveryQueue {
     return this.#queuePath;
   }
 
-  async pending() {
+  async pending({ readyOnly = false } = {}) {
     const state = await this.#read();
+    const now = this.#timestamp();
     return state.records
-      .filter((record) => !record.deliveredAt)
+      .filter((record) => !record.deliveredAt && (!readyOnly || readyForAttempt(record, now)))
       .sort(compareDeliveryRecords);
   }
 
@@ -51,7 +52,8 @@ export class SpectrumDeliveryQueue {
         lastAttemptAt: existing?.lastAttemptAt || record.lastAttemptAt || null,
         deliveredAt: existing?.deliveredAt || record.deliveredAt || null,
         routeResult: existing?.routeResult || record.routeResult || null,
-        lastError: existing?.lastError || record.lastError || null
+        lastError: existing?.lastError || record.lastError || null,
+        nextAttemptAt: existing?.nextAttemptAt || record.nextAttemptAt || null
       };
       if (index >= 0) {
         state.records[index] = next;
@@ -75,19 +77,21 @@ export class SpectrumDeliveryQueue {
         ...record,
         attempts: Number(record.attempts || 0) + 1,
         lastAttemptAt: this.#timestamp(),
-        lastError: null
+        lastError: null,
+        nextAttemptAt: null
       };
     });
   }
 
-  async markAttemptFailed(id, error) {
+  async markAttemptFailed(id, error, { retryAfterMs = 0 } = {}) {
     if (!this.#queuePath) {
       return null;
     }
     return this.#update(id, (record) => ({
       ...record,
       updatedAt: this.#timestamp(),
-      lastError: serializeError(error)
+      lastError: serializeError(error),
+      nextAttemptAt: nextAttemptTimestamp(this.#now(), retryAfterMs)
     }));
   }
 
@@ -107,7 +111,8 @@ export class SpectrumDeliveryQueue {
         updatedAt: deliveredAt,
         deliveredAt,
         routeResult,
-        lastError: null
+        lastError: null,
+        nextAttemptAt: null
       };
       state.records[index] = record;
       pruneDeliveredReceipts(state.records, deliveredAt);
@@ -240,6 +245,7 @@ export function createPendingDeliveryRecord({
     attempts: 0,
     lastAttemptAt: null,
     lastError: null,
+    nextAttemptAt: null,
     deliveredAt: null
   };
 }
@@ -272,6 +278,25 @@ function compareDeliveryRecords(left, right) {
 
 function sameDeliveryLane(left, right) {
   return left?.targetId === right?.targetId && left?.spaceId === right?.spaceId;
+}
+
+function readyForAttempt(record, now) {
+  const nextAttemptAt = Date.parse(record?.nextAttemptAt || "");
+  const currentTime = Date.parse(now);
+  return !Number.isFinite(nextAttemptAt) || !Number.isFinite(currentTime) || nextAttemptAt <= currentTime;
+}
+
+function nextAttemptTimestamp(now, retryAfterMs) {
+  const delay = Number(retryAfterMs);
+  if (!Number.isFinite(delay) || delay <= 0) {
+    return null;
+  }
+  const nowDate = now instanceof Date ? now : new Date(now);
+  const nowMs = nowDate.getTime();
+  if (!Number.isFinite(nowMs)) {
+    return null;
+  }
+  return new Date(nowMs + delay).toISOString();
 }
 
 function emptyQueue() {

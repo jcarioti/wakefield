@@ -25,6 +25,9 @@ const DEFAULT_CONFIG = {
       startupTimeoutMs: 15000
     }
   },
+  fastResponses: {
+    enabled: true
+  },
   imessage: {
     provider: "spectrum",
     imsgPath: "imsg",
@@ -253,6 +256,9 @@ function normalizeConfig(config, { configPath, cwd }) {
       ...DEFAULT_CONFIG.codex,
       ...(config.codex || {}),
       desktopController: normalizeDesktopController(config.codex?.desktopController, { cwd: configDir })
+    },
+    fastResponses: {
+      enabled: config.fastResponses?.enabled !== false
     },
     imessage,
     identity: {

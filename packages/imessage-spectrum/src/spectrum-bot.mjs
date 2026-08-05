@@ -46,7 +46,7 @@ import {
   matchesSpectrumTarget,
   spectrumSpaceType
 } from "./spectrum-message-format.mjs";
-import { sendTextToCodexTarget } from "@wakefield/connector-shared/codex-router.mjs";
+import { restoreStandardServiceTierAfterFastResponse, sendTextToCodexTarget } from "@wakefield/connector-shared/codex-router.mjs";
 import { findThreadRolloutPath, waitForTurnCompletion } from "@wakefield/connector-shared/codex-rollout-watch.mjs";
 import { acquireSingletonProcessLock } from "@wakefield/connector-shared/lock.mjs";
 import { recordWakefieldConnectorTurn } from "@wakefield/connector-shared/wakefield-memory.mjs";
@@ -93,6 +93,7 @@ const previousStatus = await readJsonFile(config.imessage.spectrum.statusPath);
 const knownSpaces = new Map();
 const activeTypingStops = new Map();
 const activeDeliveryIds = new Set();
+const DELIVERY_RETRY_MAX_MS = 30 * 60 * 1000;
 const liveReceivedMessageIds = new BoundedMessageIdSet();
 const appOperationGate = new SpectrumAppOperationGate({
   minIntervalMs: config.imessage.spectrum.outboundRequestMinIntervalMs
@@ -622,8 +623,9 @@ async function routeDeliveryRecordNow(record, { space = null, message = null, so
   }
   activeDeliveryIds.add(record.id);
   const target = targetForDelivery(record);
+  let deliveryRecord = record;
   try {
-    const deliveryRecord = await beginPendingDeliveryAttempt(deliveryQueue, record);
+    deliveryRecord = await beginPendingDeliveryAttempt(deliveryQueue, record);
     if (!deliveryRecord) {
       console.log(`Skipping Photon/Spectrum iMessage ${record.messageId}; delivery is no longer pending.`);
       return null;
@@ -637,7 +639,9 @@ async function routeDeliveryRecordNow(record, { space = null, message = null, so
       target,
       text: deliveryRecord.codexText,
       mode: target.routeMode,
-      codex: config.codex
+      codex: config.codex,
+      serviceTier: config.fastResponses.enabled ? "priority" : undefined,
+      activeTurnPolicy: "steer"
     });
     await appendEventLog(target, deliveredEventLogRecord(deliveryRecord, routeResult));
     await deliveryQueue.markDelivered(deliveryRecord.id, routeResult);
@@ -649,7 +653,9 @@ async function routeDeliveryRecordNow(record, { space = null, message = null, so
     }
     return routeResult;
   } catch (error) {
-    await deliveryQueue.markAttemptFailed(record.id, error).catch((queueError) => {
+    await deliveryQueue.markAttemptFailed(record.id, error, {
+      retryAfterMs: deliveryRetryBackoffMs(deliveryRecord)
+    }).catch((queueError) => {
       console.warn(`Failed to record delivery failure for ${record.id}: ${queueError.message}`);
     });
     throw error;
@@ -672,6 +678,18 @@ function schedulePostRouteEffects({ target, routeResult, space, message, prompt 
   const stopTyping = startTypingWhileThinking({ space, typing: config.imessage.typing });
   Promise.resolve()
     .then(() => keepTypingUntilTurnCompletes({ target, routeResult, message }))
+    .then(async (completionStatus) => {
+      if (completionStatus?.completed) {
+        try {
+          if (await restoreStandardServiceTierAfterFastResponse({ routeResult, codex: config.codex })) {
+            console.log(`Restored Standard responses after Photon/Spectrum iMessage ${message.id}.`);
+          }
+        } catch (error) {
+          console.warn(`Could not restore Standard responses after Photon/Spectrum iMessage ${message.id}: ${error.message}`);
+        }
+      }
+      return completionStatus;
+    })
     .then((completionStatus) => recordSpectrumConnectorTurn({ target, routeResult, completionStatus, space, message, prompt }))
     .catch((error) => {
       console.warn(`Photon/Spectrum typing watcher failed after routing ${message.id}: ${error.message}`);
@@ -685,7 +703,7 @@ async function drainPendingDeliveries(reason) {
   }
   deliveryDrainActive = true;
   try {
-    const pending = await deliveryQueue.pending();
+    const pending = await deliveryQueue.pending({ readyOnly: true });
     if (pending.length === 0) {
       return;
     }
@@ -704,6 +722,15 @@ async function drainPendingDeliveries(reason) {
   } finally {
     deliveryDrainActive = false;
   }
+}
+
+function deliveryRetryBackoffMs(record) {
+  const attempts = Math.max(1, Number(record?.attempts || 1));
+  const exponent = Math.min(attempts - 1, 30);
+  return Math.min(
+    DELIVERY_RETRY_MAX_MS,
+    config.imessage.spectrum.deliveryRetryMs * (2 ** exponent)
+  );
 }
 
 function scheduleDeliveryRetry() {

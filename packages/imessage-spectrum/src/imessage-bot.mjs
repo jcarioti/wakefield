@@ -22,7 +22,7 @@ import {
   matchesTarget
 } from "./imessage-message-format.mjs";
 import { startCodexFocusMonitor } from "./imessage-focus.mjs";
-import { sendTextToCodexTarget } from "@wakefield/connector-shared/codex-router.mjs";
+import { restoreStandardServiceTierAfterFastResponse, sendTextToCodexTarget } from "@wakefield/connector-shared/codex-router.mjs";
 import { findThreadRolloutPath, waitForTurnCompletion } from "@wakefield/connector-shared/codex-rollout-watch.mjs";
 import { acquireSingletonProcessLock } from "@wakefield/connector-shared/lock.mjs";
 import { recordWakefieldConnectorTurn } from "@wakefield/connector-shared/wakefield-memory.mjs";
@@ -99,7 +99,9 @@ async function handleImessage(message) {
         target,
         text,
         mode: target.routeMode,
-        codex: config.codex
+        codex: config.codex,
+        serviceTier: config.fastResponses.enabled ? "priority" : undefined,
+        activeTurnPolicy: "steer"
       });
       await maybeMarkRead({ message, replyTarget });
       // Read follows successful injection; typing follows a tracked Codex turn.
@@ -110,6 +112,7 @@ async function handleImessage(message) {
         });
       }
       const completionStatus = await keepTypingUntilTurnCompletes({ target, routeResult, message });
+      await restoreFastResponseTier({ routeResult, completionStatus, message });
       await appendEventLog(target, eventLogRecordFromImessage({ message, target, routeResult, contacts }));
       await recordConnectorTurn({ target, routeResult, completionStatus, message, text });
       await advanceState(message.id);
@@ -117,6 +120,17 @@ async function handleImessage(message) {
     } finally {
       stopTyping();
     }
+  }
+}
+
+async function restoreFastResponseTier({ routeResult, completionStatus, message }) {
+  if (!completionStatus?.completed) return;
+  try {
+    if (await restoreStandardServiceTierAfterFastResponse({ routeResult, codex: config.codex })) {
+      console.log(`Restored Standard responses after iMessage row ${message.id}.`);
+    }
+  } catch (error) {
+    console.warn(`Could not restore Standard responses after iMessage row ${message.id}: ${error.message}`);
   }
 }
 

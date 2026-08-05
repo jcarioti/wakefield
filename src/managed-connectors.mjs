@@ -41,7 +41,8 @@ export const MANAGED_CONNECTOR_ADAPTERS = [
       "discord-dms",
       "recent-context",
       "typing",
-      "presence"
+      "presence",
+      "fast-responses"
     ],
     requiredFiles: [
       "package.json",
@@ -86,6 +87,7 @@ export const MANAGED_CONNECTOR_ADAPTERS = [
       { id: "allowedGuildIds", label: "Allowed guild ids", required: false, placeholder: "comma-separated ids" },
       { id: "requiredRoleIds", label: "Required role ids", required: false, placeholder: "comma-separated ids" },
       { id: "triggerUserIds", label: "Trigger user ids", required: false, placeholder: "comma-separated ids" },
+      { id: "fastResponses", label: "Fast Responses", required: false, placeholder: "true" },
       { id: "eventLogPath", label: "Event log path", required: false, placeholder: "local/events.jsonl" }
     ]
   },
@@ -106,7 +108,8 @@ export const MANAGED_CONNECTOR_ADAPTERS = [
       "recent-context",
       "typing",
       "read-receipts",
-      "receive-loop-diagnostics"
+      "receive-loop-diagnostics",
+      "fast-responses"
     ],
     requiredFiles: [
       "package.json",
@@ -154,6 +157,7 @@ export const MANAGED_CONNECTOR_ADAPTERS = [
       { id: "allowedSpaceIds", label: "Allowed Spectrum space ids", required: false, placeholder: "comma-separated ids" },
       { id: "allowGroupChats", label: "Allow group chats", required: false, placeholder: "false" },
       { id: "allowOutboundToKnownSpaces", label: "Allow outbound to known spaces", required: false, placeholder: "true" },
+      { id: "fastResponses", label: "Fast Responses", required: false, placeholder: "true" },
       { id: "contactsPath", label: "Contacts file", required: false, placeholder: "leave blank for no local contacts file" },
       { id: "eventLogPath", label: "Event log path", required: false, placeholder: "local/events.jsonl" }
     ]
@@ -1398,6 +1402,9 @@ function managedConnectorConfigTemplate(adapter, config, agent, settings, { home
         commandPrefix: setting(settings, "commandPrefix", "!agent")
       },
       codex: defaultCodexConnectorSettings(settings, adapter.connectorId),
+      fastResponses: {
+        enabled: fastResponsesEnabled(settings)
+      },
       discord: {
         allowedOutboundChannelIds: channelIds,
         allowedDmUserIds: userIds,
@@ -1420,6 +1427,9 @@ function managedConnectorConfigTemplate(adapter, config, agent, settings, { home
       processLockRoot: setting(settings, "processLockRoot", "~/.codex/connectors/imessage-codex/locks")
     },
     codex: defaultCodexConnectorSettings(settings, adapter.connectorId),
+    fastResponses: {
+      enabled: fastResponsesEnabled(settings)
+    },
     imessage: {
       provider: "spectrum",
       spectrum: {
@@ -1497,7 +1507,12 @@ function migrateConnectorConfigToDesktopController(raw, { connectorId = null } =
     requireDesktopOwnership: true,
     requireRemoteControlConnected: true
   };
-  const config = { ...source, codex, targets };
+  const config = {
+    ...source,
+    codex,
+    targets,
+    fastResponses: { enabled: fastResponsesEnabled(source) }
+  };
   return {
     changed: JSON.stringify(config) !== JSON.stringify(source),
     config
@@ -1750,6 +1765,7 @@ function inspectDiscordConnectorConfig(raw, { configPath, targets, selectedTarge
     ok: checks.filter((item) => !item.optional).every((item) => item.ok),
     path: configPath,
     parsed: true,
+    fastResponses: raw.fastResponses?.enabled !== false,
     provider: "discord",
     targetId: selectedTarget?.id || null,
     targets,
@@ -1811,6 +1827,7 @@ function inspectSpectrumConnectorConfig(raw, { configPath, targets, selectedTarg
     ok: checks.filter((item) => !item.optional).every((item) => item.ok),
     path: configPath,
     parsed: true,
+    fastResponses: raw.fastResponses?.enabled !== false,
     provider: "spectrum",
     targetId: selectedTarget?.id || null,
     targets,
@@ -2068,6 +2085,7 @@ function managedConnectorSetupDefaults(adapter, status) {
       allowedGuildIds: (target.allowedGuildIds || []).join(","),
       requiredRoleIds: (target.requiredRoleIds || []).join(","),
       triggerUserIds: (target.triggerUserIds || []).join(","),
+      fastResponses: status.connectorConfig?.fastResponses === false ? "false" : "true",
       eventLogPath: target.eventLogPath || ""
     };
   }
@@ -2078,6 +2096,7 @@ function managedConnectorSetupDefaults(adapter, status) {
     allowedSpaceIds: (status.connectorConfig?.outbound?.spaceIds || target.allowedSpaceIds || []).join(","),
     allowGroupChats: target.allowGroupChats ? "true" : "false",
     allowOutboundToKnownSpaces: status.connectorConfig?.outbound?.allowOutboundToKnownSpaces === false ? "false" : "true",
+    fastResponses: status.connectorConfig?.fastResponses === false ? "false" : "true",
     contactsPath: "",
     eventLogPath: target.eventLogPath || ""
   };
@@ -2546,6 +2565,14 @@ function booleanSetting(settings, key, fallback = false) {
   if (value == null || value === "") return fallback;
   if (typeof value === "boolean") return value;
   return ["1", "true", "yes", "on"].includes(String(value).trim().toLowerCase());
+}
+
+function fastResponsesEnabled(settings, fallback = true) {
+  const configured = settings?.fastResponses;
+  if (configured && typeof configured === "object") {
+    return booleanSetting(configured, "enabled", fallback);
+  }
+  return booleanSetting(settings, "fastResponses", fallback);
 }
 
 function numberSetting(settings, key, fallback) {

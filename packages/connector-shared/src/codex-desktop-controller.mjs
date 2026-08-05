@@ -10,7 +10,6 @@ import { createTextInput, normalizeCodexPermissions } from "./codex-ipc-client.m
 const execFileAsync = promisify(execFile);
 const DEFAULT_CLIENT_NAME = "wakefield-controller";
 const DEFAULT_CLIENT_VERSION = "0.1.0";
-const SUPPORTED_APP_SERVER_VERSION_PREFIX = "0.146.";
 
 export class CodexDesktopControllerError extends Error {
   constructor(message, { code = "codex-desktop-controller-error", method = null, details = null } = {}) {
@@ -89,7 +88,7 @@ export class CodexDesktopController {
       await this.waitForSocket();
     }
 
-    this.daemonInfo = await this.readDaemonInfo();
+    this.daemonInfo = await this.readDaemonInfoWithRecovery();
     if (this.requireDesktopOwnership) this.assertDaemonOwnership(this.daemonInfo);
     await this.openWebSocket();
     try {
@@ -136,6 +135,37 @@ export class CodexDesktopController {
     }
   }
 
+  async readDaemonInfoWithRecovery() {
+    try {
+      return await this.readDaemonInfo();
+    } catch (error) {
+      if (!this.ensureDaemon || !isRecoverableDaemonIdentityError(error)) throw error;
+
+      // A machine restart can leave the Unix socket behind after the managed
+      // daemon exits. `daemon start` reconciles stale pid/socket state, while
+      // the presence of a socket alone does not prove it accepts connections.
+      await this.startDaemon();
+      return this.waitForDaemonInfo();
+    }
+  }
+
+  async waitForDaemonInfo() {
+    const deadline = Date.now() + this.startupTimeoutMs;
+    let lastError = null;
+    do {
+      try {
+        return await this.readDaemonInfo();
+      } catch (error) {
+        lastError = error;
+        await sleep(Math.min(100, Math.max(1, deadline - Date.now())));
+      }
+    } while (Date.now() < deadline);
+    throw new CodexDesktopControllerError(
+      `Codex daemon did not become ready after startup: ${lastError?.message || "unknown error"}`,
+      { code: "daemon-startup-timeout", details: lastError }
+    );
+  }
+
   async waitForSocket() {
     const deadline = Date.now() + this.startupTimeoutMs;
     do {
@@ -179,11 +209,11 @@ export class CodexDesktopController {
       info?.status !== "running" ||
       info?.backend !== "pid" ||
       actualSocket !== expectedSocket ||
-      versions.some((value) => typeof value !== "string" || !value.startsWith(SUPPORTED_APP_SERVER_VERSION_PREFIX)) ||
+      versions.some((value) => !nonEmpty(value)) ||
       new Set(versions).size !== 1
     ) {
       throw new CodexDesktopControllerError(
-        `The control socket is not owned by the supported Codex ${SUPPORTED_APP_SERVER_VERSION_PREFIX.slice(0, -1)} daemon.`,
+        "The control socket is not owned by the matching managed Codex daemon.",
         { code: "daemon-ownership-mismatch", details: info }
       );
     }
@@ -336,9 +366,29 @@ export class CodexDesktopController {
     return result;
   }
 
-  async routeTextToThread({ threadId, cwd, text, input = null, permissions = null }) {
+  async routeTextToThread({
+    threadId,
+    cwd,
+    text,
+    input = null,
+    permissions = null,
+    serviceTier = undefined,
+    activeTurnPolicy = "defer"
+  }) {
     const attached = await this.attachTask({ threadId, cwd });
     if (attached.thread?.status?.type === "active") {
+      if (activeTurnPolicy === "steer") {
+        const turnId = await this.findActiveTurnId(threadId, attached.thread);
+        if (serviceTier !== undefined) {
+          await this.setThreadServiceTier({ threadId, serviceTier });
+        }
+        const result = await this.steerTurn({
+          threadId,
+          turnId,
+          input: input || createTextInput(text)
+        });
+        return { action: "steer-desktop", result, turnId, serviceTier };
+      }
       // `turn/steer` alters the current response without adding a user-message
       // item to the Desktop conversation. Connectors must keep inbound text
       // pending until a normal `turn/start` can render it and sync it to Remote.
@@ -355,6 +405,7 @@ export class CodexDesktopController {
       threadId,
       cwd: path.resolve(cwd),
       input: input || createTextInput(text),
+      ...(serviceTier === undefined ? {} : { serviceTier }),
       ...normalizeCodexPermissions(permissions)
     });
     const turnId = extractAppServerTurnId(result);
@@ -365,7 +416,15 @@ export class CodexDesktopController {
         details: result
       });
     }
-    return { action: "start-desktop", result, turnId };
+    return { action: "start-desktop", result, turnId, serviceTier };
+  }
+
+  async setThreadServiceTier({ threadId, serviceTier = null } = {}) {
+    if (!nonEmpty(threadId)) {
+      throw new Error("Updating a Codex Desktop task service tier requires threadId.");
+    }
+    await this.connect();
+    return this.request("thread/settings/update", { threadId, serviceTier });
   }
 
   async findActiveTurnId(threadId, thread = null) {
@@ -687,6 +746,10 @@ export async function isSocket(candidate) {
   } catch {
     return false;
   }
+}
+
+function isRecoverableDaemonIdentityError(error) {
+  return error?.code === "daemon-identity-unavailable" || error?.code === "daemon-identity-invalid";
 }
 
 function normalizeThreadPermissions(permissions) {

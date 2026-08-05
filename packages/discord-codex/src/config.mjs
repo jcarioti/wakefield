@@ -29,6 +29,9 @@ const DEFAULT_CONFIG = {
       startupTimeoutMs: 15000
     }
   },
+  fastResponses: {
+    enabled: true
+  },
   discord: {
     allowedOutboundChannelIds: [],
     allowedDmUserIds: [],
@@ -214,6 +217,9 @@ function normalizeConfig(config, { configPath, cwd }) {
       ...DEFAULT_CONFIG.codex,
       ...(config.codex || {}),
       desktopController: normalizeDesktopController(config.codex?.desktopController, { cwd: configDir })
+    },
+    fastResponses: {
+      enabled: config.fastResponses?.enabled !== false
     },
     discord: {
       ...DEFAULT_CONFIG.discord,

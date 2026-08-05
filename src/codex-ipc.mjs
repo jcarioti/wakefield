@@ -105,6 +105,7 @@ export async function routePromptToCodex({
   codexHomePath = null,
   desktopController = null,
   acceptanceReconcileMs = DEFAULT_TURN_ACCEPTANCE_RECONCILE_MS,
+  serviceTier = undefined,
   attemptedAt = new Date().toISOString(),
   logger = console
 }) {
@@ -122,6 +123,7 @@ export async function routePromptToCodex({
       codexHomePath,
       acceptanceReconcileMs,
       attemptedAt,
+      serviceTier,
       desktopController,
       logger
     });
@@ -198,6 +200,7 @@ async function routePromptThroughDesktopController({
   codexHomePath,
   acceptanceReconcileMs,
   attemptedAt,
+  serviceTier,
   desktopController,
   logger
 }) {
@@ -210,7 +213,10 @@ async function routePromptThroughDesktopController({
         threadId,
         cwd,
         text: prompt,
-        permissions
+        permissions,
+        // Wakefield duties and inbox dispatches intentionally use Standard,
+        // even if the last human connector turn used Fast.
+        serviceTier: serviceTier === undefined ? null : serviceTier
       });
     } catch (error) {
       if (!isTurnRequestTimeout(error)) throw error;

@@ -31,6 +31,7 @@
     "apps/wakefield-menubar/Resources",
     "apps/wakefield-menubar/Sources",
     "apps/wakefield-menubar/install.sh",
+    "apps/wakefield-menubar/launch.sh",
     "skills",
     "src"
   ],

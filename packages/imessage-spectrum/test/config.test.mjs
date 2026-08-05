@@ -49,6 +49,7 @@ test("loadConnectorConfig normalizes iMessage paths and allowlists", async () =>
   assert.equal(config.imessage.databasePath, path.join(os.homedir(), "Library/Messages/chat.db"));
   assert.equal(config.imessage.statePath, path.join(root, "state.json"));
   assert.equal(config.imessage.advancedBridgeRequired, true);
+  assert.equal(config.fastResponses.enabled, true);
   assert.equal(config.imessage.sendReadReceipts, true);
   assert.equal(config.imessage.typing.showWhileThinking, true);
   assert.equal(config.targets[0].routeMode, "desktop-controller");
@@ -149,6 +150,19 @@ test("loadConnectorConfig can opt out of typing while thinking", async () => {
   const config = await loadConnectorConfig({ configPath });
 
   assert.equal(config.imessage.typing.showWhileThinking, false);
+});
+
+test("loadConnectorConfig can disable the top-level Fast Responses policy", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "imessage-fast-responses-test-"));
+  const configPath = path.join(root, "config.json");
+  await fs.writeFile(configPath, JSON.stringify({
+    fastResponses: { enabled: false },
+    targets: [{ id: "agent", threadId: "thread-1", cwd: "~/WakefieldAgents/agent" }]
+  }), "utf8");
+
+  const config = await loadConnectorConfig({ configPath });
+
+  assert.equal(config.fastResponses.enabled, false);
 });
 
 test("normalizeAddress is lower-case and whitespace tolerant", () => {

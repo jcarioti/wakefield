@@ -15,6 +15,9 @@
       "requireDesktopOwnership": true
     }
   },
+  "fastResponses": {
+    "enabled": true
+  },
   "imessage": {
     "provider": "spectrum",
     "spectrum": {

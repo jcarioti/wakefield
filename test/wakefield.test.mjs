@@ -3001,6 +3001,7 @@ test("external inbox dispatch can dry-run or deliver pending messages through th
   assert.match(calls[0][3], /Are you around/);
   assert.deepEqual(delivered.route.permissions, { mode: "full-access" });
   assert.deepEqual(startParams.permissions, { mode: "full-access" });
+  assert.equal(startParams.serviceTier, null);
   assert.deepEqual(await listExternalMessages(profile), []);
   assert.equal((await listExternalMessages(profile, { status: "delivered" }))[0].statusReason, "Codex start-desktop");
 });
@@ -3078,7 +3079,7 @@ test("manifest describes package, core features, setup commands, and connector s
   assert.equal(manifest.runtime.binary, "wakefield");
   assert.deepEqual(
     manifest.core.filter((feature) => feature.status === "available").map((feature) => feature.id),
-    ["agent-profile", "soul", "thread-selection", "agent-packs", "codex-hooks", "contacts", "local-memory", "scoped-memory-notes", "active-context-matters", "scoped-memory-recall", "memory-mcp-tools", "local-dreamer", "external-message-ingest", "discord-gateway", "email-rfc822-ingest", "email-imap-poll", "imessage-chatdb-poll", "http-intake", "http-setup-api", "external-message-dispatch", "service-tick", "scheduled-duties", "service-env-file", "service-external-dispatch", "macos-launch-agent", "setup-actions", "menu-snapshot", "clone-self-test", "clone-verify", "one-command-setup", "connector-config", "connector-wizards", "managed-connector-packages", "managed-connector-wizards", "managed-connector-config-init", "managed-connector-mcp-install", "codex-desktop-controller", "codex-mcp-reload", "managed-connector-launch-agents"]
+    ["agent-profile", "soul", "thread-selection", "agent-packs", "codex-hooks", "contacts", "local-memory", "scoped-memory-notes", "active-context-matters", "scoped-memory-recall", "memory-mcp-tools", "local-dreamer", "external-message-ingest", "discord-gateway", "email-rfc822-ingest", "email-imap-poll", "imessage-chatdb-poll", "http-intake", "http-setup-api", "external-message-dispatch", "service-tick", "scheduled-duties", "service-env-file", "service-external-dispatch", "macos-launch-agent", "setup-actions", "menu-snapshot", "clone-self-test", "clone-verify", "one-command-setup", "connector-config", "connector-wizards", "managed-connector-packages", "managed-connector-wizards", "managed-connector-config-init", "managed-connector-mcp-install", "codex-desktop-controller", "fast-responses", "codex-mcp-reload", "managed-connector-launch-agents"]
   );
   assert.deepEqual(
     manifest.connectors.map((connector) => connector.setupActionId),
@@ -4123,6 +4124,49 @@ test("scheduled dispatch reconciles an accepted Desktop turn after timeout and d
   assert.equal(wakeup.due, false);
   assert.equal(wakeup.dispatchState, "idle");
   assert.equal(JSON.parse(await fs.readFile(path.join(home, "duties.json"), "utf8")).pendingDispatches.length, 0);
+});
+
+test("scheduled dispatch defers an idle-required Desktop turn without marking the wakeup complete or failed", async () => {
+  const home = await tempHome();
+  const profile = await initAgent({
+    name: "Busy Desktop",
+    soul: "",
+    threadId: "thread-busy-desktop",
+    cwd: "/tmp/busy-desktop",
+    home
+  });
+  await configureDuty("dashboard", {
+    home,
+    label: "Dashboard",
+    prompt: "Generate the dashboard.",
+    dispatchMode: "desktop-controller"
+  });
+  await configureWakeup("dashboard-wakeup", {
+    home,
+    label: "Dashboard Wakeup",
+    wakeTimes: ["05:00"],
+    duties: ["dashboard"],
+    dispatchMode: "desktop-controller"
+  });
+
+  const dispatchClient = {
+    async routeTextToThread() {
+      const error = new Error("Codex Desktop task thread-busy-desktop has an active turn; defer this inbound message until the task is idle.");
+      error.code = "active-turn-pending";
+      error.method = "turn/start";
+      throw error;
+    },
+    disconnect() {}
+  };
+  const now = new Date("2026-07-10T12:00:00Z");
+  const run = await runDueDuties(profile, { home, dispatchClient, now });
+  assert.equal(run.ok, true);
+  assert.equal(run.results[0].status, "deferred");
+
+  const status = await dutyStatuses({ home, now: new Date(now.getTime() + 60_000) });
+  const wakeup = status.wakeups.find((item) => item.id === "dashboard-wakeup");
+  assert.equal(wakeup.due, true);
+  assert.equal(wakeup.dispatchState, "due");
 });
 
 test("wakeup lists can hide compatibility rows and delete wakeups and duties cleanly", async () => {

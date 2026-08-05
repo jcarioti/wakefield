@@ -18,6 +18,8 @@ export async function sendTextToCodexTarget({
   text,
   mode = "auto",
   codex = {},
+  serviceTier = undefined,
+  activeTurnPolicy = "defer",
   logger = console,
   useLock = true
 }) {
@@ -31,7 +33,7 @@ export async function sendTextToCodexTarget({
       const ownsController = desktopController == null;
       const controller = desktopController || createDesktopController(codex);
       try {
-        return withTarget(await routeViaDesktopController(controller, target, text), target);
+        return withTarget(await routeViaDesktopController(controller, target, text, serviceTier, activeTurnPolicy), target);
       } finally {
         if (ownsController) controller.disconnect();
       }
@@ -74,6 +76,29 @@ export async function sendTextToCodexTarget({
     },
     run
   );
+}
+
+// Fast is a per-thread setting in Codex Desktop. External responses opt into it
+// only for their turn, then restore Wakefield's Standard baseline once complete.
+export async function restoreStandardServiceTierAfterFastResponse({
+  routeResult,
+  codex = {},
+  desktopController = null
+} = {}) {
+  if (routeResult?.serviceTier !== "priority" || !routeResult.threadId) {
+    return false;
+  }
+  const ownsController = desktopController == null;
+  const controller = desktopController || createDesktopController(codex);
+  try {
+    await controller.setThreadServiceTier({
+      threadId: routeResult.threadId,
+      serviceTier: null
+    });
+    return true;
+  } finally {
+    if (ownsController) controller.disconnect();
+  }
 }
 
 async function autoRoute(client, target, text, { codex = {}, wakeThread = null, logger = console } = {}) {
@@ -192,12 +217,14 @@ async function start(client, target, text) {
   return { action: "start", result, turnId: extractTurnId(result) };
 }
 
-async function routeViaDesktopController(client, target, text) {
+async function routeViaDesktopController(client, target, text, serviceTier = undefined, activeTurnPolicy = "defer") {
   return client.routeTextToThread({
     threadId: target.threadId,
     cwd: target.cwd,
     permissions: target.codexPermissions || null,
-    text
+    text,
+    ...(serviceTier === undefined ? {} : { serviceTier }),
+    ...(activeTurnPolicy === "defer" ? {} : { activeTurnPolicy })
   });
 }
 

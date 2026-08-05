@@ -109,6 +109,14 @@ pnpm exec wakefield setup connector discord \
   --set allowedChannelIds=<discord-channel-id>
 ```
 
+### Fast Responses
+
+Managed iMessage and Discord connectors use Fast for human inbound messages by
+default, then restore Standard when the response completes. Duties, inbox
+automation, and other Wakefield-started turns explicitly stay Standard. Set
+`"fastResponses": { "enabled": false }` in a connector's local config to
+turn Fast Responses off.
+
 ### iMessage
 
 Use iMessage when you want the agent reachable from Messages through
@@ -377,6 +385,10 @@ From a Wakefield checkout:
 ```bash
 pnpm run menubar:install
 ```
+
+The installer registers the menu bar app as a user LaunchAgent. At login it
+starts Wakefield's managed Codex app-server first, then opens Codex and the
+Wakefield menu bar app.
 
 For development:
 
