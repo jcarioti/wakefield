@@ -95,7 +95,7 @@ test("init creates a normal app-support profile and memory files", async () => {
   assert.equal(report.checks.find((check) => check.label === "Codex daemon socket").ok, true);
   assert.equal(report.checks.find((check) => check.label === "Codex daemon ownership").ok, true);
   assert.equal(report.checks.find((check) => check.label === "ChatGPT Desktop protocol").ok, true);
-  assert.equal(report.checks.find((check) => check.label === "ChatGPT Desktop attachment").ok, true);
+  assert.equal(report.checks.find((check) => check.label === "Codex remote-device control (optional)").ok, true);
   assert.equal(report.checks.find((check) => check.label === "ChatGPT Desktop MCP runtime").ok, true);
   assert.match(await fs.readFile(profile.memory.externalMessagesPath, "utf8"), /^$/);
   assert.match(await fs.readFile(profile.memory.capturePath, "utf8"), /^$/);

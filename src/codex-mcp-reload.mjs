@@ -103,7 +103,7 @@ export function createCodexMcpReloadController({
   return new CodexDesktopController({
     socketPath: controlSocketPath,
     ensureDaemon: true,
-    requireRemoteControlConnected: true,
+    requireRemoteControlConnected: false,
     requireDesktopOwnership: true,
     requestTimeoutMs: timeoutMs,
     logger: quietLogger()

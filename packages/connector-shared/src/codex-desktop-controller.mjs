@@ -32,7 +32,7 @@ export class CodexDesktopController {
     socketPath = null,
     codexPath = null,
     ensureDaemon = true,
-    requireRemoteControlConnected = true,
+    requireRemoteControlConnected = false,
     requireDesktopOwnership = true,
     connectTimeoutMs = 10000,
     requestTimeoutMs = 30000,
@@ -46,7 +46,7 @@ export class CodexDesktopController {
     this.socketPath = socketPath || defaultControlSocketPath();
     this.codexPath = codexPath || defaultCodexPath();
     this.ensureDaemon = ensureDaemon !== false;
-    this.requireRemoteControlConnected = requireRemoteControlConnected !== false;
+    this.requireRemoteControlConnected = requireRemoteControlConnected === true;
     this.requireDesktopOwnership = requireDesktopOwnership !== false;
     this.connectTimeoutMs = connectTimeoutMs;
     this.requestTimeoutMs = requestTimeoutMs;
@@ -102,17 +102,9 @@ export class CodexDesktopController {
       });
       this.notify("initialized", {});
       if (this.requireDesktopOwnership) this.assertDesktopProtocol(this.initializeResult, this.daemonInfo);
-      this.remoteControlStatus = await this.request("remoteControl/status/read", {});
-      if (this.requireDesktopOwnership) this.assertRemoteOwnership(this.remoteControlStatus);
+      await this.readRemoteControlStatus();
       if (this.requireRemoteControlConnected && this.remoteControlStatus?.status !== "connected") {
-        throw new CodexDesktopControllerError(
-          `ChatGPT Desktop is not attached to the Codex daemon (remote status: ${this.remoteControlStatus?.status || "unknown"}).`,
-          {
-            code: "desktop-not-attached",
-            method: "remoteControl/status/read",
-            details: this.remoteControlStatus
-          }
-        );
+        throw this.desktopAttachmentError();
       }
     } catch (error) {
       this.disconnect();
@@ -135,9 +127,50 @@ export class CodexDesktopController {
     }
   }
 
+  async restartDaemon() {
+    try {
+      await this.execFileImpl(
+        this.codexPath,
+        ["app-server", "daemon", "restart"],
+        { timeout: this.startupTimeoutMs, maxBuffer: 1024 * 1024 }
+      );
+    } catch (error) {
+      throw new CodexDesktopControllerError(`Failed to restart the Codex app-server daemon: ${error.message}`, {
+        code: "daemon-restart-failed",
+        details: error
+      });
+    }
+  }
+
+  async readRemoteControlStatus() {
+    this.remoteControlStatus = await this.request("remoteControl/status/read", {});
+    if (this.requireDesktopOwnership) this.assertRemoteOwnership(this.remoteControlStatus);
+    return this.remoteControlStatus;
+  }
+
+  desktopAttachmentError() {
+    const status = this.remoteControlStatus?.status || "unknown";
+    return new CodexDesktopControllerError(
+      `ChatGPT Desktop is not attached to the Codex daemon (remote status: ${status}).`,
+      {
+        code: "desktop-not-attached",
+        method: "remoteControl/status/read",
+        details: this.remoteControlStatus
+      }
+    );
+  }
+
   async readDaemonInfoWithRecovery() {
     try {
-      return await this.readDaemonInfo();
+      const info = await this.readDaemonInfo();
+      if (this.ensureDaemon && needsManagedDaemonRestart(info, this.socketPath, this.codexPath)) {
+        // Desktop updates switch the managed CLI before the old app-server
+        // necessarily exits. A live old daemon rejects the new protocol just
+        // as surely as a stale socket, so replace it with the managed runtime.
+        await this.restartDaemon();
+        return this.waitForDaemonInfo();
+      }
+      return info;
     } catch (error) {
       if (!this.ensureDaemon || !isRecoverableDaemonIdentityError(error)) throw error;
 
@@ -697,7 +730,7 @@ export async function probeCodexDesktopController({
       status: controller.remoteControlStatus?.status || "unknown",
       detail: controller.remoteControlStatus?.status === "connected"
         ? `${controller.remoteControlStatus.serverName}; ${controller.remoteControlStatus.environmentId}`
-        : "ChatGPT Desktop is not attached",
+        : `remote-device status: ${controller.remoteControlStatus?.status || "unknown"}`,
       ownership: controller.remoteControlStatus
     };
     const mcp = await controller.listMcpServerStatus({ timeoutMs: 5000 });
@@ -715,7 +748,7 @@ export async function probeCodexDesktopController({
   } finally {
     controller.disconnect();
   }
-  result.ok = result.socket.ok && result.daemon.ok && result.protocol.ok && result.remote.ok && result.mcp.ok;
+  result.ok = result.socket.ok && result.daemon.ok && result.protocol.ok && result.mcp.ok;
   return result;
 }
 
@@ -750,6 +783,21 @@ export async function isSocket(candidate) {
 
 function isRecoverableDaemonIdentityError(error) {
   return error?.code === "daemon-identity-unavailable" || error?.code === "daemon-identity-invalid";
+}
+
+function needsManagedDaemonRestart(info, socketPath, codexPath) {
+  const versions = [info?.managedCodexVersion, info?.cliVersion, info?.appServerVersion];
+  const actualSocket = typeof info?.socketPath === "string" ? path.resolve(info.socketPath) : null;
+  const actualCodexPath = typeof info?.managedCodexPath === "string" ? path.resolve(info.managedCodexPath) : null;
+  return (
+    info?.status === "running" &&
+    info?.backend === "pid" &&
+    actualSocket === path.resolve(socketPath) &&
+    actualCodexPath === path.resolve(codexPath) &&
+    versions.every(nonEmpty) &&
+    info.managedCodexVersion === info.cliVersion &&
+    info.appServerVersion !== info.cliVersion
+  );
 }
 
 function normalizeThreadPermissions(permissions) {

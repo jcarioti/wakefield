@@ -67,10 +67,10 @@ export async function doctor({
     { optional: desktopOptional }
   ));
   checks.push(check(
-    "ChatGPT Desktop attachment",
+    "Codex remote-device control (optional)",
     desktopController.remote.ok,
     desktopController.remote.detail,
-    { optional: desktopOptional }
+    { optional: true }
   ));
   checks.push(check(
     "ChatGPT Desktop MCP runtime",

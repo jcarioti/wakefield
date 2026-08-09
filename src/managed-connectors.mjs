@@ -1487,7 +1487,7 @@ function defaultCodexConnectorSettings(settings, connectorId = null) {
       controlSocketPath: setting(settings, "codexControlSocketPath", "~/.codex/app-server-control/app-server-control.sock"),
       codexPath: setting(settings, "codexPath", "~/.codex/packages/standalone/current/codex"),
       ensureDaemon: booleanSetting(settings, "ensureCodexDaemon", true),
-      requireRemoteControlConnected: booleanSetting(settings, "requireRemoteControlConnected", true),
+      requireRemoteControlConnected: false,
       requireDesktopOwnership: true
     }
   };
@@ -1505,7 +1505,7 @@ function migrateConnectorConfigToDesktopController(raw, { connectorId = null } =
     ...defaultCodexConnectorSettings({}, connectorId).desktopController,
     ...(codex.desktopController || {}),
     requireDesktopOwnership: true,
-    requireRemoteControlConnected: true
+    requireRemoteControlConnected: false
   };
   const config = {
     ...source,

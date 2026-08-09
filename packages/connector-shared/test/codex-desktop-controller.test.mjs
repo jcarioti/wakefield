@@ -97,6 +97,81 @@ test("desktop controller recovers a stale control socket by starting the managed
   });
 });
 
+test("desktop controller replaces an old managed daemon after a Codex update", async () => {
+  await withControlSocket(async (socketPath) => {
+    const currentVersion = "0.147.0-alpha.6.5";
+    const oldVersion = "0.147.0-alpha.1.2";
+    const calls = [];
+    let restarted = false;
+    const controller = new CodexDesktopController({
+      socketPath,
+      codexPath: "/tmp/codex",
+      execFileImpl: async (_command, args) => {
+        calls.push(args);
+        if (args[2] === "restart") {
+          restarted = true;
+          return { stdout: "", stderr: "" };
+        }
+        return {
+          stdout: JSON.stringify(daemonInfo(socketPath, {
+            managedCodexVersion: currentVersion,
+            cliVersion: currentVersion,
+            appServerVersion: restarted ? currentVersion : oldVersion
+          })),
+          stderr: ""
+        };
+      },
+      webSocketFactory: () => new FakeWebSocket((message, socket) => respondToHandshake(message, socket, { version: currentVersion })),
+      logger: quietLogger()
+    });
+
+    await controller.connect();
+    assert.deepEqual(calls, [
+      ["app-server", "daemon", "version"],
+      ["app-server", "daemon", "restart"],
+      ["app-server", "daemon", "version"]
+    ]);
+    assert.equal(controller.daemonInfo.appServerVersion, currentVersion);
+    controller.disconnect();
+  });
+});
+
+test("desktop controller resumes a local task when optional remote control is errored", async () => {
+  await withControlSocket(async (socketPath) => {
+    const calls = [];
+    const cwd = path.dirname(socketPath);
+    const controller = new CodexDesktopController({
+      socketPath,
+      codexPath: "/tmp/codex",
+      execFileImpl: async (_command, args) => {
+        calls.push(args);
+        return { stdout: JSON.stringify(daemonInfo(socketPath)), stderr: "" };
+      },
+      webSocketFactory: () => new FakeWebSocket((message, socket) => {
+        if (message.method === "remoteControl/status/read") {
+          respond(socket, message, { status: "errored" });
+          return;
+        }
+        if (message.method === "thread/resume") {
+          respond(socket, message, {
+            thread: { id: "thread-1", cwd, ephemeral: false, status: { type: "idle" } }
+          });
+          return;
+        }
+        respondToHandshake(message, socket);
+      }),
+      logger: quietLogger()
+    });
+
+    const attached = await controller.attachTask({ threadId: "thread-1", cwd });
+
+    assert.deepEqual(calls, [["app-server", "daemon", "version"]]);
+    assert.equal(controller.remoteControlStatus.status, "errored");
+    assert.equal(attached.thread.id, "thread-1");
+    controller.disconnect();
+  });
+});
+
 test("desktop controller creates a persistent task and starts its first turn", async () => {
   await withControlSocket(async (socketPath) => {
     const calls = [];

@@ -18,7 +18,7 @@ const DEFAULT_CONFIG = {
       controlSocketPath: null,
       codexPath: null,
       ensureDaemon: true,
-      requireRemoteControlConnected: true,
+      requireRemoteControlConnected: false,
       requireDesktopOwnership: true,
       connectTimeoutMs: 10000,
       requestTimeoutMs: 30000,
@@ -369,7 +369,7 @@ function normalizeDesktopController(value, { cwd }) {
     ...merged,
     controlSocketPath: expandPath(merged.controlSocketPath, { cwd }),
     codexPath: expandPath(merged.codexPath, { cwd }),
-    requireRemoteControlConnected: true,
+    requireRemoteControlConnected: false,
     requireDesktopOwnership: true
   };
 }
